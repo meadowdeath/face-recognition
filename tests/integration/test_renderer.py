@@ -53,6 +53,8 @@ class RendererTests(unittest.TestCase):
         self.assertTrue(any("Overlay updates:" in line for line in lines))
         self.assertFalse(any("Display:" in line for line in lines))
         self.assertTrue(any("Result latency:" in line for line in lines))
+        self.assertTrue(any("Result age:" in line for line in lines))
+        self.assertTrue(any("Skipped Busy:" in line for line in lines))
 
     def test_normalized_inference_points_scale_to_full_display_overlay(self) -> None:
         face = FaceLandmarks((Landmark(0.0, 0.0, 0.0), Landmark(0.5, 0.5, 0.0),

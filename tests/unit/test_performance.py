@@ -12,15 +12,18 @@ class PerformanceTests(unittest.TestCase):
             tracker.record_capture()
         for _ in range(25):
             tracker.record_display()
-        status = DetectorSnapshot(LandmarkResult((), 100, 42.5), 30, 15)
+        status = DetectorSnapshot(LandmarkResult((), 100, 42.5), 16, 15, 14, 900.0)
         now[0] = 1.0
         metrics = tracker.snapshot(status)
         self.assertEqual(metrics.capture_fps, 30)
         self.assertEqual(metrics.display_fps, 25)
         self.assertEqual(metrics.inference_fps, 15)
-        self.assertEqual(metrics.submitted_inference_frames, 30)
+        self.assertEqual(metrics.captured_frames, 30)
+        self.assertEqual(metrics.submitted_inference_frames, 16)
         self.assertEqual(metrics.completed_inference_frames, 15)
+        self.assertEqual(metrics.skipped_busy_frames, 14)
         self.assertEqual(metrics.result_latency_ms, 42.5)
+        self.assertEqual(metrics.result_age_ms, 900.0)
         now[0] = 1.5
         self.assertEqual(tracker.snapshot(status).inference_fps, 15)
         now[0] = 2.0
@@ -30,6 +33,8 @@ class PerformanceTests(unittest.TestCase):
     def test_startup_without_result_and_invalid_interval(self) -> None:
         tracker = PerformanceTracker(clock=lambda: 0.0)
         self.assertIsNone(tracker.snapshot(DetectorSnapshot()).result_latency_ms)
+        self.assertIsNone(tracker.snapshot(DetectorSnapshot()).result_age_ms)
+        self.assertEqual(tracker.snapshot(DetectorSnapshot()).skipped_busy_frames, 0)
         with self.assertRaises(ValueError):
             PerformanceTracker(interval_seconds=0)
 

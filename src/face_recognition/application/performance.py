@@ -19,6 +19,8 @@ class PerformanceMetrics:
     result_latency_ms: float | None
     overlay_update_fps: float = 0.0
     overlay_updates: int = 0
+    skipped_busy_frames: int = 0
+    result_age_ms: float | None = None
 
 
 class PerformanceTracker:
@@ -69,4 +71,6 @@ class PerformanceTracker:
             result_latency_ms=None if detector.result is None else detector.result.latency_ms,
             overlay_update_fps=self._rates[3],
             overlay_updates=self._overlay_updates,
+            skipped_busy_frames=detector.skipped_busy_frames,
+            result_age_ms=detector.result_age_ms,
         )

@@ -7,7 +7,7 @@ from face_recognition.domain.models.face_landmarks import FaceLandmarks
 
 @dataclass(frozen=True)
 class LandmarkResult:
-    """Completed faces and a monotonic submission timestamp in milliseconds."""
+    """Faces, submission timestamp, and submission-to-callback latency in ms."""
 
     faces: tuple[FaceLandmarks, ...]
     timestamp_ms: int
@@ -16,8 +16,14 @@ class LandmarkResult:
 
 @dataclass(frozen=True)
 class DetectorSnapshot:
-    """None means no completion yet; an empty faces tuple means no face found."""
+    """Latest completion plus successful submissions, completions and busy skips.
+
+    None means no completion yet; an empty faces tuple means no face found.
+    """
 
     result: LandmarkResult | None = None
     submitted_frames: int = 0
     completed_frames: int = 0
+    skipped_busy_frames: int = 0
+    # Age measured since the result's submission timestamp, not its callback.
+    result_age_ms: float | None = None
