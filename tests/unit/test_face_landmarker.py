@@ -8,6 +8,7 @@ import numpy as np
 
 from face_recognition.infrastructure.mediapipe import face_landmarker as module
 from face_recognition.application.recognize_face import LandmarkPreview
+from face_recognition.domain.models.frame import Frame, PixelFormat
 
 
 class FaceLandmarkerTests(unittest.TestCase):
@@ -46,6 +47,71 @@ class FaceLandmarkerTests(unittest.TestCase):
         self.assertIsNone(initial.result)
         self.assertEqual((initial.submitted_frames, initial.completed_frames, initial.skipped_busy_frames), (1, 0, 1))
         self.native.detect_for_video.assert_not_called()
+
+    def test_accepted_bgr_frame_performs_one_conversion(self) -> None:
+        pixels = np.full((4, 4, 3), (10, 20, 30), dtype=np.uint8)
+        frame = Frame(pixels, 4, 4, PixelFormat.BGR)
+        with patch.object(module.cv2, "cvtColor", wraps=module.cv2.cvtColor) as convert:
+            self.adapter.submit(frame)
+        convert.assert_called_once()
+        self.assertIs(convert.call_args.args[0], pixels)
+        self.assertEqual(convert.call_args.args[1], module.cv2.COLOR_BGR2RGB)
+        image = self.native.detect_async.call_args.args[0]
+        np.testing.assert_array_equal(image.numpy_view(), pixels[:, :, ::-1])
+
+    def test_accepted_yuv_frame_converts_directly_to_rgb_and_crops_padding(self) -> None:
+        width, height, stride = 480, 270, 512
+        # Distinct colors at both edges catch bad U/V plane or padding cropping.
+        source = np.full((height, width, 3), (200, 20, 10), dtype=np.uint8)
+        source[:, :width // 2] = (10, 200, 30)
+        packed = module.cv2.cvtColor(source, module.cv2.COLOR_RGB2YUV_I420)
+        expected = module.cv2.cvtColor(packed, module.cv2.COLOR_YUV2RGB_I420)
+        flat = packed.reshape(-1)
+        luma_end = width * height
+        chroma_size = luma_end // 4
+        yuv = np.full((height * 3 // 2, stride), 128, dtype=np.uint8)
+        padded = yuv.reshape(-1)
+        padded[:height * stride].reshape(height, stride)[:, :width] = flat[:luma_end].reshape(height, width)
+        u_start = height * stride
+        v_start = u_start + height * stride // 4
+        for start, plane in ((u_start, flat[luma_end:luma_end + chroma_size]),
+                             (v_start, flat[luma_end + chroma_size:])):
+            padded[start:start + height * stride // 4].reshape(height // 2, stride // 2)[:, :width // 2] = plane.reshape(height // 2, width // 2)
+        frame = Frame(yuv, width, height, PixelFormat.YUV420_I420)
+        self.adapter._inference_size = (width, height)
+        with patch.object(module.cv2, "cvtColor", wraps=module.cv2.cvtColor) as convert, \
+             patch.object(module.cv2, "resize") as resize:
+            self.adapter.submit(frame)
+        convert.assert_called_once()
+        self.assertIs(convert.call_args.args[0], yuv)
+        self.assertEqual(convert.call_args.args[1], module.cv2.COLOR_YUV2RGB_I420)
+        resize.assert_not_called()
+        image = self.native.detect_async.call_args.args[0]
+        self.assertEqual(image.numpy_view().shape, (270, 480, 3))
+        np.testing.assert_array_equal(image.numpy_view(), expected)
+        self.assertEqual(self.adapter.snapshot().submitted_frames, 1)
+
+    def test_busy_bgr_and_yuv_frames_do_not_convert_resize_or_construct_image(self) -> None:
+        self.adapter.submit(self.frame)
+        # Opaque data would fail preprocessing if the gate did not return first.
+        frames = (Frame(object(), 848, 480, PixelFormat.BGR),
+                  Frame(object(), 480, 270, PixelFormat.YUV420_I420))
+        with patch.object(module.cv2, "cvtColor") as convert, \
+             patch.object(module.cv2, "resize") as resize, \
+             patch.object(module.mp, "Image") as image:
+            for frame in frames:
+                self.adapter.submit(frame)
+        convert.assert_not_called()
+        resize.assert_not_called()
+        image.assert_not_called()
+        self.native.detect_async.assert_called_once()
+        status = self.adapter.snapshot()
+        self.assertEqual((status.submitted_frames, status.completed_frames, status.skipped_busy_frames), (1, 0, 2))
+        timestamp = self.native.detect_async.call_args.args[1]
+        self.adapter._on_result(SimpleNamespace(face_landmarks=[]), None, timestamp)
+        self.adapter.submit(Frame(self.frame, 4, 4, PixelFormat.BGR))
+        status = self.adapter.snapshot()
+        self.assertEqual((status.submitted_frames, status.completed_frames, status.skipped_busy_frames), (2, 1, 2))
 
     def test_latest_result_counts_latency_and_out_of_order_callback(self) -> None:
         with patch.object(module, "monotonic_ns", return_value=100_000_000):

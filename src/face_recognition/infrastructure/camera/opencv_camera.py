@@ -1,9 +1,9 @@
 import sys
 
 import cv2
-import numpy as np
 
 from face_recognition.config.settings import CAMERA_ORIENTATIONS
+from face_recognition.domain.models.frame import Frame, PixelFormat
 
 
 class OpenCVCamera:
@@ -21,11 +21,13 @@ class OpenCVCamera:
         # This is a request; the device/backend may choose a different rate.
         self._capture.set(cv2.CAP_PROP_FPS, fps)
 
-    def read(self) -> np.ndarray | None:
+    def read(self) -> Frame | None:
         ok, frame = self._capture.read()
         if not ok:
             return None
-        return frame if self._flip_code is None else cv2.flip(frame, self._flip_code)
+        pixels = frame if self._flip_code is None else cv2.flip(frame, self._flip_code)
+        height, width = pixels.shape[:2]
+        return Frame(pixels, width, height, PixelFormat.BGR)
 
     def close(self) -> None:
         self._capture.release()

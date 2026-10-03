@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
+from face_recognition.domain.models.frame import PixelFormat
 from face_recognition.infrastructure.camera import opencv_camera as module
 from face_recognition.infrastructure.camera import picamera2_camera as pi_adapter
 
@@ -20,7 +21,10 @@ class OpenCVCameraTests(unittest.TestCase):
                 native.read.return_value = (True, frame)
                 with patch.object(module.cv2, "VideoCapture", return_value=native):
                     camera = module.OpenCVCamera(0, 848, 480, orientation=orientation)
-                np.testing.assert_array_equal(camera.read(), expected)
+                captured = camera.read()
+                np.testing.assert_array_equal(captured.data, expected)
+                self.assertEqual((captured.width, captured.height), (3, 2))
+                self.assertEqual(captured.pixel_format, PixelFormat.BGR)
                 native.read.return_value = (False, None)
                 self.assertIsNone(camera.read())
                 camera.close()
@@ -34,6 +38,7 @@ class OpenCVCameraTests(unittest.TestCase):
             importlib.reload(module)
             with patch.object(module.cv2, "VideoCapture", return_value=native):
                 camera = module.OpenCVCamera(0, 848, 480)
-                self.assertEqual(camera.read().shape, (480, 848, 3))
+                captured = camera.read()
+                self.assertEqual(captured.data.shape, (480, 848, 3))
+                self.assertEqual(captured.pixel_format, PixelFormat.BGR)
                 camera.close()
-

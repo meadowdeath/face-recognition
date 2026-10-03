@@ -7,6 +7,7 @@ import numpy as np
 
 from face_recognition.application.performance import PerformanceMetrics
 from face_recognition.domain.models.face_landmarks import FaceLandmarks
+from face_recognition.domain.models.frame import Frame, PixelFormat
 
 
 class FrameRenderer:
@@ -24,11 +25,19 @@ class FrameRenderer:
 
     def render(
         self,
-        frame: np.ndarray,
+        frame: Frame | np.ndarray,
         faces: Sequence[FaceLandmarks],
         metrics: PerformanceMetrics,
     ) -> np.ndarray:
-        output = frame.copy()
+        if isinstance(frame, Frame):
+            if frame.pixel_format == PixelFormat.YUV420_I420:
+                pixels = cv2.cvtColor(frame.data, cv2.COLOR_YUV2BGR_I420)
+                pixels = pixels[:frame.height, :frame.width]
+            else:
+                pixels = frame.data
+        else:
+            pixels = frame
+        output = pixels.copy()
         self._draw(output, faces, metrics, "opencv")
         return output
 

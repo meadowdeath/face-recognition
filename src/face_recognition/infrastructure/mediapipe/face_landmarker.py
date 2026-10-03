@@ -14,6 +14,7 @@ import mediapipe as mp
 import numpy as np
 
 from face_recognition.domain.models.face_landmarks import FaceLandmarks, Landmark
+from face_recognition.domain.models.frame import Frame, PixelFormat
 from face_recognition.domain.models.landmark_result import DetectorSnapshot, LandmarkResult
 
 
@@ -60,7 +61,7 @@ class MediaPipeFaceLandmarker:
         )
         self._detector = mp.tasks.vision.FaceLandmarker.create_from_options(options)
 
-    def submit(self, frame: np.ndarray) -> None:
+    def submit(self, frame: Frame | np.ndarray) -> None:
         with self._lock:
             if self._closed:
                 raise RuntimeError("Face landmarker is closed")
@@ -75,9 +76,7 @@ class MediaPipeFaceLandmarker:
             self._in_flight = True
             self._dispatching = True
         try:
-            if self._inference_size is not None and (frame.shape[1], frame.shape[0]) != self._inference_size:
-                frame = cv2.resize(frame, self._inference_size, interpolation=cv2.INTER_AREA)
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            rgb = self._prepare_rgb(frame)
             image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
             # Never hold the callback/state lock across a MediaPipe call.
             self._detector.detect_async(image, timestamp_ms)
@@ -92,6 +91,21 @@ class MediaPipeFaceLandmarker:
             with self._dispatch_finished:
                 self._dispatching = False
                 self._dispatch_finished.notify_all()
+
+    def _prepare_rgb(self, frame: Frame | np.ndarray) -> np.ndarray:
+        # Called only after reserving the single inference slot. Bare arrays
+        # remain supported as BGR input for existing callers and test fakes.
+        if isinstance(frame, Frame) and frame.pixel_format == PixelFormat.YUV420_I420:
+            rgb = cv2.cvtColor(frame.data, cv2.COLOR_YUV2RGB_I420)
+            # Convert the complete packed planes, then remove padded columns.
+            rgb = rgb[:frame.height, :frame.width]
+            if self._inference_size is not None and (frame.width, frame.height) != self._inference_size:
+                rgb = cv2.resize(rgb, self._inference_size, interpolation=cv2.INTER_AREA)
+            return rgb
+        bgr = frame.data if isinstance(frame, Frame) else frame
+        if self._inference_size is not None and (bgr.shape[1], bgr.shape[0]) != self._inference_size:
+            bgr = cv2.resize(bgr, self._inference_size, interpolation=cv2.INTER_AREA)
+        return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
     def _on_result(self, result: Any, image: Any, timestamp_ms: int) -> None:
         completed_ms = monotonic_ns() / 1_000_000

@@ -3,10 +3,10 @@
 import sys
 from typing import Any
 
-import cv2
 import numpy as np
 
 from face_recognition.config.settings import CAMERA_ORIENTATIONS
+from face_recognition.domain.models.frame import Frame, PixelFormat
 
 
 class Picamera2Camera:
@@ -53,14 +53,14 @@ class Picamera2Camera:
             self._camera.close()
             raise
 
-    def read(self) -> np.ndarray | None:
+    def read(self) -> Frame | None:
         yuv = self._camera.capture_array("lores")
         if yuv is None:
             return None
-        bgr = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
         width, height = self._camera.stream_configuration("lores")["size"]
-        # capture_array includes YUV stride padding; exclude it after conversion.
-        return bgr[:height, :width]
+        # Preserve packed I420 planes and stride padding until inference accepts
+        # this frame. Cropping the YUV array here would corrupt its plane layout.
+        return Frame(yuv, width, height, PixelFormat.YUV420_I420)
 
     def start_drm_preview(self, width: int, height: int) -> None:
         from picamera2 import Preview

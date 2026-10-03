@@ -3,7 +3,9 @@ import unittest
 from unittest.mock import Mock, call, patch
 
 import numpy as np
+import cv2
 
+from face_recognition.domain.models.frame import PixelFormat
 from face_recognition.infrastructure.camera import picamera2_camera as module
 
 
@@ -48,7 +50,7 @@ class Picamera2PreviewTests(unittest.TestCase):
                 )
                 camera.close()
 
-    def test_read_uses_lores_and_excludes_stride_padding_without_resizing(self) -> None:
+    def test_read_returns_native_lores_padding_without_conversion_or_resize(self) -> None:
         native = Mock()
         native.stream_configuration.return_value = {"size": (480, 270)}
         # I420 with a padded 512-pixel stride, neutral chroma and black luma.
@@ -56,13 +58,16 @@ class Picamera2PreviewTests(unittest.TestCase):
         yuv[:270] = 16
         native.capture_array.return_value = yuv
         camera = self.make_camera(native)
-        with patch.object(module.cv2, "resize") as resize:
+        with patch.object(cv2, "resize") as resize, patch.object(cv2, "cvtColor") as convert:
             frame = camera.read()
-        self.assertEqual(frame.shape, (270, 480, 3))
-        self.assertFalse(np.any(frame))
+        self.assertIs(frame.data, yuv)
+        self.assertEqual(frame.data.shape, (405, 512))
+        self.assertEqual((frame.width, frame.height), (480, 270))
+        self.assertEqual(frame.pixel_format, PixelFormat.YUV420_I420)
         native.capture_array.assert_called_once_with("lores")
         native.stream_configuration.assert_called_once_with("lores")
         resize.assert_not_called()
+        convert.assert_not_called()
         native.capture_array.return_value = None
         self.assertIsNone(camera.read())
         camera.close()

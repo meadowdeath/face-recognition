@@ -1,8 +1,8 @@
-"""Camera contract. Frames are BGR uint8 arrays at adapter boundaries."""
+"""Camera contract. Pixel format and logical dimensions accompany opaque data."""
 
-from typing import Any, Protocol
+from typing import Protocol
 
-Frame = Any  # Kept opaque so domain never imports NumPy or OpenCV.
+from face_recognition.domain.models.frame import Frame
 
 
 class Camera(Protocol):

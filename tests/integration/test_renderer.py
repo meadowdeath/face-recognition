@@ -2,10 +2,12 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
+import cv2
 
 from face_recognition.application.performance import PerformanceTracker
 from face_recognition.domain.models.face_landmarks import FaceLandmarks, Landmark
 from face_recognition.domain.models.landmark_result import DetectorSnapshot
+from face_recognition.domain.models.frame import Frame, PixelFormat
 from face_recognition.presentation.visualization.frame_renderer import FrameRenderer
 
 
@@ -19,6 +21,25 @@ class RendererTests(unittest.TestCase):
         rendered = FrameRenderer().render(self.frame, [self.face], self.metrics)
         self.assertTrue(np.any(rendered))
         self.assertFalse(np.any(self.frame))
+
+    def test_opencv_renderer_accepts_bgr_frame_metadata_without_conversion(self) -> None:
+        frame = Frame(self.frame, 200, 160, PixelFormat.BGR)
+        with patch("cv2.cvtColor") as convert:
+            rendered = FrameRenderer().render(frame, [self.face], self.metrics)
+        convert.assert_not_called()
+        self.assertEqual(rendered.shape, (160, 200, 3))
+        self.assertFalse(np.any(frame.data))
+
+    def test_opencv_renderer_can_display_native_yuv_with_padding(self) -> None:
+        yuv = np.full((240, 224), 128, dtype=np.uint8)
+        yuv[:160] = 16
+        frame = Frame(yuv, 200, 160, PixelFormat.YUV420_I420)
+        with patch("cv2.cvtColor", wraps=cv2.cvtColor) as convert:
+            rendered = FrameRenderer("none").render(frame, (), self.metrics)
+        convert.assert_called_once()
+        self.assertEqual(convert.call_args.args[1], cv2.COLOR_YUV2BGR_I420)
+        self.assertEqual(rendered.shape, (160, 200, 3))
+        self.assertEqual(tuple(rendered[100, 0]), (0, 0, 0))
 
     def test_modes_draw_only_requested_points_and_keep_metrics(self) -> None:
         for mode, indices, expected in (("none", (), 0), ("selected", (1, 99), 1), ("all", (), 3)):
