@@ -1,4 +1,4 @@
-"""Laptop webcam landmark preview; identity recognition is not implemented."""
+"""Shared asynchronous landmark preview for OpenCV and Picamera2 cameras."""
 
 import argparse
 from collections.abc import Sequence
@@ -8,7 +8,9 @@ import cv2
 from face_recognition.application.recognize_face import LandmarkPreview
 from face_recognition.application.performance import PerformanceTracker
 from face_recognition.config.settings import Settings
+from face_recognition.domain.interfaces.camera import Camera
 from face_recognition.infrastructure.camera.opencv_camera import OpenCVCamera
+from face_recognition.infrastructure.camera.picamera2_camera import Picamera2Camera
 from face_recognition.infrastructure.mediapipe.face_landmarker import MediaPipeFaceLandmarker
 from face_recognition.presentation.visualization.frame_renderer import FrameRenderer
 
@@ -26,6 +28,8 @@ def _parse_indices(value: str) -> tuple[int, ...]:
 def main(argv: Sequence[str] | None = None) -> None:
     settings = Settings()
     parser = argparse.ArgumentParser(description="Asynchronous webcam landmark preview")
+    parser.add_argument("--camera", choices=("opencv", "picamera2"), default="opencv",
+                        help="Camera backend (default: opencv)")
     parser.add_argument("--landmarks", choices=FrameRenderer.MODES, default=settings.renderer_mode)
     parser.add_argument(
         "--indices",
@@ -37,10 +41,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.landmarks == "selected" and not args.indices:
         parser.error("--landmarks selected requires --indices or configured indices")
     renderer = FrameRenderer(args.landmarks, args.indices)
-    run_preview(settings, renderer)
+    run_preview(settings, renderer, camera_backend=args.camera)
 
 
-def run_preview(settings: Settings, renderer: FrameRenderer) -> None:
+def run_preview(
+    settings: Settings, renderer: FrameRenderer, camera_backend: str = "opencv"
+) -> None:
     performance = PerformanceTracker(settings.metrics_interval_seconds)
     detector = MediaPipeFaceLandmarker(
         model_path=settings.landmarker_model_path,
@@ -49,9 +55,15 @@ def run_preview(settings: Settings, renderer: FrameRenderer) -> None:
         tracking_confidence=settings.tracking_confidence,
     )
     try:
-        camera = OpenCVCamera(
-            settings.camera_index, settings.camera_width, settings.camera_height, settings.camera_fps
-        )
+        camera: Camera
+        if camera_backend == "opencv":
+            camera = OpenCVCamera(
+                settings.camera_index, settings.camera_width, settings.camera_height, settings.camera_fps
+            )
+        elif camera_backend == "picamera2":
+            camera = Picamera2Camera(settings.camera_width, settings.camera_height)
+        else:
+            raise ValueError(f"Unknown camera backend: {camera_backend}")
     except BaseException:
         detector.close()
         raise

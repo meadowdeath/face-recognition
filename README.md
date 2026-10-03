@@ -2,7 +2,7 @@
 
 Layered Python project for facial landmark detection now and experimental identity recognition later. Development starts on a Windows x86_64 laptop; the intended later target is a Raspberry Pi 3B+ (Linux ARM64/aarch64) with a Raspberry Pi Camera Module 3.
 
-**Current milestone:** laptop webcam → OpenCV capture → asynchronous MediaPipe Tasks Face Landmarker → landmark visualization with independent performance metrics. Press `q` to quit. Face detection and landmarks do not identify a person.
+**Current milestone:** OpenCV webcam or Picamera2 camera → asynchronous MediaPipe Tasks Face Landmarker → landmark visualization with independent performance metrics. Press `q` to quit. Face detection and landmarks do not identify a person.
 
 ## Stack and architecture
 
@@ -25,7 +25,7 @@ models/            Future trained classifiers (generated contents ignored)
 tests/             Hardware-free unit and renderer checks
 ```
 
-The current application depends on `Camera` and `LandmarkDetector`, not a camera library. The OpenCV GUI stays in presentation.
+The current application depends on `Camera` and `LandmarkDetector`, not a camera library. The CLI selects `--camera opencv` (default) or `--camera picamera2`; both adapters use the same preview loop. The OpenCV GUI stays in presentation.
 
 ## Asynchronous preview
 
@@ -33,7 +33,7 @@ The current application depends on `Camera` and `LandmarkDetector`, not a camera
 
 The MediaPipe adapter uses Tasks `RunningMode.LIVE_STREAM` and `detect_async()`. Its callback updates only one latest-result slot, a timestamp, and a completion count. Conversion to domain landmarks happens on the main loop once per new result. MediaPipe may drop submissions when busy; the project creates no frame queue or custom inference worker. Optional blendshapes and facial transformation matrices are disabled, with one face configured by default.
 
-Capture and display run on the main loop. The camera is requested to run at 30 FPS; achieved capture/display rates depend on the device and processing overhead. About 30 FPS capture/display and at least 15 completed inferences per second on the eventual Pi are goals, not verified Pi performance.
+Capture and display run on the main loop. The OpenCV backend requests 30 FPS; achieved capture/display rates depend on the device and processing overhead. About 30 FPS capture/display and at least 15 completed inferences per second on the Pi are goals, not verified Pi performance.
 
 The overlay reports:
 
@@ -54,7 +54,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e .
 python tools/download_face_landmarker.py
-python -m face_recognition.presentation.cli.recognize
+python -m face_recognition.presentation.cli.recognize --camera opencv
 ```
 
 Benchmark rendering with `--landmarks none`, `--landmarks all` (the default), or `--landmarks selected --indices INDEX,INDEX,...`. Selected mode requires your explicit nonnegative landmark indices; out-of-range indices are skipped. No recognition subset is predefined. Every mode displays the same metrics. Rendering fewer points measures rendering/post-processing overhead; it does **not** reduce MediaPipe neural-network inference cost.
@@ -71,12 +71,14 @@ Ensure Picamera2 0.3.31, libcamera, and python3-libcamera are available through 
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 python -m pip install -r requirements-rpi.txt
+python tools/download_face_landmarker.py
+PYTHONPATH=src python -m face_recognition.presentation.cli.recognize --camera picamera2
 ```
 
-`--system-site-packages` is required so the environment can access the system-provided Picamera2 and libcamera Python bindings. Raspberry Pi camera integration remains future work; the OpenCV CLI currently selects `OpenCVCamera`, and the optional `Picamera2Camera` adapter imports Picamera2 only when instantiated on Linux. The same asynchronous detector contract will be used on both platforms.
+`--system-site-packages` is required so the environment can access the system-provided Picamera2 and libcamera Python bindings. Run the command above from the project root in a graphical desktop session for the OpenCV preview window. The `Picamera2Camera` adapter uses the configured width and height and imports Picamera2 only when instantiated on Linux. This backend selection is covered by hardware-free tests; execution and performance on Pi hardware still require validation.
 
 Create a separate environment on each machine: virtual environments contain platform-specific interpreters and binary packages and cannot be copied between Windows and Linux. Share source, configuration, compatible model assets, and the pinned requirements.
 
 ## Future work
 
-Dataset capture; experimentally select a smaller landmark subset; normalize translation, scale, and possibly rotation; derive geometric features; compare KNN, SVM, and Random Forest; reject unknown people; integrate the Pi camera; benchmark accuracy and throughput. These are not implemented yet.
+Dataset capture; experimentally select a smaller landmark subset; normalize translation, scale, and possibly rotation; derive geometric features; compare KNN, SVM, and Random Forest; reject unknown people; validate the Pi camera on hardware; benchmark accuracy and throughput. These are not implemented yet.
