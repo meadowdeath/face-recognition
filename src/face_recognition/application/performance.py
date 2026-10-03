@@ -25,11 +25,6 @@ class PerformanceMetrics:
     dispatch_call_ms: float | None = None
     async_result_ms: float | None = None
     total_callback_latency_ms: float | None = None
-    inference_mode: str = "live-stream"
-    accepted_frames: int = 0
-    overwritten_pending_frames: int = 0
-    sync_inference_ms: float | None = None
-    total_worker_latency_ms: float | None = None
 
 
 class PerformanceTracker:
@@ -86,9 +81,4 @@ class PerformanceTracker:
             dispatch_call_ms=detector.dispatch_call_ms,
             async_result_ms=detector.async_result_ms,
             total_callback_latency_ms=detector.total_callback_latency_ms,
-            inference_mode=detector.inference_mode,
-            accepted_frames=detector.accepted_frames,
-            overwritten_pending_frames=detector.overwritten_pending_frames,
-            sync_inference_ms=detector.sync_inference_ms,
-            total_worker_latency_ms=detector.total_worker_latency_ms,
         )

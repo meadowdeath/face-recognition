@@ -5,28 +5,6 @@ from face_recognition.domain.models.landmark_result import DetectorSnapshot, Lan
 
 
 class PerformanceTests(unittest.TestCase):
-    def test_video_worker_counts_timings_and_completed_fps(self) -> None:
-        now = [0.0]
-        tracker = PerformanceTracker(clock=lambda: now[0])
-        for _ in range(30):
-            tracker.record_capture()
-        status = DetectorSnapshot(
-            inference_mode="video-worker", accepted_frames=30, submitted_frames=8,
-            completed_frames=7, overwritten_pending_frames=21,
-            preprocessing_ms=2.0, sync_inference_ms=100.0, total_worker_latency_ms=102.0,
-            result_age_ms=120.0,
-        )
-        now[0] = 1.0
-        metrics = tracker.snapshot(status)
-        self.assertEqual(metrics.inference_mode, "video-worker")
-        self.assertEqual((metrics.captured_frames, metrics.accepted_frames,
-                          metrics.submitted_inference_frames, metrics.completed_inference_frames,
-                          metrics.overwritten_pending_frames), (30, 30, 8, 7, 21))
-        self.assertEqual(metrics.inference_fps, 7.0)
-        self.assertEqual((metrics.preprocessing_ms, metrics.sync_inference_ms,
-                          metrics.total_worker_latency_ms, metrics.result_age_ms), (2.0, 100.0, 102.0, 120.0))
-        self.assertEqual(metrics.skipped_busy_frames, 0)
-        self.assertIsNone(metrics.total_callback_latency_ms)
     def test_latest_diagnostic_timings_are_forwarded_without_changing_counters(self) -> None:
         status = DetectorSnapshot(
             result=LandmarkResult((), 100, 115.0), submitted_frames=2, completed_frames=1,

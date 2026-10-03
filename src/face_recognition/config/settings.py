@@ -14,7 +14,6 @@ class Settings:
     inference_height: int = 270
     camera_fps: int = 30
     camera_orientation: str = "normal"
-    inference_mode: str = "live-stream"
     max_faces: int = 1
     detection_confidence: float = 0.5
     tracking_confidence: float = 0.5

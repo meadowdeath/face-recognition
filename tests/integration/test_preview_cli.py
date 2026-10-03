@@ -12,43 +12,6 @@ from face_recognition.presentation.visualization import display as displays
 
 
 class PreviewCliTests(unittest.TestCase):
-    def test_cli_inference_strategy_and_default(self) -> None:
-        for arguments, mode in (([], "live-stream"), (["--inference-mode", "live-stream"], "live-stream"),
-                                (["--inference-mode", "video-worker"], "video-worker")):
-            with self.subTest(mode=mode), patch.object(cli, "run_preview") as run:
-                cli.main(arguments)
-                self.assertEqual(run.call_args.args[0].inference_mode, mode)
-        with patch.object(cli, "run_preview") as run, patch("sys.stderr"):
-            with self.assertRaises(SystemExit):
-                cli.main(["--inference-mode", "unsupported"])
-            run.assert_not_called()
-
-    def test_both_strategies_use_the_same_loop_and_cleanup(self) -> None:
-        for mode in ("live-stream", "video-worker"):
-            with self.subTest(mode=mode):
-                camera, detector = Mock(), Mock()
-                frame = object()
-                camera.read.side_effect = [frame, KeyboardInterrupt()]
-                detector.snapshot.return_value = DetectorSnapshot(inference_mode=mode)
-                with patch.object(cli, "MediaPipeFaceLandmarker", return_value=detector) as live, \
-                     patch.object(cli, "MediaPipeVideoWorker", return_value=detector) as worker, \
-                     patch.object(cli, "OpenCVCamera", return_value=camera), \
-                     patch.dict("sys.modules", {"picamera2": None, "libcamera": None}):
-                    cli.run_preview(Settings(inference_mode=mode), Mock(), "opencv", "none")
-                selected, unused = (live, worker) if mode == "live-stream" else (worker, live)
-                selected.assert_called_once()
-                unused.assert_not_called()
-                detector.submit.assert_called_once_with(frame)
-                detector.close.assert_called_once()
-                camera.close.assert_called_once()
-
-    def test_video_worker_is_closed_if_camera_initialization_fails(self) -> None:
-        with patch.object(cli, "MediaPipeVideoWorker") as factory, \
-             patch.object(cli, "OpenCVCamera", side_effect=RuntimeError("camera failed")):
-            with self.assertRaisesRegex(RuntimeError, "camera failed"):
-                cli.run_preview(Settings(inference_mode="video-worker"), Mock())
-        factory.return_value.close.assert_called_once()
-
     def test_drm_counts_actual_updates_not_capture_iterations(self) -> None:
         camera = Mock()
         camera.read.side_effect = [object(), object(), object(), object(), KeyboardInterrupt()]

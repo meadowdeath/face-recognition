@@ -8,8 +8,7 @@ class LandmarkDetector(Protocol):
     def submit(self, frame: Frame) -> None:
         """Submit a recent frame without waiting for inference to finish.
 
-        Implementations may drop busy frames or replace one pending frame.
-        Callers must not mutate a submitted frame's pixels while it is retained.
+        Busy frames are discarded before preprocessing; no frame queue is kept.
         """
         ...
 

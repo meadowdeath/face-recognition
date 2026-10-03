@@ -12,7 +12,6 @@ from face_recognition.domain.interfaces.camera import Camera
 from face_recognition.infrastructure.camera.opencv_camera import OpenCVCamera
 from face_recognition.infrastructure.camera.picamera2_camera import Picamera2Camera
 from face_recognition.infrastructure.mediapipe.face_landmarker import MediaPipeFaceLandmarker
-from face_recognition.infrastructure.mediapipe.video_worker import MediaPipeVideoWorker
 from face_recognition.presentation.visualization.frame_renderer import FrameRenderer
 from face_recognition.presentation.visualization.display import (
     DRMDisplay,
@@ -48,8 +47,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--display", choices=("opencv", "drm", "none"), default="opencv",
                         help="Display backend (default: opencv; DRM requires Picamera2)")
     parser.add_argument("--orientation", choices=CAMERA_ORIENTATIONS, default=settings.camera_orientation)
-    parser.add_argument("--inference-mode", choices=("live-stream", "video-worker"),
-                        default=settings.inference_mode, help="Detector strategy (default: %(default)s)")
     parser.add_argument("--inference-width", type=_positive_dimension, default=settings.inference_width,
                         help="MediaPipe input width (default: %(default)s)")
     parser.add_argument("--inference-height", type=_positive_dimension, default=settings.inference_height,
@@ -72,7 +69,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error("--landmarks selected requires --indices or configured indices")
     settings = replace(
         settings, camera_orientation=args.orientation,
-        inference_mode=args.inference_mode,
         inference_width=args.inference_width, inference_height=args.inference_height,
         display_width=args.display_width, display_height=args.display_height,
     )
@@ -98,13 +94,7 @@ def run_preview(
     if display_backend == "drm" and camera_backend != "picamera2":
         raise ValueError("DRM display requires the Picamera2 camera backend")
     performance = PerformanceTracker(settings.metrics_interval_seconds)
-    if settings.inference_mode == "live-stream":
-        detector_factory = MediaPipeFaceLandmarker
-    elif settings.inference_mode == "video-worker":
-        detector_factory = MediaPipeVideoWorker
-    else:
-        raise ValueError(f"Unknown inference mode: {settings.inference_mode}")
-    detector = detector_factory(
+    detector = MediaPipeFaceLandmarker(
         model_path=settings.landmarker_model_path,
         max_faces=settings.max_faces,
         detection_confidence=settings.detection_confidence,

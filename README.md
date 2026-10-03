@@ -25,7 +25,7 @@ models/            Future trained classifiers (generated contents ignored)
 tests/             Hardware-free unit and renderer checks
 ```
 
-The current application depends on `Camera` and `LandmarkDetector`, not a camera library. The CLI selects `--camera opencv` (default) or `--camera picamera2`, plus `--display opencv` (default), `--display drm`, or `--display none`. Select `--inference-mode live-stream` (default) or experimental `--inference-mode video-worker`. All combinations use the same capture/inference loop; DRM requires the Picamera2 camera backend.
+The application depends on `Camera` and `LandmarkDetector`, not a camera library. The CLI selects `--camera opencv` (default) or `--camera picamera2`, plus `--display opencv` (default), `--display drm`, or `--display none`. All combinations use the same LIVE_STREAM capture/inference loop; DRM requires the Picamera2 camera backend.
 
 Display adapters live in presentation. DRM uses optional preview/overlay methods on the Pi adapter, without adding Picamera2 details to the domain camera protocol or application orchestration. Its camera image is displayed natively by Picamera2, with landmarks and metrics drawn on a transparent RGBA overlay passed to `set_overlay()`. Camera pixels are not copied into that overlay.
 
@@ -33,7 +33,7 @@ Shared defaults in `config/settings.py` are **848×480 preview/capture** and **4
 
 Camera adapters return a vendor-independent `Frame` containing opaque pixel data, logical dimensions, and a `PixelFormat`. OpenCV supplies BGR pixels. Picamera2 supplies the untouched lores YUV420/I420 buffer, including stride padding; `read()` does no color conversion. The domain and application contain no camera-library types or pixel conversion logic.
 
-Picamera2 configures a main preview stream and a lores inference stream; DRM displays main independently. Only after LIVE_STREAM reserves its inference slot, or the VIDEO worker consumes a pending frame, does the detector convert lores directly from YUV420 to RGB. Shared preprocessing converts the full packed planes before cropping RGB stride padding, with no resize at the configured 480×270 inference size. Selected OpenCV frames retain BGR→RGB conversion and inference resizing when needed. Busy skips and overwritten pending frames perform neither conversion nor resizing. Both Pi streams share the main crop, so normalized landmarks map onto the full display-size RGBA overlay despite their slightly different aspect ratios. These dimension defaults also apply in no-display mode.
+Picamera2 configures a main preview stream and a lores inference stream; DRM displays main independently. Only after LIVE_STREAM reserves its inference slot does the detector convert lores directly from YUV420 to RGB. Shared preprocessing converts the full packed planes before cropping RGB stride padding, with no resize at the configured 480×270 inference size. Accepted OpenCV frames retain BGR→RGB conversion and inference resizing when needed. Busy frames perform neither conversion nor resizing. Both Pi streams share the main crop, so normalized landmarks map onto the full display-size RGBA overlay despite their slightly different aspect ratios. These dimension defaults also apply in no-display mode.
 
 DRM and no-display modes never convert captured camera pixels for presentation. If Picamera2 is explicitly paired with OpenCV display, the renderer separately converts YUV to BGR for that preview; Windows BGR preview needs no display conversion. Conversion-count and padded-plane tests run without Pi hardware. Throughput improvements still require measuring on the Pi.
 
@@ -43,13 +43,13 @@ DRM and no-display modes never convert captured camera pixels for presentation. 
 
 `LandmarkDetector` exposes `submit(frame)` and `snapshot()`. `LandmarkPreview.next_frame()` reads a camera frame, submits it, and immediately retrieves the latest completed result. It never waits for inference to finish; startup frames may have no landmarks, and several frames may reuse a result. Landmarks can therefore lag a moving face.
 
-The default LIVE_STREAM adapter uses Tasks `RunningMode.LIVE_STREAM` and `detect_async()`, with **at most one inference request in flight**. Submission atomically reserves a slot before preprocessing. While busy, new frames are counted as skipped and return immediately, without resizing, color conversion, image construction, or another MediaPipe call. A matching callback (including no face) releases the slot; the next camera iteration can submit its current frame. Submission errors also release it. This strategy has no frame queue, latest-frame buffer, worker thread, or fixed inference-rate limiter.
+The production adapter uses Tasks `RunningMode.LIVE_STREAM` and `detect_async()`, with **at most one inference request in flight**. Submission atomically reserves a slot before preprocessing. While busy, new frames are counted as skipped and return immediately, without resizing, color conversion, image construction, or another MediaPipe call. A matching callback (including no face) releases the slot; the next camera iteration can submit its current frame. Submission errors also release it. There is no frame queue, latest-frame buffer, custom inference worker, or fixed inference-rate limiter.
 
 The callback updates only the latest-result slot, timestamp, completion count, and in-flight state. Conversion to domain landmarks happens on the main loop once per new result. No state lock is held during MediaPipe calls. Shutdown disables callback updates and waits for any preprocessing/dispatch already underway before closing MediaPipe. Optional blendshapes and facial transformation matrices remain disabled, with one face configured by default. This bounds outstanding requests; actual inference speed and freshness on Pi still require benchmarking.
 
 Capture and display run on the main loop. The OpenCV backend requests 30 FPS; achieved capture/display rates depend on the device and processing overhead. About 30 FPS capture/display and at least 15 completed inferences per second on the Pi are goals, not verified Pi performance.
 
-The default LIVE_STREAM overlay reports:
+The LIVE_STREAM overlay reports:
 
 - **Capture FPS:** successful camera reads per second.
 - **Display FPS (OpenCV only):** completed preview iterations (`imshow` plus the GUI event pump) per second; this does not measure monitor refresh.
@@ -77,30 +77,9 @@ DRM sends one initial overlay, then schedules updates independently from camera 
 
 Shutdown clears DRM overlays with `set_overlay(None)` and stops the native preview before closing the detector and camera. OpenCV windows are destroyed only in OpenCV display mode. Ctrl+C and pipeline errors follow the same cleanup path.
 
-## Experimental VIDEO worker
+## Raspberry Pi architecture decision
 
-`--inference-mode video-worker` uses Tasks `RunningMode.VIDEO` / `detect_for_video()` on exactly one dedicated inference thread. `submit()` writes one condition-protected pending-frame slot, replacing any previous pending frame without preprocessing. While inference runs, capture/display continue; afterward the worker consumes the newest pending frame. No FIFO queue is created. The worker blocks on a condition when idle. The latest completed result uses the same domain contract and DRM scheduling as LIVE_STREAM, with strictly increasing MediaPipe timestamps.
-
-Worker metrics use distinct meanings:
-
-- **Captured:** successful camera reads, as before.
-- **Accepted:** frames written to the pending slot, including those subsequently overwritten.
-- **Processed:** frames whose preprocessing finished and whose `detect_for_video()` call was started. Only the worker calls this API.
-- **Overwritten pending:** pending frames replaced before consumption; these never undergo preprocessing.
-- **Completed / inference FPS:** successful synchronous calls, including no-face results / their completion rate.
-- **prep:** worker consumption to image-ready time, including RGB conversion and image construction.
-- **detect_for_video / `sync_inference_ms`:** directly timed synchronous API execution. This is the critical experimental measurement.
-- **worker total / `total_worker_latency_ms`:** worker consumption to synchronous return, equal to prep + detect_for_video time. It excludes pending-slot wait and subsequent domain landmark conversion.
-- **Result age:** current monotonic time minus that frame's original `submit()` timestamp (the integer MediaPipe timestamp), including pending wait and processing.
-
-Worker metrics do not report callback timing or `Skipped Busy`. Shutdown signals and wakes the worker, discards the pending frame, joins active inference, then closes MediaPipe once. Worker exceptions surface on the application loop so camera/display cleanup still runs. The worker is not a daemon and cannot outlive normal application shutdown. Callers must not mutate submitted pixels while retained; existing camera adapters supply owned capture arrays.
-
-VIDEO mode is an experiment; no speed advantage has been established. From the Pi project root with `.venv` activated, benchmark both under identical headless conditions (848×480 main / 480×270 inference defaults):
-
-```bash
-PYTHONPATH=src python -m face_recognition.presentation.cli.recognize --camera picamera2 --display none --orientation rotate180 --landmarks none --inference-mode live-stream
-PYTHONPATH=src python -m face_recognition.presentation.cli.recognize --camera picamera2 --display none --orientation rotate180 --landmarks none --inference-mode video-worker
-```
+VIDEO / `detect_for_video()` with a latest-frame worker was experimentally evaluated on Raspberry Pi 3B+. With a continuously visible active face, it sustained approximately 7–8 inference FPS and 125–135 ms processing latency. LIVE_STREAM sustained approximately 7–8 inference FPS with 114–120 ms total callback latency under the same workload. LIVE_STREAM with single-in-flight backpressure was retained for comparable/slightly better performance, simpler architecture, and lower result age. The experimental runtime has been removed; its implementation is preserved in Git history/tag. The earlier approximately 25 ms VIDEO measurements without an active face were not representative of the intended workload.
 
 ## Windows laptop setup
 
