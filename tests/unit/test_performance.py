@@ -32,3 +32,15 @@ class PerformanceTests(unittest.TestCase):
         self.assertIsNone(tracker.snapshot(DetectorSnapshot()).result_latency_ms)
         with self.assertRaises(ValueError):
             PerformanceTracker(interval_seconds=0)
+
+    def test_overlay_updates_are_independent_of_opencv_display_iterations(self) -> None:
+        now = [0.0]
+        tracker = PerformanceTracker(clock=lambda: now[0])
+        for _ in range(20):
+            tracker.record_overlay_update()
+        now[0] = 1.0
+        metrics = tracker.snapshot(DetectorSnapshot())
+        self.assertEqual(metrics.overlay_update_fps, 20)
+        self.assertEqual(metrics.overlay_updates, 20)
+        self.assertEqual(metrics.display_fps, 0)
+        self.assertEqual(metrics.displayed_frames, 0)

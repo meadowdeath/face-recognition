@@ -2,8 +2,7 @@
 
 import argparse
 from collections.abc import Sequence
-
-import cv2
+from typing import cast
 
 from face_recognition.application.recognize_face import LandmarkPreview
 from face_recognition.application.performance import PerformanceTracker
@@ -13,6 +12,13 @@ from face_recognition.infrastructure.camera.opencv_camera import OpenCVCamera
 from face_recognition.infrastructure.camera.picamera2_camera import Picamera2Camera
 from face_recognition.infrastructure.mediapipe.face_landmarker import MediaPipeFaceLandmarker
 from face_recognition.presentation.visualization.frame_renderer import FrameRenderer
+from face_recognition.presentation.visualization.display import (
+    DRMDisplay,
+    NoDisplay,
+    OpenCVDisplay,
+    OverlayTarget,
+    PreviewDisplay,
+)
 
 
 def _parse_indices(value: str) -> tuple[int, ...]:
@@ -30,6 +36,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Asynchronous webcam landmark preview")
     parser.add_argument("--camera", choices=("opencv", "picamera2"), default="opencv",
                         help="Camera backend (default: opencv)")
+    parser.add_argument("--display", choices=("opencv", "drm", "none"), default="opencv",
+                        help="Display backend (default: opencv; DRM requires Picamera2)")
     parser.add_argument("--landmarks", choices=FrameRenderer.MODES, default=settings.renderer_mode)
     parser.add_argument(
         "--indices",
@@ -38,15 +46,24 @@ def main(argv: Sequence[str] | None = None) -> None:
         help="Explicit comma-separated landmark indices for selected rendering",
     )
     args = parser.parse_args(argv)
+    if args.display == "drm" and args.camera != "picamera2":
+        parser.error("--display drm requires --camera picamera2")
     if args.landmarks == "selected" and not args.indices:
         parser.error("--landmarks selected requires --indices or configured indices")
     renderer = FrameRenderer(args.landmarks, args.indices)
-    run_preview(settings, renderer, camera_backend=args.camera)
+    run_preview(settings, renderer, camera_backend=args.camera, display_backend=args.display)
 
 
 def run_preview(
-    settings: Settings, renderer: FrameRenderer, camera_backend: str = "opencv"
+    settings: Settings,
+    renderer: FrameRenderer,
+    camera_backend: str = "opencv",
+    display_backend: str = "opencv",
 ) -> None:
+    if display_backend not in ("opencv", "drm", "none"):
+        raise ValueError(f"Unknown display backend: {display_backend}")
+    if display_backend == "drm" and camera_backend != "picamera2":
+        raise ValueError("DRM display requires the Picamera2 camera backend")
     performance = PerformanceTracker(settings.metrics_interval_seconds)
     detector = MediaPipeFaceLandmarker(
         model_path=settings.landmarker_model_path,
@@ -69,22 +86,36 @@ def run_preview(
         raise
 
     preview = LandmarkPreview(camera, detector, performance)
+    display: PreviewDisplay | None = None
     try:
+        if display_backend == "opencv":
+            display = OpenCVDisplay(renderer)
+        elif display_backend == "drm":
+            display = DRMDisplay(
+                cast(OverlayTarget, camera), renderer, settings.camera_width, settings.camera_height
+            )
+        else:
+            display = NoDisplay(renderer, settings.metrics_interval_seconds)
         while True:
             result = preview.next_frame()
             if result is None:
                 raise RuntimeError("Camera stopped returning frames")
             metrics = performance.snapshot(result.detector_snapshot)
-            cv2.imshow("Face Landmarks", renderer.render(result.frame, result.faces, metrics))
-            key = cv2.waitKey(1) & 0xFF
-            performance.record_display()
-            if key == ord("q"):
+            keep_running = display.show(result, metrics)
+            if display_backend == "opencv":
+                performance.record_display()
+            elif display_backend == "drm":
+                performance.record_overlay_update()
+            if not keep_running:
                 break
+    except KeyboardInterrupt:
+        pass
     finally:
         try:
-            preview.close()
+            if display is not None:
+                display.close()
         finally:
-            cv2.destroyAllWindows()
+            preview.close()
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from face_recognition.config.settings import Settings
 from face_recognition.domain.models.landmark_result import DetectorSnapshot
 from face_recognition.infrastructure.camera import picamera2_camera as pi_adapter
 from face_recognition.presentation.cli import recognize as cli
+from face_recognition.presentation.visualization import display as displays
 
 
 class PreviewCliTests(unittest.TestCase):
@@ -19,9 +20,9 @@ class PreviewCliTests(unittest.TestCase):
         renderer = Mock()
         with patch.object(cli, "OpenCVCamera", return_value=camera), \
              patch.object(cli, "MediaPipeFaceLandmarker", return_value=detector), \
-             patch.object(cli.cv2, "imshow") as show, \
-             patch.object(cli.cv2, "waitKey", return_value=ord("q")), \
-             patch.object(cli.cv2, "destroyAllWindows") as destroy:
+             patch.object(displays.cv2, "imshow") as show, \
+             patch.object(displays.cv2, "waitKey", return_value=ord("q")), \
+             patch.object(displays.cv2, "destroyAllWindows") as destroy:
             cli.run_preview(Settings(), renderer)
         detector.submit.assert_called_once()
         show.assert_called_once()
@@ -41,9 +42,9 @@ class PreviewCliTests(unittest.TestCase):
                 with patch.object(cli, "OpenCVCamera", return_value=camera) as opencv, \
                      patch.object(cli, "Picamera2Camera", return_value=camera) as picamera2, \
                      patch.object(cli, "MediaPipeFaceLandmarker", return_value=detector), \
-                     patch.object(cli.cv2, "imshow"), \
-                     patch.object(cli.cv2, "waitKey", return_value=ord("q")), \
-                     patch.object(cli.cv2, "destroyAllWindows"):
+                     patch.object(displays.cv2, "imshow"), \
+                     patch.object(displays.cv2, "waitKey", return_value=ord("q")), \
+                     patch.object(displays.cv2, "destroyAllWindows"):
                     cli.run_preview(settings, Mock(), camera_backend=backend)
                 if backend == "opencv":
                     opencv.assert_called_once_with(settings.camera_index, 320, 240, settings.camera_fps)
@@ -60,7 +61,7 @@ class PreviewCliTests(unittest.TestCase):
             with self.subTest(backend=backend), \
                  patch.object(cli, adapter, side_effect=RuntimeError("camera init failed")), \
                  patch.object(cli, "MediaPipeFaceLandmarker") as factory, \
-                 patch.object(cli.cv2, "imshow") as show:
+                 patch.object(displays.cv2, "imshow") as show:
                 with self.assertRaisesRegex(RuntimeError, "camera init failed"):
                     cli.run_preview(Settings(), Mock(), camera_backend=backend)
                 factory.return_value.close.assert_called_once()
@@ -107,7 +108,7 @@ class PreviewCliTests(unittest.TestCase):
         detector.submit.side_effect = RuntimeError("submission failed")
         with patch.object(cli, "OpenCVCamera", return_value=camera), \
              patch.object(cli, "MediaPipeFaceLandmarker", return_value=detector), \
-             patch.object(cli.cv2, "destroyAllWindows") as destroy:
+             patch.object(displays.cv2, "destroyAllWindows") as destroy:
             with self.assertRaisesRegex(RuntimeError, "submission failed"):
                 cli.run_preview(Settings(), Mock())
         detector.close.assert_called_once()
@@ -122,3 +123,99 @@ class PreviewCliTests(unittest.TestCase):
         with patch.object(cli, "run_preview") as run:
             cli.main(["--landmarks", "selected", "--indices", "1,4,1"])
         self.assertEqual(run.call_args.args[1].selected_indices, (1, 4))
+
+    def test_cli_display_selection_and_invalid_drm_combination(self) -> None:
+        for backend in ("opencv", "drm", "none"):
+            with self.subTest(display=backend), patch.object(cli, "run_preview") as run:
+                cli.main(["--camera", "picamera2", "--display", backend])
+                self.assertEqual(run.call_args.kwargs["display_backend"], backend)
+        with patch.object(cli, "run_preview") as run, patch("sys.stderr"):
+            with self.assertRaises(SystemExit):
+                cli.main(["--camera", "opencv", "--display", "drm"])
+            run.assert_not_called()
+
+    def test_drm_ctrl_c_cleans_up_without_opencv_gui_calls(self) -> None:
+        camera = Mock()
+        detector = Mock()
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        camera.read.side_effect = [frame, KeyboardInterrupt()]
+        detector.snapshot.return_value = DetectorSnapshot()
+        renderer = Mock()
+        overlay = np.zeros((480, 640, 4), dtype=np.uint8)
+        renderer.render_overlay.return_value = overlay
+        events = Mock()
+        events.attach_mock(camera, "camera")
+        events.attach_mock(detector, "detector")
+        tracker = cli.PerformanceTracker()
+        with patch.object(cli, "Picamera2Camera", return_value=camera), \
+             patch.object(cli, "MediaPipeFaceLandmarker", return_value=detector), \
+             patch.object(cli, "PerformanceTracker", return_value=tracker), \
+             patch.object(displays.cv2, "imshow") as show, \
+             patch.object(displays.cv2, "waitKey") as wait, \
+             patch.object(displays.cv2, "destroyAllWindows") as destroy:
+            cli.run_preview(Settings(), renderer, "picamera2", "drm")
+        camera.start_drm_preview.assert_called_once_with(640, 480)
+        self.assertIs(camera.set_overlay.call_args_list[0].args[0], overlay)
+        self.assertIsNone(camera.set_overlay.call_args_list[1].args[0])
+        camera.stop_preview.assert_called_once()
+        camera.close.assert_called_once()
+        detector.close.assert_called_once()
+        renderer.render.assert_not_called()
+        show.assert_not_called()
+        wait.assert_not_called()
+        destroy.assert_not_called()
+        metrics = tracker.snapshot(DetectorSnapshot())
+        self.assertEqual(metrics.overlay_updates, 1)
+        self.assertEqual(metrics.displayed_frames, 0)
+        # Display-specific cleanup precedes camera and detector shutdown.
+        names = [call[0] for call in events.mock_calls]
+        self.assertEqual(names[names.index("camera.stop_preview") - 1], "camera.set_overlay")
+        self.assertLess(names.index("camera.stop_preview"), names.index("camera.close"))
+
+    def test_no_display_ctrl_c_skips_all_rendering_and_window_calls(self) -> None:
+        camera = Mock()
+        detector = Mock()
+        camera.read.side_effect = [object(), KeyboardInterrupt()]
+        detector.snapshot.return_value = DetectorSnapshot()
+        renderer = Mock()
+        with patch.object(cli, "Picamera2Camera", return_value=camera), \
+             patch.object(cli, "MediaPipeFaceLandmarker", return_value=detector), \
+             patch.object(displays.cv2, "imshow") as show, \
+             patch.object(displays.cv2, "waitKey") as wait, \
+             patch.object(displays.cv2, "destroyAllWindows") as destroy:
+            cli.run_preview(Settings(), renderer, "picamera2", "none")
+        detector.submit.assert_called_once()
+        renderer.render.assert_not_called()
+        renderer.render_overlay.assert_not_called()
+        camera.start_drm_preview.assert_not_called()
+        camera.set_overlay.assert_not_called()
+        camera.close.assert_called_once()
+        detector.close.assert_called_once()
+        show.assert_not_called()
+        wait.assert_not_called()
+        destroy.assert_not_called()
+
+    def test_drm_start_failure_still_closes_camera_and_detector(self) -> None:
+        camera = Mock()
+        detector = Mock()
+        camera.start_drm_preview.side_effect = RuntimeError("DRM unavailable")
+        with patch.object(cli, "Picamera2Camera", return_value=camera), \
+             patch.object(cli, "MediaPipeFaceLandmarker", return_value=detector):
+            with self.assertRaisesRegex(RuntimeError, "DRM unavailable"):
+                cli.run_preview(Settings(), Mock(), "picamera2", "drm")
+        camera.close.assert_called_once()
+        detector.close.assert_called_once()
+
+    def test_drm_overlay_cleanup_failure_still_stops_and_closes_resources(self) -> None:
+        camera = Mock()
+        detector = Mock()
+        camera.read.side_effect = KeyboardInterrupt()
+        camera.set_overlay.side_effect = RuntimeError("overlay clear failed")
+        with patch.object(cli, "Picamera2Camera", return_value=camera), \
+             patch.object(cli, "MediaPipeFaceLandmarker", return_value=detector):
+            with self.assertRaisesRegex(RuntimeError, "overlay clear failed"):
+                cli.run_preview(Settings(), Mock(), "picamera2", "drm")
+        camera.set_overlay.assert_called_once_with(None)
+        camera.stop_preview.assert_called_once()
+        camera.close.assert_called_once()
+        detector.close.assert_called_once()

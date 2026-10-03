@@ -17,6 +17,8 @@ class PerformanceMetrics:
     submitted_inference_frames: int
     completed_inference_frames: int
     result_latency_ms: float | None
+    overlay_update_fps: float = 0.0
+    overlay_updates: int = 0
 
 
 class PerformanceTracker:
@@ -32,8 +34,9 @@ class PerformanceTracker:
         self._sample_time = clock()
         self._captured = 0
         self._displayed = 0
-        self._sample_counts = (0, 0, 0)
-        self._rates = (0.0, 0.0, 0.0)
+        self._overlay_updates = 0
+        self._sample_counts = (0, 0, 0, 0)
+        self._rates = (0.0, 0.0, 0.0, 0.0)
 
     def record_capture(self) -> None:
         self._captured += 1
@@ -41,10 +44,13 @@ class PerformanceTracker:
     def record_display(self) -> None:
         self._displayed += 1
 
+    def record_overlay_update(self) -> None:
+        self._overlay_updates += 1
+
     def snapshot(self, detector: DetectorSnapshot) -> PerformanceMetrics:
         now = self._clock()
         elapsed = now - self._sample_time
-        counts = (self._captured, self._displayed, detector.completed_frames)
+        counts = (self._captured, self._displayed, detector.completed_frames, self._overlay_updates)
         if elapsed >= self._interval:
             self._rates = tuple(
                 (count - previous) / elapsed
@@ -61,4 +67,6 @@ class PerformanceTracker:
             submitted_inference_frames=detector.submitted_frames,
             completed_inference_frames=detector.completed_frames,
             result_latency_ms=None if detector.result is None else detector.result.latency_ms,
+            overlay_update_fps=self._rates[3],
+            overlay_updates=self._overlay_updates,
         )

@@ -34,3 +34,22 @@ class RendererTests(unittest.TestCase):
         for mode, indices in (("invalid", ()), ("selected", ()), ("selected", (-1,))):
             with self.assertRaises(ValueError):
                 FrameRenderer(mode, indices)
+
+    def test_rgba_overlay_is_transparent_except_for_requested_annotations(self) -> None:
+        for mode, indices, visible_points in (("none", (), ()), ("selected", (1,), (1,)),
+                                             ("all", (), (0, 1, 2))):
+            with self.subTest(mode=mode):
+                overlay = FrameRenderer(mode, indices).render_overlay(200, 160, [self.face], self.metrics)
+                self.assertEqual(overlay.shape, (160, 200, 4))
+                self.assertEqual(overlay.dtype, np.uint8)
+                self.assertEqual(tuple(overlay[100, 0]), (0, 0, 0, 0))
+                for index, point in enumerate(self.face.points):
+                    alpha = overlay[round(point.y * 159), round(point.x * 199), 3]
+                    self.assertEqual(alpha, 255 if index in visible_points else 0)
+                self.assertTrue(np.any(overlay[:, :, 3] == 255))  # Metrics remain visible.
+
+    def test_drm_metrics_name_overlay_updates_and_do_not_claim_display_fps(self) -> None:
+        lines = FrameRenderer().metric_lines(self.metrics, "drm")
+        self.assertTrue(any("Overlay updates:" in line for line in lines))
+        self.assertFalse(any("Display:" in line for line in lines))
+        self.assertTrue(any("Result latency:" in line for line in lines))
