@@ -67,6 +67,17 @@ class FrameRenderer:
         elif display == "drm":
             capture += f"  Overlay updates: {metrics.overlay_update_fps:.1f}/s"
         rendering = "Rendering: disabled" if display == "none" else f"Mode: {self.mode}"
+        if metrics.inference_mode == "video-worker":
+            sync = "pending" if metrics.sync_inference_ms is None else f"{metrics.sync_inference_ms:.1f}"
+            total = "pending" if metrics.total_worker_latency_ms is None else f"{metrics.total_worker_latency_ms:.1f}"
+            return (
+                capture,
+                f"Inference: {metrics.inference_fps:.1f} FPS  VIDEO worker  {rendering}",
+                f"Accepted: {metrics.accepted_frames}  Processed: {metrics.submitted_inference_frames}  Completed: {metrics.completed_inference_frames}",
+                f"Captured: {metrics.captured_frames}  Overwritten pending: {metrics.overwritten_pending_frames}",
+                f"Result age: {age}",
+                f"Timing ms: prep {timings[0]}  detect_for_video {sync}  worker total {total}",
+            )
         return (
             capture,
             f"Inference: {metrics.inference_fps:.1f} FPS  {rendering}",

@@ -15,8 +15,9 @@ import mediapipe as mp
 import numpy as np
 
 from face_recognition.domain.models.face_landmarks import FaceLandmarks, Landmark
-from face_recognition.domain.models.frame import Frame, PixelFormat
+from face_recognition.domain.models.frame import Frame
 from face_recognition.domain.models.landmark_result import DetectorSnapshot, LandmarkResult
+from face_recognition.infrastructure.mediapipe.frame_preprocessing import prepare_rgb
 
 
 @dataclass
@@ -110,19 +111,7 @@ class MediaPipeFaceLandmarker:
                 self._dispatch_finished.notify_all()
 
     def _prepare_rgb(self, frame: Frame | np.ndarray) -> np.ndarray:
-        # Called only after reserving the single inference slot. Bare arrays
-        # remain supported as BGR input for existing callers and test fakes.
-        if isinstance(frame, Frame) and frame.pixel_format == PixelFormat.YUV420_I420:
-            rgb = cv2.cvtColor(frame.data, cv2.COLOR_YUV2RGB_I420)
-            # Convert the complete packed planes, then remove padded columns.
-            rgb = rgb[:frame.height, :frame.width]
-            if self._inference_size is not None and (frame.width, frame.height) != self._inference_size:
-                rgb = cv2.resize(rgb, self._inference_size, interpolation=cv2.INTER_AREA)
-            return rgb
-        bgr = frame.data if isinstance(frame, Frame) else frame
-        if self._inference_size is not None and (bgr.shape[1], bgr.shape[0]) != self._inference_size:
-            bgr = cv2.resize(bgr, self._inference_size, interpolation=cv2.INTER_AREA)
-        return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        return prepare_rgb(frame, self._inference_size)
 
     def _on_result(self, result: Any, image: Any, timestamp_ms: int) -> None:
         completed_ns = monotonic_ns()

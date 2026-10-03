@@ -13,6 +13,19 @@ from face_recognition.presentation.visualization.frame_renderer import FrameRend
 
 
 class RendererTests(unittest.TestCase):
+    def test_video_worker_labels_use_pending_overwrites_and_synchronous_timing(self) -> None:
+        metrics = replace(self.metrics, inference_mode="video-worker", accepted_frames=30,
+                          submitted_inference_frames=8, completed_inference_frames=7,
+                          overwritten_pending_frames=21, preprocessing_ms=2.0,
+                          sync_inference_ms=100.0, total_worker_latency_ms=102.0)
+        for display in ("drm", "none", "opencv"):
+            lines = FrameRenderer().metric_lines(metrics, display)
+            report = " | ".join(lines)
+            self.assertIn("Accepted: 30  Processed: 8  Completed: 7", report)
+            self.assertIn("Overwritten pending: 21", report)
+            self.assertIn("detect_for_video 100.0  worker total 102.0", report)
+            self.assertNotIn("Skipped Busy", report)
+            self.assertNotIn("callback", report)
     def test_diagnostic_timing_line_is_shared_by_console_and_drm(self) -> None:
         metrics = replace(self.metrics, preprocessing_ms=3.0, dispatch_call_ms=0.5,
                           async_result_ms=111.5, total_callback_latency_ms=115.0)

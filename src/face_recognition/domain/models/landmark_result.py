@@ -7,7 +7,7 @@ from face_recognition.domain.models.face_landmarks import FaceLandmarks
 
 @dataclass(frozen=True)
 class LandmarkResult:
-    """Faces, submission timestamp, and submission-to-callback latency in ms."""
+    """Faces, frame timestamp, and detector processing latency in milliseconds."""
 
     faces: tuple[FaceLandmarks, ...]
     timestamp_ms: int
@@ -32,3 +32,8 @@ class DetectorSnapshot:
     dispatch_call_ms: float | None = None
     async_result_ms: float | None = None
     total_callback_latency_ms: float | None = None
+    inference_mode: str = "live-stream"
+    accepted_frames: int = 0
+    overwritten_pending_frames: int = 0
+    sync_inference_ms: float | None = None
+    total_worker_latency_ms: float | None = None
