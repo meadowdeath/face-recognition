@@ -2,14 +2,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+CAMERA_ORIENTATIONS = ("normal", "rotate180", "mirror-horizontal", "mirror-vertical")
 
 
 @dataclass(frozen=True)
 class Settings:
     camera_index: int = 0
-    camera_width: int = 640
-    camera_height: int = 480
+    display_width: int = 848
+    display_height: int = 480
+    inference_width: int = 480
+    inference_height: int = 270
     camera_fps: int = 30
+    camera_orientation: str = "normal"
     max_faces: int = 1
     detection_confidence: float = 0.5
     tracking_confidence: float = 0.5

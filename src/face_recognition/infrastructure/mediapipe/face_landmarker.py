@@ -24,7 +24,12 @@ class MediaPipeFaceLandmarker:
         max_faces: int,
         detection_confidence: float,
         tracking_confidence: float,
+        *,
+        inference_size: tuple[int, int] | None = None,
     ) -> None:
+        if inference_size is not None and any(value <= 0 for value in inference_size):
+            raise ValueError("Inference dimensions must be positive")
+        self._inference_size = inference_size
         if not model_path.is_file():
             raise FileNotFoundError(
                 f"Face Landmarker model missing: {model_path}. "
@@ -56,6 +61,8 @@ class MediaPipeFaceLandmarker:
                 raise RuntimeError("Face landmarker is closed")
         timestamp_ms = max(monotonic_ns() // 1_000_000, self._last_timestamp_ms + 1)
         self._last_timestamp_ms = timestamp_ms
+        if self._inference_size is not None and (frame.shape[1], frame.shape[0]) != self._inference_size:
+            frame = cv2.resize(frame, self._inference_size, interpolation=cv2.INTER_AREA)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
         self._detector.detect_async(image, timestamp_ms)

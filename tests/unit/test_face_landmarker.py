@@ -84,6 +84,22 @@ class FaceLandmarkerTests(unittest.TestCase):
             self.adapter.submit(self.frame)
         self.assertEqual(self.adapter.snapshot().submitted_frames, 0)
 
+    def test_preview_input_is_resized_only_when_inference_dimensions_differ(self) -> None:
+        adapter = module.MediaPipeFaceLandmarker(self.model, 1, 0.5, 0.5, inference_size=(480, 270))
+        try:
+            frame = np.zeros((480, 848, 3), dtype=np.uint8)
+            with patch.object(module.cv2, "resize", wraps=module.cv2.resize) as resize:
+                adapter.submit(frame)
+                image = self.native.detect_async.call_args.args[0]
+                self.assertEqual(image.numpy_view().shape, (270, 480, 3))
+                resize.assert_called_once()
+                self.assertEqual(frame.shape, (480, 848, 3))
+            with patch.object(module.cv2, "resize") as resize:
+                adapter.submit(np.zeros((270, 480, 3), dtype=np.uint8))
+                resize.assert_not_called()
+        finally:
+            adapter.close()
+
     def test_close_handles_late_callback_and_is_idempotent(self) -> None:
         self.publish(100)
         self.native.close.side_effect = lambda: self.publish(101)

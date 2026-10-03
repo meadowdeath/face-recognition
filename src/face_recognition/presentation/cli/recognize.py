@@ -2,11 +2,12 @@
 
 import argparse
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import cast
 
 from face_recognition.application.recognize_face import LandmarkPreview
 from face_recognition.application.performance import PerformanceTracker
-from face_recognition.config.settings import Settings
+from face_recognition.config.settings import CAMERA_ORIENTATIONS, Settings
 from face_recognition.domain.interfaces.camera import Camera
 from face_recognition.infrastructure.camera.opencv_camera import OpenCVCamera
 from face_recognition.infrastructure.camera.picamera2_camera import Picamera2Camera
@@ -31,6 +32,13 @@ def _parse_indices(value: str) -> tuple[int, ...]:
     return indices
 
 
+def _positive_dimension(value: str) -> int:
+    number = int(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError("Dimensions must be positive integers")
+    return number
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     settings = Settings()
     parser = argparse.ArgumentParser(description="Asynchronous webcam landmark preview")
@@ -38,6 +46,15 @@ def main(argv: Sequence[str] | None = None) -> None:
                         help="Camera backend (default: opencv)")
     parser.add_argument("--display", choices=("opencv", "drm", "none"), default="opencv",
                         help="Display backend (default: opencv; DRM requires Picamera2)")
+    parser.add_argument("--orientation", choices=CAMERA_ORIENTATIONS, default=settings.camera_orientation)
+    parser.add_argument("--inference-width", type=_positive_dimension, default=settings.inference_width,
+                        help="MediaPipe input width (default: %(default)s)")
+    parser.add_argument("--inference-height", type=_positive_dimension, default=settings.inference_height,
+                        help="MediaPipe input height (default: %(default)s)")
+    parser.add_argument("--display-width", type=_positive_dimension, default=settings.display_width,
+                        help="Capture preview/DRM width (default: %(default)s)")
+    parser.add_argument("--display-height", type=_positive_dimension, default=settings.display_height,
+                        help="Capture preview/DRM height (default: %(default)s)")
     parser.add_argument("--landmarks", choices=FrameRenderer.MODES, default=settings.renderer_mode)
     parser.add_argument(
         "--indices",
@@ -50,6 +67,18 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error("--display drm requires --camera picamera2")
     if args.landmarks == "selected" and not args.indices:
         parser.error("--landmarks selected requires --indices or configured indices")
+    settings = replace(
+        settings, camera_orientation=args.orientation,
+        inference_width=args.inference_width, inference_height=args.inference_height,
+        display_width=args.display_width, display_height=args.display_height,
+    )
+    if args.camera == "picamera2":
+        dimensions = (settings.inference_width, settings.inference_height,
+                      settings.display_width, settings.display_height)
+        if any(value % 2 for value in dimensions):
+            parser.error("Picamera2 stream dimensions must be even")
+        if settings.inference_width > settings.display_width or settings.inference_height > settings.display_height:
+            parser.error("Picamera2 inference dimensions must not exceed display dimensions")
     renderer = FrameRenderer(args.landmarks, args.indices)
     run_preview(settings, renderer, camera_backend=args.camera, display_backend=args.display)
 
@@ -70,15 +99,21 @@ def run_preview(
         max_faces=settings.max_faces,
         detection_confidence=settings.detection_confidence,
         tracking_confidence=settings.tracking_confidence,
+        inference_size=(settings.inference_width, settings.inference_height),
     )
     try:
         camera: Camera
         if camera_backend == "opencv":
             camera = OpenCVCamera(
-                settings.camera_index, settings.camera_width, settings.camera_height, settings.camera_fps
+                settings.camera_index, settings.display_width, settings.display_height, settings.camera_fps,
+                orientation=settings.camera_orientation,
             )
         elif camera_backend == "picamera2":
-            camera = Picamera2Camera(settings.camera_width, settings.camera_height)
+            camera = Picamera2Camera(
+                settings.inference_width, settings.inference_height,
+                display_width=settings.display_width, display_height=settings.display_height,
+                orientation=settings.camera_orientation,
+            )
         else:
             raise ValueError(f"Unknown camera backend: {camera_backend}")
     except BaseException:
@@ -92,7 +127,7 @@ def run_preview(
             display = OpenCVDisplay(renderer)
         elif display_backend == "drm":
             display = DRMDisplay(
-                cast(OverlayTarget, camera), renderer, settings.camera_width, settings.camera_height
+                cast(OverlayTarget, camera), renderer, settings.display_width, settings.display_height
             )
         else:
             display = NoDisplay(renderer, settings.metrics_interval_seconds)

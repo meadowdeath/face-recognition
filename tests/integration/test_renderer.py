@@ -53,3 +53,12 @@ class RendererTests(unittest.TestCase):
         self.assertTrue(any("Overlay updates:" in line for line in lines))
         self.assertFalse(any("Display:" in line for line in lines))
         self.assertTrue(any("Result latency:" in line for line in lines))
+
+    def test_normalized_inference_points_scale_to_full_display_overlay(self) -> None:
+        face = FaceLandmarks((Landmark(0.0, 0.0, 0.0), Landmark(0.5, 0.5, 0.0),
+                              Landmark(1.0, 1.0, 0.0)))
+        with patch("cv2.circle") as circle:
+            overlay = FrameRenderer().render_overlay(848, 480, [face], self.metrics)
+        self.assertEqual(overlay.shape, (480, 848, 4))
+        self.assertEqual([call.args[1] for call in circle.call_args_list],
+                         [(0, 0), (424, 240), (847, 479)])
