@@ -12,6 +12,34 @@ from face_recognition.presentation.visualization import display as displays
 
 
 class PreviewCliTests(unittest.TestCase):
+    def test_drm_counts_actual_updates_not_capture_iterations(self) -> None:
+        camera = Mock()
+        camera.read.side_effect = [object(), object(), object(), object(), KeyboardInterrupt()]
+        detector = Mock()
+        detector.snapshot.return_value = DetectorSnapshot()
+        renderer = Mock(mode="none")
+        tracker = cli.PerformanceTracker()
+        clock = Mock(side_effect=[0.0, 0.0, 0.1, 0.2, 2.0])
+
+        def make_display(*args, **kwargs):
+            return displays.DRMDisplay(*args, clock=clock, **kwargs)
+
+        with patch.object(cli, "Picamera2Camera", return_value=camera), \
+             patch.object(cli, "MediaPipeFaceLandmarker", return_value=detector), \
+             patch.object(cli, "PerformanceTracker", return_value=tracker), \
+             patch.object(cli, "DRMDisplay", side_effect=make_display):
+            cli.run_preview(Settings(metrics_interval_seconds=2.0), renderer, "picamera2", "drm")
+        metrics = tracker.snapshot(DetectorSnapshot())
+        self.assertEqual(metrics.captured_frames, 4)
+        self.assertEqual(metrics.overlay_updates, 2)
+        self.assertEqual(metrics.displayed_frames, 0)
+        self.assertEqual(renderer.render_overlay.call_count, 2)
+        self.assertEqual(camera.set_overlay.call_count, 3)  # Two updates + cleanup.
+        camera.set_overlay.assert_called_with(None)
+        self.assertEqual(detector.submit.call_count, 4)
+        camera.close.assert_called_once()
+        detector.close.assert_called_once()
+
     def test_shared_resolution_defaults_and_overrides(self) -> None:
         for backend in ("opencv", "picamera2"):
             with self.subTest(backend=backend), patch.object(cli, "run_preview") as run:

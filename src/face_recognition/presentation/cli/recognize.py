@@ -127,7 +127,8 @@ def run_preview(
             display = OpenCVDisplay(renderer)
         elif display_backend == "drm":
             display = DRMDisplay(
-                cast(OverlayTarget, camera), renderer, settings.display_width, settings.display_height
+                cast(OverlayTarget, camera), renderer, settings.display_width, settings.display_height,
+                interval_seconds=settings.metrics_interval_seconds,
             )
         else:
             display = NoDisplay(renderer, settings.metrics_interval_seconds)
@@ -139,7 +140,7 @@ def run_preview(
             keep_running = display.show(result, metrics)
             if display_backend == "opencv":
                 performance.record_display()
-            elif display_backend == "drm":
+            elif display_backend == "drm" and cast(DRMDisplay, display).overlay_updated:
                 performance.record_overlay_update()
             if not keep_running:
                 break
