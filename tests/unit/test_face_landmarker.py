@@ -283,6 +283,66 @@ class FaceLandmarkerTests(unittest.TestCase):
         self.assertEqual(later.result.latency_ms, 40.0)
         self.assertEqual((first.result_age_ms, later.result_age_ms), (100.0, 400.0))
 
+    def test_diagnostic_timing_breakdown_uses_precise_accepted_frame_timestamps(self) -> None:
+        # Reserve, image ready, API return, callback, snapshot.
+        times = [100_125_000, 103_625_000, 104_375_000, 215_875_000, 230_125_000]
+        with patch.object(module, "monotonic_ns", side_effect=times):
+            self.adapter.submit(self.frame)
+            timestamp = self.native.detect_async.call_args.args[1]
+            self.options.result_callback(SimpleNamespace(face_landmarks=[]), None, timestamp)
+            status = self.adapter.snapshot()
+        self.assertEqual(status.preprocessing_ms, 3.5)
+        self.assertEqual(status.dispatch_call_ms, 0.75)
+        self.assertEqual(status.async_result_ms, 111.5)
+        self.assertEqual(status.total_callback_latency_ms, 115.75)
+        self.assertEqual(status.preprocessing_ms + status.dispatch_call_ms + status.async_result_ms,
+                         status.total_callback_latency_ms)
+        # Preserve legacy millisecond MediaPipe timestamp and result-age semantics.
+        self.assertEqual(status.result.latency_ms, 115.875)
+        self.assertEqual(status.result_age_ms, 130.125)
+        self.assertEqual((status.submitted_frames, status.completed_frames, status.skipped_busy_frames), (1, 1, 0))
+        with patch.object(module, "monotonic_ns", return_value=500_000_000):
+            later = self.adapter.snapshot()
+        self.assertEqual(later.total_callback_latency_ms, 115.75)
+        self.assertEqual(later.async_result_ms, 111.5)
+        self.assertIs(later.result, status.result)
+        self.assertEqual(later.result_age_ms, 400.0)
+
+    def test_diagnostic_timing_handles_callback_before_dispatch_returns(self) -> None:
+        partial = []
+
+        def dispatch(image, timestamp):
+            self.options.result_callback(SimpleNamespace(face_landmarks=[]), image, timestamp)
+            partial.append(self.adapter.snapshot())
+
+        self.native.detect_async.side_effect = dispatch
+        # Callback and its snapshot precede the dispatch-return timestamp.
+        times = [100_000_000, 103_000_000, 110_000_000, 111_000_000, 112_000_000, 113_000_000]
+        with patch.object(module, "monotonic_ns", side_effect=times):
+            self.adapter.submit(self.frame)
+            status = self.adapter.snapshot()
+        self.assertIsNone(partial[0].dispatch_call_ms)
+        self.assertIsNone(partial[0].async_result_ms)
+        self.assertEqual(status.preprocessing_ms, 3.0)
+        self.assertEqual(status.dispatch_call_ms, 9.0)
+        self.assertEqual(status.async_result_ms, -2.0)
+        self.assertEqual(status.total_callback_latency_ms, 10.0)
+        self.assertEqual(status.preprocessing_ms + status.dispatch_call_ms + status.async_result_ms, 10.0)
+        self.assertIs(status.result, partial[0].result)
+        self.assertEqual((status.submitted_frames, status.completed_frames), (1, 1))
+
+    def test_no_diagnostic_timings_before_first_completed_inference(self) -> None:
+        self.adapter.submit(self.frame)
+        with patch.object(module, "monotonic_ns") as clock:
+            self.adapter.submit(object())  # Busy rejection collects no timestamps.
+        clock.assert_not_called()
+        status = self.adapter.snapshot()
+        self.assertIsNone(status.preprocessing_ms)
+        self.assertIsNone(status.dispatch_call_ms)
+        self.assertIsNone(status.async_result_ms)
+        self.assertIsNone(status.total_callback_latency_ms)
+        self.assertEqual(status.skipped_busy_frames, 1)
+
     def test_concurrent_close_waits_for_dispatch_and_ignores_its_callback(self) -> None:
         entered, release, closing = Event(), Event(), Event()
         errors = []

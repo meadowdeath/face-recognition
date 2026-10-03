@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
 import numpy as np
@@ -12,6 +13,15 @@ from face_recognition.presentation.visualization.frame_renderer import FrameRend
 
 
 class RendererTests(unittest.TestCase):
+    def test_diagnostic_timing_line_is_shared_by_console_and_drm(self) -> None:
+        metrics = replace(self.metrics, preprocessing_ms=3.0, dispatch_call_ms=0.5,
+                          async_result_ms=111.5, total_callback_latency_ms=115.0)
+        for display in ("drm", "none", "opencv"):
+            with self.subTest(display=display):
+                lines = FrameRenderer().metric_lines(metrics, display)
+                self.assertIn("Timing ms: prep 3.0  dispatch 0.5  async 111.5  total 115.0", lines)
+                pending = FrameRenderer().metric_lines(self.metrics, display)[-1]
+                self.assertEqual(pending.count("pending"), 4)
     def setUp(self) -> None:
         self.frame = np.zeros((160, 200, 3), dtype=np.uint8)
         self.face = FaceLandmarks(tuple(Landmark(x, 0.7, 0.0) for x in (0.2, 0.5, 0.8)))

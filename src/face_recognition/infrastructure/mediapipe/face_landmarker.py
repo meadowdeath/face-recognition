@@ -5,6 +5,7 @@ MediaPipe callback runs on another thread; no frame queue is maintained here.
 """
 
 from pathlib import Path
+from dataclasses import dataclass
 from threading import Condition, Lock
 from time import monotonic_ns
 from typing import Any
@@ -16,6 +17,13 @@ import numpy as np
 from face_recognition.domain.models.face_landmarks import FaceLandmarks, Landmark
 from face_recognition.domain.models.frame import Frame, PixelFormat
 from face_recognition.domain.models.landmark_result import DetectorSnapshot, LandmarkResult
+
+
+@dataclass
+class _InferenceTiming:
+    reserved_ns: int
+    image_ready_ns: int | None = None
+    dispatch_returned_ns: int | None = None
 
 
 class MediaPipeFaceLandmarker:
@@ -42,7 +50,8 @@ class MediaPipeFaceLandmarker:
         self._in_flight = False
         self._dispatching = False
         self._active_timestamp_ms: int | None = None
-        self._latest_raw: tuple[Any, int, float] | None = None
+        self._active_timing: _InferenceTiming | None = None
+        self._latest_raw: tuple[Any, int, int, _InferenceTiming] | None = None
         self._cached_result: LandmarkResult | None = None
         self._submitted_frames = 0
         self._completed_frames = 0
@@ -70,22 +79,30 @@ class MediaPipeFaceLandmarker:
             if self._in_flight or self._dispatching:
                 self._skipped_busy_frames += 1
                 return
-            timestamp_ms = max(monotonic_ns() // 1_000_000, self._last_timestamp_ms + 1)
+            reserved_ns = monotonic_ns()
+            timing = _InferenceTiming(reserved_ns)
+            timestamp_ms = max(reserved_ns // 1_000_000, self._last_timestamp_ms + 1)
             self._last_timestamp_ms = timestamp_ms
             self._active_timestamp_ms = timestamp_ms
+            self._active_timing = timing
             self._in_flight = True
             self._dispatching = True
         try:
             rgb = self._prepare_rgb(frame)
             image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
             # Never hold the callback/state lock across a MediaPipe call.
+            timing.image_ready_ns = monotonic_ns()
             self._detector.detect_async(image, timestamp_ms)
+            dispatch_returned_ns = monotonic_ns()
             with self._lock:
+                # The callback may already have stored this same timing record.
+                timing.dispatch_returned_ns = dispatch_returned_ns
                 self._submitted_frames += 1
         except BaseException:
             with self._lock:
                 self._in_flight = False
                 self._active_timestamp_ms = None
+                self._active_timing = None
             raise
         finally:
             with self._dispatch_finished:
@@ -108,15 +125,16 @@ class MediaPipeFaceLandmarker:
         return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
     def _on_result(self, result: Any, image: Any, timestamp_ms: int) -> None:
-        completed_ms = monotonic_ns() / 1_000_000
+        completed_ns = monotonic_ns()
         with self._lock:
-            if self._closed or timestamp_ms != self._active_timestamp_ms:
+            if self._closed or timestamp_ms != self._active_timestamp_ms or self._active_timing is None:
                 return
             self._completed_frames += 1
             if self._latest_raw is None or timestamp_ms > self._latest_raw[1]:
-                self._latest_raw = (result, timestamp_ms, completed_ms)
+                self._latest_raw = (result, timestamp_ms, completed_ns, self._active_timing)
             self._in_flight = False
             self._active_timestamp_ms = None
+            self._active_timing = None
 
     def snapshot(self) -> DetectorSnapshot:
         with self._lock:
@@ -126,8 +144,21 @@ class MediaPipeFaceLandmarker:
             submitted = self._submitted_frames
             completed = self._completed_frames
             skipped = self._skipped_busy_frames
+            if latest is not None:
+                timing = latest[3]
+                reserved_ns = timing.reserved_ns
+                ready_ns = timing.image_ready_ns
+                returned_ns = timing.dispatch_returned_ns
+        preprocessing_ms = dispatch_call_ms = async_result_ms = total_callback_latency_ms = None
         if latest is not None:
-            raw, timestamp_ms, completed_ms = latest
+            raw, timestamp_ms, completed_ns, _ = latest
+            total_callback_latency_ms = (completed_ns - reserved_ns) / 1_000_000
+            if ready_ns is not None:
+                preprocessing_ms = (ready_ns - reserved_ns) / 1_000_000
+                if returned_ns is not None:
+                    dispatch_call_ms = (returned_ns - ready_ns) / 1_000_000
+                    # Signed by definition: callback can precede API return.
+                    async_result_ms = (completed_ns - returned_ns) / 1_000_000
             if self._cached_result is None or self._cached_result.timestamp_ms != timestamp_ms:
                 # Convert once per new result, outside both callback and lock.
                 self._cached_result = LandmarkResult(
@@ -136,10 +167,13 @@ class MediaPipeFaceLandmarker:
                         for face in raw.face_landmarks
                     ),
                     timestamp_ms=timestamp_ms,
-                    latency_ms=max(0.0, completed_ms - timestamp_ms),
+                    latency_ms=max(0.0, completed_ns / 1_000_000 - timestamp_ms),
                 )
         result_age_ms = None if latest is None else max(0.0, monotonic_ns() / 1_000_000 - latest[1])
-        return DetectorSnapshot(self._cached_result, submitted, completed, skipped, result_age_ms)
+        return DetectorSnapshot(
+            self._cached_result, submitted, completed, skipped, result_age_ms,
+            preprocessing_ms, dispatch_call_ms, async_result_ms, total_callback_latency_ms,
+        )
 
     def close(self) -> None:
         with self._dispatch_finished:
@@ -148,6 +182,7 @@ class MediaPipeFaceLandmarker:
             self._closed = True
             self._in_flight = False
             self._active_timestamp_ms = None
+            self._active_timing = None
             # A concurrent close must not dispose MediaPipe during preprocessing
             # or dispatch. Condition.wait releases the lock used by callbacks.
             while self._dispatching:

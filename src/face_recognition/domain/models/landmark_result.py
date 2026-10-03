@@ -27,3 +27,8 @@ class DetectorSnapshot:
     skipped_busy_frames: int = 0
     # Age measured since the result's submission timestamp, not its callback.
     result_age_ms: float | None = None
+    # Diagnostic intervals for the latest completed result, in milliseconds.
+    preprocessing_ms: float | None = None
+    dispatch_call_ms: float | None = None
+    async_result_ms: float | None = None
+    total_callback_latency_ms: float | None = None

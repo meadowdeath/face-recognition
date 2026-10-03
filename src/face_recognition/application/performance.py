@@ -21,6 +21,10 @@ class PerformanceMetrics:
     overlay_updates: int = 0
     skipped_busy_frames: int = 0
     result_age_ms: float | None = None
+    preprocessing_ms: float | None = None
+    dispatch_call_ms: float | None = None
+    async_result_ms: float | None = None
+    total_callback_latency_ms: float | None = None
 
 
 class PerformanceTracker:
@@ -73,4 +77,8 @@ class PerformanceTracker:
             overlay_updates=self._overlay_updates,
             skipped_busy_frames=detector.skipped_busy_frames,
             result_age_ms=detector.result_age_ms,
+            preprocessing_ms=detector.preprocessing_ms,
+            dispatch_call_ms=detector.dispatch_call_ms,
+            async_result_ms=detector.async_result_ms,
+            total_callback_latency_ms=detector.total_callback_latency_ms,
         )

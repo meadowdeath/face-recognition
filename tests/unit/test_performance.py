@@ -5,6 +5,25 @@ from face_recognition.domain.models.landmark_result import DetectorSnapshot, Lan
 
 
 class PerformanceTests(unittest.TestCase):
+    def test_latest_diagnostic_timings_are_forwarded_without_changing_counters(self) -> None:
+        status = DetectorSnapshot(
+            result=LandmarkResult((), 100, 115.0), submitted_frames=2, completed_frames=1,
+            skipped_busy_frames=3, result_age_ms=160.0, preprocessing_ms=3.0,
+            dispatch_call_ms=0.5, async_result_ms=111.5, total_callback_latency_ms=115.0,
+        )
+        tracker = PerformanceTracker(clock=lambda: 0.0)
+        metrics = tracker.snapshot(status)
+        self.assertEqual((metrics.preprocessing_ms, metrics.dispatch_call_ms,
+                          metrics.async_result_ms, metrics.total_callback_latency_ms), (3.0, 0.5, 111.5, 115.0))
+        self.assertEqual(metrics.result_latency_ms, 115.0)
+        self.assertEqual(metrics.result_age_ms, 160.0)
+        self.assertEqual((metrics.submitted_inference_frames, metrics.completed_inference_frames,
+                          metrics.skipped_busy_frames), (2, 1, 3))
+        pending = tracker.snapshot(DetectorSnapshot())
+        self.assertIsNone(pending.preprocessing_ms)
+        self.assertIsNone(pending.dispatch_call_ms)
+        self.assertIsNone(pending.async_result_ms)
+        self.assertIsNone(pending.total_callback_latency_ms)
     def test_independent_rates_counts_and_latency(self) -> None:
         now = [0.0]
         tracker = PerformanceTracker(clock=lambda: now[0])

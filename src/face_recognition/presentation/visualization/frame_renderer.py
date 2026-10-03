@@ -56,6 +56,11 @@ class FrameRenderer:
     def metric_lines(self, metrics: PerformanceMetrics, display: str) -> tuple[str, ...]:
         latency = "pending" if metrics.result_latency_ms is None else f"{metrics.result_latency_ms:.1f} ms"
         age = "pending" if metrics.result_age_ms is None else f"{metrics.result_age_ms:.1f} ms"
+        timings = tuple(
+            "pending" if value is None else f"{value:.1f}"
+            for value in (metrics.preprocessing_ms, metrics.dispatch_call_ms,
+                          metrics.async_result_ms, metrics.total_callback_latency_ms)
+        )
         capture = f"Capture: {metrics.capture_fps:.1f} FPS"
         if display == "opencv":
             capture += f"  Display: {metrics.display_fps:.1f} FPS"
@@ -68,6 +73,7 @@ class FrameRenderer:
             f"Submitted: {metrics.submitted_inference_frames}  Completed: {metrics.completed_inference_frames}",
             f"Captured: {metrics.captured_frames}  Skipped Busy: {metrics.skipped_busy_frames}",
             f"Result latency: {latency} (callback)  Result age: {age}",
+            f"Timing ms: prep {timings[0]}  dispatch {timings[1]}  async {timings[2]}  total {timings[3]}",
         )
 
     def _draw(
