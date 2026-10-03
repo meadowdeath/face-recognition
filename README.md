@@ -6,7 +6,9 @@ Layered Python project for facial landmark detection now and experimental identi
 
 ## Stack and architecture
 
-Python 3.13, OpenCV, MediaPipe, NumPy, and scikit-learn; Picamera2 is for Raspberry Pi only.
+**Python 3.11 is the only currently supported Python version** (`>=3.11,<3.12`). The mandatory runtime dependencies are NumPy 1.26.4, opencv-contrib-python 4.10.0.84, MediaPipe 0.10.14, and protobuf 4.25.9. The same versions are pinned in `pyproject.toml` and `requirements.txt`; `requirements-rpi.txt` includes those shared requirements.
+
+The reference Raspberry Pi environment is a Raspberry Pi 3B+ running Debian 12 Bookworm on aarch64 with Python 3.11.2. It supplies Picamera2 0.3.31, libcamera, and python3-libcamera through system packages. Windows uses the shared Python dependencies without Picamera2. Scikit-learn is not required for this landmark-preview milestone.
 
 ```text
 src/face_recognition/
@@ -45,7 +47,7 @@ Rates update over measured intervals of at least one second and initially show z
 
 ## Windows laptop setup
 
-From the project root in PowerShell, with Python 3.13 on `PATH`:
+From the project root in PowerShell, with Python 3.11 on `PATH`:
 
 ```powershell
 python -m venv .venv
@@ -59,9 +61,21 @@ Benchmark rendering with `--landmarks none`, `--landmarks all` (the default), or
 
 The model download uses the [official MediaPipe Face Landmarker bundle](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker/index#models). It is stored at `assets/face_landmarker.task` and is not committed. Set camera index, resolution, and detector confidence in `src/face_recognition/config/settings.py`. Run hardware-free checks with `$env:PYTHONPATH='src'; python -m unittest discover -s tests -p 'test_*.py'`.
 
-If `python` resolves to the Windows Store alias, call your Python 3.13 interpreter by its full path. With an existing environment containing the dependencies, set `$env:PYTHONPATH='src'` and run the module command above; a copied environment from another platform is not suitable.
+If `python` resolves to the Windows Store alias, call your Python 3.11 interpreter by its full path. With the existing Windows Conda environment, activate `face-recognition`, set `$env:PYTHONPATH='src'`, and run the module command above. Install the pinned runtime dependencies with `python -m pip install -r requirements.txt` if needed.
 
-On Raspberry Pi, the planned `Picamera2Camera` adapter will supply BGR frames to the same application and asynchronous detector contract. Picamera2 should preferably come from Raspberry Pi OS apt/system packages; it is absent from Windows requirements. Check Python 3.13 and ARM64 package availability on the target before installation. Create a separate environment on each machine: virtual environments contain platform-specific interpreters and binary packages and cannot be copied between Windows and Linux.
+## Raspberry Pi environment
+
+Ensure Picamera2 0.3.31, libcamera, and python3-libcamera are available through Debian/Raspberry Pi OS apt/system packages. These are prerequisites, not pip requirements. With the system Python 3.11 interpreter, create the environment from the project root:
+
+```bash
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+python -m pip install -r requirements-rpi.txt
+```
+
+`--system-site-packages` is required so the environment can access the system-provided Picamera2 and libcamera Python bindings. Raspberry Pi camera integration remains future work; the OpenCV CLI currently selects `OpenCVCamera`, and the optional `Picamera2Camera` adapter imports Picamera2 only when instantiated on Linux. The same asynchronous detector contract will be used on both platforms.
+
+Create a separate environment on each machine: virtual environments contain platform-specific interpreters and binary packages and cannot be copied between Windows and Linux. Share source, configuration, compatible model assets, and the pinned requirements.
 
 ## Future work
 

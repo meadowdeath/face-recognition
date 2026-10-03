@@ -1,4 +1,7 @@
-# Raspberry Pi OS: install python3-picamera2 via apt/system packages first.
-# Use a Python 3.13 environment with access to system packages for Picamera2.
-# Confirm ARM64 wheels and Python 3.13 compatibility on the target OS.
+# Reference: Raspberry Pi 3B+, Debian 12 Bookworm, aarch64, Python 3.11.2.
+# System prerequisites (apt/distribution packages, NOT pip dependencies):
+# Picamera2 0.3.31 (python3-picamera2), libcamera, and python3-libcamera.
+# Create the environment with access to those system packages:
+# python3 -m venv --system-site-packages .venv
+# Install the same pinned Python runtime dependencies as Windows:
 -r requirements.txt

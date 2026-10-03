@@ -7,12 +7,12 @@ name = "face-recognition-landmarks"
 version = "0.1.0"
 description = "Layered facial landmark demo and future recognition project"
 readme = "README.md"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.11,<3.12"
 dependencies = [
-  "mediapipe",
-  "opencv-contrib-python",
-  "numpy",
-  "scikit-learn",
+  "numpy==1.26.4",
+  "opencv-contrib-python==4.10.0.84",
+  "mediapipe==0.10.14",
+  "protobuf==4.25.9",
 ]
 
 [project.scripts]

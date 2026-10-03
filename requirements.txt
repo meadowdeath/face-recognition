@@ -1,4 +1,4 @@
-mediapipe
-opencv-contrib-python
-numpy
-scikit-learn
+numpy==1.26.4
+opencv-contrib-python==4.10.0.84
+mediapipe==0.10.14
+protobuf==4.25.9
