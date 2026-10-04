@@ -136,8 +136,25 @@ Both Pi modes exit with Ctrl+C. No-display mode keeps Picamera2's non-visible ev
 
 Create a separate environment on each machine: virtual environments contain platform-specific interpreters and binary packages and cannot be copied between Windows and Linux. Share source, configuration, compatible model assets, and the pinned requirements.
 
+## PC normalization experiment
+
+This separate experimental CLI reuses the OpenCV camera, LIVE_STREAM detector, `LandmarkPreview`, performance tracker, and raw landmark renderer. It does not change the production preview. From the project root, with the Python 3.11 environment activated and `assets/face_landmarker.task` available:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m face_recognition.presentation.cli.normalize_landmarks
+```
+
+It uses `Settings` for the camera and inference dimensions (default 848×480 capture, 480×270 inference). Two windows show the original camera/landmarks and a synthetic identity-normalized cloud. The cloud has a **fixed 640×640 canvas**, X/Y range **[-2, 2]**, and equal scale: `pixel = round((coordinate + 2) * 639 / 4)` on each axis, with positive Y down. Eye-center guides are at (-0.5, 0) and (+0.5, 0); points outside the range are clipped. No per-face fitting, recentering, or zoom changes normalized values. Z is used for comparison, not drawing.
+
+Press **r** to capture/replace the latest completed face as an in-memory reference; **q** or Ctrl+C quits. No-face results prevent reference replacement. Current points are green and reference points gray. State/normalization/RMSE update only when a newer completed `timestamp_ms` arrives; reused snapshots are not new observations. Only the first detected face is compared, assuming the same subject and corresponding landmark indices. Invalid normalization or unequal landmark counts show an unavailable comparison rather than an identity decision.
+
+Raw comparison corrects only image aspect ratio: `(X, Y, Z) = (x, y * image_height / image_width, z)`, without eye centering, scale, or roll correction. Both raw and normalized RMSE use `sqrt(sum((x-x_ref)^2 + (y-y_ref)^2 + (z-z_ref)^2) / N)` across equal ordered landmark counts. Raw errors use image-width units; normalized errors use interocular units, so inspect trends within each measure rather than treating their numerical ratio as a recognition score. Reference capture gives zero errors; all reference data disappears on exit and nothing is written to disk.
+
+Manually compare neutral posture, left/right/up/down translation, closer/farther movement, and positive/negative roll. Normalization should reduce these geometric variations; it does not correct yaw, pitch, expressions, landmark jitter, or camera noise. There are no recognition thresholds or final identity features in this experiment.
+
 ## Future work
 
-`LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is not connected to the preview or feature extractor, and its eye-relative output is distinct from the input image-normalized representation.
+`LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.
 
 Remaining work: dataset capture; experimentally select a smaller landmark subset; derive geometric features; compare KNN, SVM, and Random Forest; reject unknown people; validate the Pi camera on hardware; benchmark accuracy and throughput. These are not implemented yet.
