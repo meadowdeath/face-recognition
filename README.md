@@ -13,9 +13,9 @@ The reference Raspberry Pi environment is a Raspberry Pi 3B+ running Debian 12 B
 ```text
 src/face_recognition/
   domain/          Models and camera, detector, extractor, classifier contracts
-  application/     Frame orchestration; dataset and training placeholders
+  application/     Frame orchestration, raw dataset capture, validation; training placeholder
   infrastructure/  OpenCV and optional Picamera2 cameras, MediaPipe detector,
-                   feature/classifier/persistence placeholders
+                   normalization/baseline features, JSONL datasets; classifier/model placeholders
   presentation/    CLI, frame/overlay rendering, and selectable display adapters
   config/          Centralized settings
 assets/            Downloaded MediaPipe task model (ignored)
@@ -172,8 +172,67 @@ The 13 tests run in order: CENTER; TRANSLATION LEFT, RIGHT, UP, DOWN; NEAR; FAR;
 
 Templates, temporary samples, and summaries exist only in memory. Nothing is saved. This experiment reuses the existing pipeline without changing production scheduling, preprocessing, cameras, display backends, performance tracking, or feature extraction.
 
+## Raw landmark dataset capture
+
+Raw MediaPipe image-normalized landmarks are the **canonical stored samples**. Normalization, the all-coordinate baseline, future subsets, and geometric features can be derived later from this same dataset. Capture stores no images/video, normalized landmarks, feature vectors, or predictions. Use pseudonymous person IDs such as `p001`; names are unnecessary. IDs allow 1–64 ASCII letters/numbers/underscores/hyphens and reject traversal and Windows reserved device names.
+
+From the project root, with the Python 3.11 environment activated and the existing task model available, capture a Windows/OpenCV trial:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m face_recognition.presentation.cli.capture --person-id p001 --session-id pc_trial_01 --camera opencv --display opencv
+```
+
+For the upside-down Raspberry Pi camera and attached DRM screen:
+
+```bash
+PYTHONPATH=src python -m face_recognition.presentation.cli.capture --person-id p001 --session-id session_01 --camera picamera2 --display drm --orientation rotate180
+```
+
+Use `--display none` for capture without a visual preview (still run in an interactive terminal). Existing OpenCV/Picamera2 cameras and displays are reused; Picamera2 remains optional on Windows. Source metadata records the backend/device, orientation, and stream sizes. Camera index, inference/display dimensions, and landmark drawing modes are configurable; rendering selections do not reduce the landmarks stored.
+
+Each condition waits for **SPACE in the terminal** (no Enter). **q** or Ctrl+C cancels; q also works in the OpenCV window. Move into the requested pose first, then maintain it with small natural variations rather than large continuous movements. Defaults are **5 new warm-up completions**, **20 accepted samples**, and **at least 250 ms between accepted detector timestamps within each condition**. Repeated snapshots do not count; no face, multiple returned faces, inconsistent counts, and nonfinite coordinates do not fill a sample slot. Warm-up discards completions even without a face. The detector is configured for one face; the operator must keep only the intended participant in view, as there is no identity check.
+
+Override these defaults with `--warmup-results`, `--samples-per-condition`, and `--minimum-sample-interval-ms`. The 13 conditions are CENTER; TRANSLATION LEFT, RIGHT, UP, DOWN; NEAR; FAR; ROLL LEFT, RIGHT; YAW LEFT, RIGHT; PITCH UP, DOWN. Defaults yield **260 samples/session**; no fixed number of people or sessions is enforced.
+
+```text
+data/raw/<person_id>/<session_id>/
+  manifest.json
+  center.jsonl
+  translation_left.jsonl
+  translation_right.jsonl
+  translation_up.jsonl
+  translation_down.jsonl
+  near.jsonl
+  far.jsonl
+  roll_left.jsonl
+  roll_right.jsonl
+  yaw_left.jsonl
+  yaw_right.jsonl
+  pitch_up.jsonl
+  pitch_down.jsonl
+```
+
+Each JSONL line uses schema version 1 (shortened illustrative landmark list):
+
+```json
+{"schema_version":1,"person_id":"p001","session_id":"session_01","condition":"center","sample_index":0,"detector_timestamp_ms":123456789,"inference_width":480,"inference_height":270,"landmarks":[[0.1,0.2,-0.03],[0.2,0.3,-0.02]]}
+```
+
+Coordinates are preserved without rounding or aspect-ratio correction, in landmark-index order with X/Y/Z per point. The landmark count comes from the detector. Samples retain the actual configured inference dimensions needed for later normalization. Detector timestamps are monotonic submission times, not wall-clock capture dates; they are not assumed comparable across process restarts.
+
+The manifest records `schema_version`, `person_id`, `session_id`, UTC `created_at`, `camera_backend`, `camera_device_id`, `orientation`, `requested_camera_fps` (null for Picamera2), inference/display dimensions, `detector_model_sha256`, `mediapipe_version`, detection/tracking confidences, `landmark_coordinate_space`, `detector_timestamp_clock`, `expected_landmark_count`, ordered `conditions`, sampling configuration, and `completed_conditions`. The coordinate description explicitly states **raw image-normalized**, not identity-normalized.
+
+Only a full condition batch is published. JSONL data is written/fsynced to `.jsonl.tmp`, then atomically published without replacing an existing condition using a same-filesystem hard link (NTFS/ext4), and the temporary name is removed. The manifest is then updated through a flushed temporary file and atomic replacement. Cancelled in-memory batches are discarded; partial temporary files never count as completed. Linux directory updates are also fsynced.
+
+Run the **same command/configuration** to resume: metadata, model digest/version, protocol, and completed files are validated, completed conditions are skipped, and an unfinished condition restarts with SPACE and warm-up. A complete unmarked file left between publication and manifest update is validated and recovered; incomplete/corrupt final files or incompatible configuration fail clearly. Use a new session ID to change capture configuration. Run one capture process per session.
+
+Collect multiple independent sessions per person (approximately three is a later recommended protocol). **Future train/test separation must be by session**, never by randomly splitting adjacent frames from one capture burst. Splitting and training are not implemented. Generated contents under `data/raw/` are intentionally ignored by Git; `.gitkeep` preserves the directory. Keep the default data root for this repository behavior.
+
 ## Future work
 
 `LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.
 
-Remaining work: dataset capture; experimentally select a smaller landmark subset; derive geometric features; compare KNN, SVM, and Random Forest; reject unknown people; validate the Pi camera on hardware; benchmark accuracy and throughput. These are not implemented yet.
+`LandmarkFeatureExtractor` flattens already identity-normalized points as `(x0, y0, z0, x1, y1, z1, ...)`, with three finite features per landmark. Capture does not invoke it.
+
+Remaining work: derive representations from raw sessions; experimentally select a smaller landmark subset; derive geometric features; compare KNN, SVM, and Random Forest; reject unknown people; validate dataset capture on Pi hardware; benchmark accuracy and throughput. These are not implemented yet.
