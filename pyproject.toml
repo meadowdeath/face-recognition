@@ -13,6 +13,7 @@ dependencies = [
   "opencv-contrib-python==4.10.0.84",
   "mediapipe==0.10.14",
   "protobuf==4.25.9",
+  "scikit-learn==1.7.2",
 ]
 
 [project.scripts]

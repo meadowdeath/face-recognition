@@ -6,16 +6,16 @@ Layered Python project for facial landmark detection now and experimental identi
 
 ## Stack and architecture
 
-**Python 3.11 is the only currently supported Python version** (`>=3.11,<3.12`). The mandatory runtime dependencies are NumPy 1.26.4, opencv-contrib-python 4.10.0.84, MediaPipe 0.10.14, and protobuf 4.25.9. The same versions are pinned in `pyproject.toml` and `requirements.txt`; `requirements-rpi.txt` includes those shared requirements.
+**Python 3.11 is the only currently supported Python version** (`>=3.11,<3.12`). The dependencies are NumPy 1.26.4, opencv-contrib-python 4.10.0.84, MediaPipe 0.10.14, protobuf 4.25.9, and scikit-learn 1.7.2. The same versions are pinned in `pyproject.toml` and `requirements.txt`; `requirements-rpi.txt` includes those shared requirements.
 
-The reference Raspberry Pi environment is a Raspberry Pi 3B+ running Debian 12 Bookworm on aarch64 with Python 3.11.2. It supplies Picamera2 0.3.31, libcamera, and python3-libcamera through system packages. Windows uses the shared Python dependencies without Picamera2. Scikit-learn is not required for this landmark-preview milestone.
+The reference Raspberry Pi environment is a Raspberry Pi 3B+ running Debian 12 Bookworm on aarch64 with Python 3.11.2. It supplies Picamera2 0.3.31, libcamera, and python3-libcamera through system packages. Windows uses the shared Python dependencies without Picamera2. Scikit-learn is used by offline baseline evaluation; the production preview does not import it. The new offline dependency has not been validated on Pi hardware.
 
 ```text
 src/face_recognition/
   domain/          Models and camera, detector, extractor, classifier contracts
-  application/     Frame orchestration, raw dataset capture, validation; training placeholder
+  application/     Frame orchestration, dataset capture/processing, validation, development folds/evaluation
   infrastructure/  OpenCV and optional Picamera2 cameras, MediaPipe detector,
-                   normalization/baseline features, JSONL datasets; classifier/model placeholders
+                   normalization/baseline features, JSONL datasets, batch baselines; live classifier/model placeholders
   presentation/    CLI, frame/overlay rendering, and selectable display adapters
   config/          Centralized settings
 assets/            Downloaded MediaPipe task model (ignored)
@@ -227,7 +227,7 @@ Only a full condition batch is published. JSONL data is written/fsynced to `.jso
 
 Run the **same command/configuration** to resume: metadata, model digest/version, protocol, and completed files are validated, completed conditions are skipped, and an unfinished condition restarts with SPACE and warm-up. A complete unmarked file left between publication and manifest update is validated and recovered; incomplete/corrupt final files or incompatible configuration fail clearly. Use a new session ID to change capture configuration. Run one capture process per session.
 
-Collect multiple independent sessions per person (approximately three is a later recommended protocol). **Future train/test separation must be by session**, never by randomly splitting adjacent frames from one capture burst. Splitting and training are not implemented. Use an external `--data-root` for biometric capture. Repository-local generated contents under `data/raw/` remain ignored by Git as a safeguard; `.gitkeep` preserves the directory.
+Collect multiple independent sessions per person (approximately three is a later recommended protocol). **Train/test separation must be by session**, never by randomly splitting adjacent frames from one capture burst. Capture performs no splitting or model fitting. Use an external `--data-root` for biometric capture. Repository-local generated contents under `data/raw/` remain ignored by Git as a safeguard; `.gitkeep` preserves the directory.
 
 ## Offline processing of external datasets
 
@@ -336,7 +336,32 @@ python -m face_recognition.presentation.cli.inspect_training_folds `
   --split-manifest "..\face-recognition-data\splits\identity_split_v1.json"
 ```
 
-This diagnostics command requires exactly two training sessions for automatic opposite folds. It prints fit/validation identity and sample counts only; exit codes are 0 success, 1 input/loading/fold failure, and 2 usage error. No feature selection, learned preprocessing, classifier fitting or evaluation is implemented.
+This diagnostics command requires exactly two training sessions for automatic opposite folds. It prints fit/validation identity and sample counts only; exit codes are 0 success, 1 input/loading/fold failure, and 2 usage error. This command performs no feature selection, learned preprocessing, classifier fitting or evaluation.
+
+## Full-XYZ closed-set development baseline
+
+The offline baseline uses **all `all_xyz_v1` coordinates in stored order**: 478 landmarks yield 1,434 features; code derives the dimension rather than hardcoding it. It reuses the two opposite training-session folds above and reads only `known_train_pool` payloads. `known_test` and `unknown_pool` remain untouched. This baseline exists for later comparison against dimensionality reduction, not final holdout evaluation or live recognition.
+
+Fixed configurations (no tuning):
+
+- **KNN:** 5 neighbors, uniform weights, Euclidean distance, brute-force search, `n_jobs=1`.
+- **SVM:** RBF, `C=1.0`, `gamma="scale"`, probability estimation disabled, 128 MB cache, `random_state=42`.
+- **Random Forest:** 100 trees, Gini, unlimited depth, minimum split/leaf sizes 2/1, `max_features="sqrt"`, bootstrap enabled, no class weighting, `random_state=42`, `n_jobs=1`.
+
+Other estimator defaults follow pinned scikit-learn 1.7.2. KNN and SVM use fresh `Pipeline(StandardScaler(copy=True, with_mean=True, with_std=True), classifier)` instances per fold. Scalers fit **only on fit rows**; validation is transformed with those fitted parameters. Random Forest has no scaler. Future trainable feature transforms must be inserted inside that same pipeline before scaling; none is implemented. At least two known identities and five fit samples are required; KNN's fixed neighbor count is never silently reduced.
+
+Models run sequentially, with native BLAS/OpenMP threads limited to one through scikit-learn's required `threadpoolctl` dependency. Input remains one read-only `float32` matrix with fold views. Scaling necessarily allocates working matrices; SVM may internally convert to double precision. No fitted models, predictions or feature vectors are persisted.
+
+```powershell
+python -m face_recognition.presentation.cli.evaluate_baseline_models `
+  --processed-root "..\face-recognition-data\data\processed" `
+  --split-manifest "..\face-recognition-data\splits\identity_split_v1.json" `
+  --report "..\face-recognition-data\reports\baseline_identity_v1.json"
+```
+
+Each classifier/fold reports accuracy, macro precision/recall/F1 (`zero_division=0`), and a confusion matrix with sorted pseudonymous labels (rows true, columns predicted). Summaries use **unweighted fold means and population standard deviations**; matrices stay per fold. `perf_counter` measures fit (scaler plus model) and batch prediction (including validation transformation), excluding metric computation. Mean prediction latency is batch prediction time divided by validation sample count; it is not standalone streaming latency. Timings are descriptive.
+
+The required JSON report records these aggregates, fixed configurations, session/sample/feature counts, label order, protocol, and library versions. It contains no vectors, coordinates, individual sample predictions or absolute source paths. The report must be new, external to the repository, and outside processed/split inputs; publication is atomic without overwrite. CLI output is aggregate-only; exit codes are 0 success, 1 evaluation/report failure or interruption, and 2 usage error. Keep reports outside Git. No real model results are documented yet.
 
 ## Future work
 
@@ -344,4 +369,4 @@ This diagnostics command requires exactly two training sessions for automatic op
 
 `LandmarkFeatureExtractor` flattens already identity-normalized points as `(x0, y0, z0, x1, y1, z1, ...)`, with three finite features per landmark. Capture does not invoke it.
 
-Remaining work: experimentally select a smaller landmark subset; derive geometric features; compare KNN, SVM, and Random Forest; reject unknown people; validate dataset capture on Pi hardware; benchmark accuracy and throughput. These are not implemented yet.
+Remaining work: compare reduced representations against the full-XYZ baseline; derive geometric features; perform final holdout evaluation and unknown rejection; validate dataset capture on Pi hardware; benchmark deployment accuracy and throughput. These are not implemented yet.
