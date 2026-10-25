@@ -1,8 +1,8 @@
 """Batch-only sklearn baselines; unrelated to live Classifier placeholders.
 
 Every run builds a fresh Pipeline and fits it exclusively on X_fit/y_fit.
-Later learned feature transforms belong in that pipeline before the scaler;
-none is implemented here. No fitted model survives a run.
+Reduction experiments reuse timed pipeline execution. No fitted model survives
+a run; baseline pipeline construction and classifier parameters remain fixed.
 """
 
 from collections.abc import Callable
@@ -70,15 +70,25 @@ class SklearnBaselineRunner:
         self.clock = clock
         self.versions = EvaluationVersions(python_version(), np.__version__, scipy.__version__, sklearn.__version__)
 
-    def run(self, configuration: BaselineModelConfiguration, X_fit: np.ndarray, y_fit: np.ndarray,
-            X_validation: np.ndarray, y_validation: np.ndarray, identity_count: int) -> FoldMeasurements:
+    @staticmethod
+    def validate_inputs(configuration: BaselineModelConfiguration, X_fit: np.ndarray, y_fit: np.ndarray,
+                        X_validation: np.ndarray, y_validation: np.ndarray) -> None:
         if (X_fit.ndim != 2 or X_validation.ndim != 2 or not X_fit.shape[1]
                 or X_fit.shape[1] != X_validation.shape[1] or len(X_fit) != len(y_fit)
                 or len(X_validation) != len(y_validation)):
             raise ValueError("Inconsistent baseline matrix dimensions")
         if configuration.name == "KNN" and len(y_fit) < dict(configuration.classifier_parameters)["n_neighbors"]:
             raise ValueError("KNN baseline requires at least five fit samples")
+
+    def run(self, configuration: BaselineModelConfiguration, X_fit: np.ndarray, y_fit: np.ndarray,
+            X_validation: np.ndarray, y_validation: np.ndarray, identity_count: int) -> FoldMeasurements:
+        self.validate_inputs(configuration, X_fit, y_fit, X_validation, y_validation)
         model = build_baseline_pipeline(configuration)
+        return self.evaluate_pipeline(model, X_fit, y_fit, X_validation, y_validation, identity_count)
+
+    def evaluate_pipeline(self, model: Pipeline, X_fit: np.ndarray, y_fit: np.ndarray,
+                          X_validation: np.ndarray, y_validation: np.ndarray, identity_count: int) -> FoldMeasurements:
+        """Shared fit/predict timer and scoring; caller supplies a fresh pipeline."""
         with threadpool_limits(limits=1):
             start = self.clock()
             model.fit(X_fit, y_fit)

@@ -14,19 +14,23 @@ class BaselineReportError(ValueError):
     pass
 
 
-def validate_baseline_report_target(path: Path, input_roots: tuple[Path, ...]) -> Path:
+def validate_aggregate_report_target(path: Path, input_roots: tuple[Path, ...]) -> Path:
     if Path(path).is_symlink():
-        raise BaselineReportError("Baseline report target must not be a symlink")
+        raise BaselineReportError("Aggregate report target must not be a symlink")
     target = Path(path).resolve()
     if target.is_relative_to(PROJECT_ROOT.resolve()):
-        raise BaselineReportError("Baseline reports must remain outside the Git repository")
+        raise BaselineReportError("Aggregate reports must remain outside the Git repository")
     for root in input_roots:
         source = Path(root).resolve()
         if target.is_relative_to(source) or source.is_relative_to(target):
-            raise BaselineReportError("Baseline report must not overlap its processed or split inputs")
+            raise BaselineReportError("Aggregate report must not overlap its processed or split inputs")
     if target.exists():
-        raise BaselineReportError("Baseline report already exists; choose a new output path")
+        raise BaselineReportError("Aggregate report already exists; choose a new output path")
     return target
+
+
+# Existing baseline CLI/API retain their public name.
+validate_baseline_report_target = validate_aggregate_report_target
 
 
 def baseline_report_to_json(report: BaselineEvaluationReport) -> str:
@@ -45,8 +49,12 @@ def baseline_report_to_json(report: BaselineEvaluationReport) -> str:
 
 
 def write_baseline_report(report: BaselineEvaluationReport, path: Path, input_roots: tuple[Path, ...]) -> None:
-    target = validate_baseline_report_target(path, input_roots)
-    payload = baseline_report_to_json(report)
+    write_aggregate_report_json(baseline_report_to_json(report), path, input_roots)
+
+
+def write_aggregate_report_json(payload: str, path: Path, input_roots: tuple[Path, ...]) -> None:
+    """Shared atomic no-overwrite publication; payload must be aggregate JSON."""
+    target = validate_aggregate_report_target(path, input_roots)
     temporary = None
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -58,7 +66,7 @@ def write_baseline_report(report: BaselineEvaluationReport, path: Path, input_ro
             os.fsync(stream.fileno())
         os.link(temporary, target)  # No-overwrite atomic publication on NTFS/ext4.
     except Exception:
-        raise BaselineReportError("Unable to publish baseline report without overwrite") from None
+        raise BaselineReportError("Unable to publish aggregate report without overwrite") from None
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)

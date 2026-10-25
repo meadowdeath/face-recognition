@@ -348,7 +348,7 @@ Fixed configurations (no tuning):
 - **SVM:** RBF, `C=1.0`, `gamma="scale"`, probability estimation disabled, 128 MB cache, `random_state=42`.
 - **Random Forest:** 100 trees, Gini, unlimited depth, minimum split/leaf sizes 2/1, `max_features="sqrt"`, bootstrap enabled, no class weighting, `random_state=42`, `n_jobs=1`.
 
-Other estimator defaults follow pinned scikit-learn 1.7.2. KNN and SVM use fresh `Pipeline(StandardScaler(copy=True, with_mean=True, with_std=True), classifier)` instances per fold. Scalers fit **only on fit rows**; validation is transformed with those fitted parameters. Random Forest has no scaler. Future trainable feature transforms must be inserted inside that same pipeline before scaling; none is implemented. At least two known identities and five fit samples are required; KNN's fixed neighbor count is never silently reduced.
+Other estimator defaults follow pinned scikit-learn 1.7.2. KNN and SVM use fresh `Pipeline(StandardScaler(copy=True, with_mean=True, with_std=True), classifier)` instances per fold. Scalers fit **only on fit rows**; validation is transformed with those fitted parameters. Random Forest has no scaler in the baseline. At least two known identities and five fit samples are required; KNN's fixed neighbor count is never silently reduced.
 
 Models run sequentially, with native BLAS/OpenMP threads limited to one through scikit-learn's required `threadpoolctl` dependency. Input remains one read-only `float32` matrix with fold views. Scaling necessarily allocates working matrices; SVM may internally convert to double precision. No fitted models, predictions or feature vectors are persisted.
 
@@ -363,10 +363,42 @@ Each classifier/fold reports accuracy, macro precision/recall/F1 (`zero_division
 
 The required JSON report records these aggregates, fixed configurations, session/sample/feature counts, label order, protocol, and library versions. It contains no vectors, coordinates, individual sample predictions or absolute source paths. The report must be new, external to the repository, and outside processed/split inputs; publication is atomic without overwrite. CLI output is aggregate-only; exit codes are 0 success, 1 evaluation/report failure or interruption, and 2 usage error. Keep reports outside Git. No real model results are documented yet.
 
+## Leakage-safe feature reduction evaluation
+
+Retain the complete 1,434-coordinate `all_xyz_v1` baseline as the reference for assessing accuracy and complexity tradeoffs. The reduction experiment reruns matching classifier baselines with exactly the configurations above, then evaluates:
+
+- **ANOVA:** `SelectKBest(f_classif)`, retaining 256, 512, 768 or 1024 individual coordinates. No landmark grouping or correlation pruning is performed.
+- **PCA:** 90%, 95% or 99% explained variance, using full SVD, `copy=True`, and no whitening. The actual component count is reported independently for each fold.
+
+Every selector, scaler and PCA is fitted inside a fresh per-fold pipeline using only fit samples (and fit labels for ANOVA). Validation is only transformed. Fitting reduction globally before creating folds would leak validation information into feature selection or the learned coordinate system. **`known_test` and `unknown_pool` payloads remain untouched.**
+
+| Representation | KNN / SVM | Random Forest |
+|---|---|---|
+| Baseline | StandardScaler → classifier | classifier |
+| ANOVA | SelectKBest → StandardScaler → classifier | SelectKBest → classifier |
+| PCA | StandardScaler → PCA → classifier | StandardScaler → PCA → classifier |
+
+There is no second scaler after PCA. Selected ANOVA indices retain source-coordinate order. PCA components are not individual landmark coordinates. Source dimensions remain generic; an ANOVA count exceeding the source width fails explicitly, rather than being clipped or skipped.
+
+```powershell
+python -m face_recognition.presentation.cli.evaluate_feature_reduction `
+  --processed-root "..\face-recognition-data\data\processed" `
+  --split-manifest "..\face-recognition-data\splits\identity_split_v1.json" `
+  --report "..\face-recognition-data\reports\feature_reduction_v1.json"
+```
+
+The default grid is 24 representation/classifier configurations and 48 fold fits, executed sequentially with the existing single-thread resource policy. Each fit creates and releases its own working pipeline; no transformed-dataset cache is retained. Full SVD is deterministic within numerical tolerance and can make this experiment substantially slower than the baseline. Input stays `float32` where compatible; temporary scaling/SVD/model arrays are unavoidable.
+
+The external, atomic, no-overwrite JSON report includes per-fold metrics, confusion matrices, timings, actual dimensions, optional technical ANOVA indices, aggregate means/population standard deviations, and comparisons to the matching classifier baseline **from this run**. It contains no scores, component vectors, features, landmarks or absolute source paths. Fit/prediction timing includes all preprocessing; latency remains a batch average.
+
+The primary metric is **mean macro F1**, followed by mean accuracy, fewer **mean retained dimensions across folds**, and lower mean prediction latency. Remaining ties use reduction ID and classifier name. Ranking is deterministic for recorded measurements; close timing ties can change order across runs. Metric/latency deltas are candidate minus baseline (positive latency delta means slower); feature reduction is original dimension minus mean retained dimension, with percentage relative to the original width. All per-fold dimensions remain available when PCA counts differ. There are no pass/fail thresholds and **no final model is selected**.
+
+For small synthetic experiments, repeat `--anova-k` and/or `--pca-variance` to explicitly replace that family's defaults (fractions such as `0.95`, not `95`). The full baseline is always included. No classifier tuning, correlation analysis or grouped landmark selection is implemented. No real reduction results are documented yet.
+
 ## Future work
 
 `LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.
 
 `LandmarkFeatureExtractor` flattens already identity-normalized points as `(x0, y0, z0, x1, y1, z1, ...)`, with three finite features per landmark. Capture does not invoke it.
 
-Remaining work: compare reduced representations against the full-XYZ baseline; derive geometric features; perform final holdout evaluation and unknown rejection; validate dataset capture on Pi hardware; benchmark deployment accuracy and throughput. These are not implemented yet.
+Remaining work: interpret reduction experiments; consider correlation/grouped landmark selection and geometric features; perform final holdout evaluation and unknown rejection; validate dataset capture on Pi hardware; benchmark deployment accuracy and throughput. These are not implemented yet.
