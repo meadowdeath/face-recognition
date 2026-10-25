@@ -34,8 +34,8 @@ class RejectionRunner(Protocol):
                    y_validation: np.ndarray, X_unknown: np.ndarray, identity_count: int) -> RejectionScoreResult: ...
 
 
-def two_fold_midpoint(first: float, second: float) -> float:
-    if not all(isfinite(value) and value >= 0 for value in (first, second)):
+def two_fold_midpoint(first: float, second: float, *, allow_negative: bool = False) -> float:
+    if not all(isfinite(value) and (allow_negative or value >= 0) for value in (first, second)):
         raise UnknownRejectionError("Invalid fold thresholds")
     low, high = sorted((first, second))
     return low + (high - low) / 2
@@ -51,9 +51,20 @@ def rank_rejection_candidates(results: tuple[RejectionCandidateResult, ...]) -> 
     return tuple(row.candidate.identifier for row in ordered)
 
 
-def _summary(values, statistic):
+def summarize_metrics(values, statistic):
     model = type(values[0])
     return model(**{name: statistic(getattr(row, name) for row in values) for name in model.__dataclass_fields__})
+
+
+def validate_rejection_data(known: DevelopmentDataset, unknown: UnknownCalibrationData) -> None:
+    DevelopmentDataset(known.X, known.y, known.samples, known.label_to_person, known.training_sessions)
+    UnknownCalibrationData(unknown.X, unknown.samples, unknown.source, unknown.partition)
+    expected_known = {row for row in unknown.source.samples if row.partition is IdentityPartition.KNOWN_TRAIN_POOL}
+    if (set(known.samples) != expected_known or known.label_to_person != unknown.source.specification.known_ids
+            or known.training_sessions != unknown.source.specification.train_sessions
+            or known.X.shape[1] != unknown.X.shape[1] or known.X.shape[1] < max(c.k for c in REJECTION_CANDIDATES)
+            or len(known.label_to_person) < 2):
+        raise UnknownRejectionError("Invalid authorized rejection calibration data")
 
 
 class UnknownRejectionCalibrator:
@@ -63,14 +74,7 @@ class UnknownRejectionCalibrator:
     def evaluate(self, known: DevelopmentDataset, unknown: UnknownCalibrationData) -> UnknownRejectionReport:
         context = "Invalid authorized rejection calibration data"
         try:
-            DevelopmentDataset(known.X, known.y, known.samples, known.label_to_person, known.training_sessions)
-            UnknownCalibrationData(unknown.X, unknown.samples, unknown.source, unknown.partition)
-            expected_known = {row for row in unknown.source.samples if row.partition is IdentityPartition.KNOWN_TRAIN_POOL}
-            if (set(known.samples) != expected_known or known.label_to_person != unknown.source.specification.known_ids
-                    or known.training_sessions != unknown.source.specification.train_sessions
-                    or known.X.shape[1] != unknown.X.shape[1] or known.X.shape[1] < max(c.k for c in REJECTION_CANDIDATES)
-                    or len(known.label_to_person) < 2):
-                raise ValueError
+            validate_rejection_data(known, unknown)
             folds = create_session_folds(known)
             results = []
             for candidate in REJECTION_CANDIDATES:
@@ -92,11 +96,11 @@ class UnknownRejectionCalibrator:
                 ) for fold, scores, calibration in zip(folds, scored, calibrations))
                 results.append(RejectionCandidateResult(
                     candidate, self.runner.configuration_for(candidate), rows,
-                    _summary([row.calibration.metrics for row in rows], fmean),
-                    _summary([row.calibration.metrics for row in rows], pstdev),
-                    _summary([row.at_development_threshold for row in rows], fmean),
-                    _summary([row.closed_set_metrics for row in rows], fmean),
-                    _summary([row.closed_set_metrics for row in rows], pstdev),
+                    summarize_metrics([row.calibration.metrics for row in rows], fmean),
+                    summarize_metrics([row.calibration.metrics for row in rows], pstdev),
+                    summarize_metrics([row.at_development_threshold for row in rows], fmean),
+                    summarize_metrics([row.closed_set_metrics for row in rows], fmean),
+                    summarize_metrics([row.closed_set_metrics for row in rows], pstdev),
                     midpoint, midpoint, abs(calibrations[0].threshold - calibrations[1].threshold), midpoint,
                 ))
                 # Keep only aggregate results. Reuse the source matrices for the

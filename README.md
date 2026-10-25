@@ -465,6 +465,41 @@ The external aggregate JSON report contains split metadata, both candidates, thr
 
 **These are calibration-set development diagnostics, not independent evaluation results.** The SVM's absolute margin distribution may shift when refitted using more known training data. A later holdout stage must measure whether this median threshold transfers adequately. No final production model is selected or persisted, and the reserved holdouts have not been evaluated.
 
+## Comparing UNKNOWN rejection scores
+
+The first margin-only experiment had FAR about **0.357 / 0.403** and FRR about **0.356 / 0.334** for ANOVA-512 / ANOVA-448, despite closed-set macro F1 around **0.817** for both. Stable fold thresholds did not imply adequate known/unknown separation. Closed-set classification chooses a known label; open-set rejection must additionally recognize when none of those identities is appropriate.
+
+This controlled comparison leaves the two **C=4, gamma=0.001, RBF, probability=False** identity classifiers unchanged. There are exactly four confidence definitions, all oriented so **larger means more likely KNOWN**:
+
+| Score family | Definition |
+|---|---|
+| `svm_margin` | Highest minus second-highest OVR decision score; retained as the reference |
+| `svm_top1` | Maximum OVR decision score |
+| `centroid_distance` | Negative Euclidean distance to the **SVM-predicted class** centroid in ANOVA-selected/scaled space |
+| `normalized_centroid_distance` | Negative predicted-class centroid distance divided by that class's median fit distance |
+
+Centroids are means of **known fold-fit samples only**, grouped by true fit labels. Class distance scales are medians of those same samples' distances to their own centroid, floored at a fixed **1e-8** in selected/scaled Euclidean units. Validation and unknown calibration data never affect centroids, scales, ANOVA, StandardScaler or SVM fitting. One fitted classifier per candidate/fold is shared by all four scores: **four identity-model fits total**, sequentially, with no transformed-dataset cache. Existing SVM identity predictions, class order and binary `[-d,d]` score convention are preserved.
+
+```powershell
+python -m face_recognition.presentation.cli.evaluate_rejection_scores `
+  --processed-root "..\face-recognition-data\data\processed" `
+  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
+  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
+  --report "..\face-recognition-data\reports\unknown_rejection_scores_v1.json"
+```
+
+This command uses only known development folds and the existing explicit `unknown_calibration` identities. **`known_test` and `unknown_holdout` biometric payloads remain untouched**, with separate protection flags in the report and guarded-file tests. It does not create a new unknown split, change identity roles, tune classifiers or reopen the 60-candidate grid.
+
+Threshold-independent diagnostics include **ROC AUC with KNOWN positive**, calculated from continuous scores (probability a known score outranks an unknown score, counting ties by half), and discrete **EER**. EER uses the finite observed-score/midpoint/boundary operating point with FAR and FRR closest; ties prefer lower FAR, lower FRR, then higher threshold. Reported EER is `(FAR+FRR)/2` there, with no interpolation. The original balanced-accuracy threshold search and its FAR/FRR/higher-threshold tie rules remain unchanged; signed thresholds are enabled for negative-distance scores.
+
+Diagnostic operating points target **FAR <=20%, <=10%, <=5%**. Under each cap, choose maximum known acceptance, then lower FAR, then higher threshold. **FAR** is the fraction of unknown samples accepted; **FRR** is the fraction of known samples rejected. Points accepting **at most 1% of known samples** are explicitly flagged `impractical` (the documented meaning of "effectively all rejected"), while retaining their thresholds and measured rates. This flag and the FAR caps are diagnostic conventions, **not application requirements**. A point with no finite feasible threshold is reported unavailable.
+
+Per fold, report AUC, EER and its threshold, the balanced-accuracy calibration point, FAR-constrained points, and separate known/unknown score-distribution count, mean, population std, median, and linearly interpolated 10th/25th/75th/90th percentiles. Reports aggregate both folds, retain AUC/FAR/FRR/open-accuracy gaps, and include pooled score summaries. Pooled unknown counts are **score observations from two fitted models**, not additional independent subjects. Binary acceptance metrics remain separate from accepted-correct known identification, accepted-known misidentification, and exact open-set accuracy. Median-threshold diagnostics are also retained separately from fold-optimal metrics.
+
+Rank the eight model/score combinations by higher mean AUC, lower mean EER, lower FAR at the balanced-accuracy threshold, higher correct-identification rate, higher exact open-set accuracy, smaller absolute threshold gap, then fewer ANOVA features. Final ties use score-family name. Threshold gaps are in each score's own units. Deltas compare each score with the **same classifier's margin reference from these identical fits**. The first-ranked result is only the **best rejection-score development candidate**.
+
+The external aggregate JSON report uses atomic no-overwrite publication and contains no per-sample scores, feature/support vectors, centroid vectors, class scale vectors or absolute source paths. The CLI prints aggregate diagnostics only. Calibration-set metrics are not independent holdout estimates; any threshold transfer after refitting still requires later holdout evaluation. No real score-comparison results are documented yet, and no final recognizer is selected or persisted.
+
 ## Future work
 
 `LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.
