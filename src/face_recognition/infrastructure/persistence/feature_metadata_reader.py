@@ -1,11 +1,12 @@
-"""Read feature metadata without constructing feature vectors or numeric arrays.
+"""Shared selective feature-record parser and metadata-only dataset reader.
 
 JSONL embeds metadata and values on the same line. Each feature scalar is
-validated and discarded immediately; only its count is retained. Whole-vector
-JSON decoding, FaceFeatures construction, normalization and fitting are absent.
+validated and discarded immediately by metadata-only callers. The development
+loader can supply a scalar sink to fill its matrix. Whole-vector JSON decoding,
+FaceFeatures construction, normalization and fitting are absent.
 """
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 import json
 from math import isfinite
 from pathlib import Path
@@ -27,6 +28,15 @@ class FeatureMetadataReadError(ProcessedDatasetReadError):
 
 def feature_metadata_from_json(line: str) -> FeatureSampleMetadata:
     """Selective object parsing; feature values never enter the returned model."""
+    return scan_feature_record(line)
+
+
+def scan_feature_record(line: str, feature_consumer: Callable[[int, float], None] | None = None) -> FeatureSampleMetadata:
+    """Single decoding implementation; an optional sink is used only by development loading.
+
+    Metadata-only callers retain the original behavior. A development sink can
+    fill a preallocated row, avoiding an intermediate Python feature list.
+    """
     def space(index: int) -> int:
         while index < len(line) and line[index] in " \t\r\n":
             index += 1
@@ -63,6 +73,8 @@ def feature_metadata_from_json(line: str) -> FeatureSampleMetadata:
                         if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
                             raise ValueError
                         count += 1
+                        if feature_consumer is not None:
+                            feature_consumer(count - 1, value)
                         del value
                         index = space(index)
                         if index < len(line) and line[index] == "]":

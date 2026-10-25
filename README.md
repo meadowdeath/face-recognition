@@ -310,7 +310,33 @@ The metadata reader shares processed manifest/path/catalog validation with the n
 
 The versioned split JSON records explicit roles, session assignments, partition definitions, counts, leakage constraints, and ordered sample references (`person_id`, `session_id`, `condition`, `sample_index`, `partition`, and a path relative to the processed root). Ordering is lexical person/session order, then capture-protocol condition order and sample index. It contains no features, coordinates, real-name mapping, or personal absolute paths. Keep this artifact outside Git; the writer refuses repository-local and processed-tree destinations. Publication is atomic without overwriting an existing file. Successful CLI output is aggregate only; exit codes are 0 success, 1 validation/write failure, and 2 usage error.
 
-No training, fold generation, feature selection, learned preprocessing, rejection thresholds, or model evaluation is performed. Later consumers must honor the recorded partitions; these logical rules are not filesystem access controls.
+The split command performs no training, fold generation, feature selection, learned preprocessing, rejection thresholds, or model evaluation. Later consumers must honor the recorded partitions; these logical rules are not filesystem access controls.
+
+## Session-aware development folds
+
+Only `known_train_pool` supplies development features. For the current protocol:
+
+```text
+known_train_pool
+├── session_01 → Fold A fit,        Fold B validation
+└── session_02 → Fold A validation, Fold B fit
+```
+
+Session names come from the split, not hardcoded training logic. No random sample/frame split is performed. Every known identity must have all configured training sessions; each fold covers the whole development pool with disjoint fit/validation sessions and sample keys. **Feature selection, PCA, scaling and classifiers must be fitted only on the fit side of each fold.** Validation may only be transformed with parameters learned from fit. `known_test` remains the final holdout; `unknown_pool` remains reserved for later rejection work. Neither supplies development features.
+
+The read-only loader validates the stored split and processed file catalog, then opens **only training-pool JSONL files**. Protected partitions are checked as metadata only; their payloads are not opened or revalidated. Training sample keys and counts must match the split; inference dimensions and finite feature values are also validated. No files are written.
+
+`DevelopmentDatasetLoader(processed_root).load(read_identity_split(split_path))` returns a single read-only `float32` feature matrix, `int32` labels, a sorted `label_to_person` mapping and ordered sample metadata. Source precision on disk is unchanged. Rows are session-first; `create_session_folds(data)` returns immutable Fold A/B objects whose `fit.X`, `fit.y`, `validation.X` and `validation.y` share that matrix through read-only slices. Reprs omit biometric values. For other training-session counts, supply explicit `SessionFoldSpec` objects through the application API; noncontiguous row selections gather arrays on demand. Read-only array flags guard normal API use, not deliberate memory modification.
+
+Inspect aggregate counts without fitting any model:
+
+```powershell
+python -m face_recognition.presentation.cli.inspect_training_folds `
+  --processed-root "..\face-recognition-data\data\processed" `
+  --split-manifest "..\face-recognition-data\splits\identity_split_v1.json"
+```
+
+This diagnostics command requires exactly two training sessions for automatic opposite folds. It prints fit/validation identity and sample counts only; exit codes are 0 success, 1 input/loading/fold failure, and 2 usage error. No feature selection, learned preprocessing, classifier fitting or evaluation is implemented.
 
 ## Future work
 

@@ -7,11 +7,62 @@ from pathlib import Path
 import tempfile
 
 from face_recognition.config.settings import PROJECT_ROOT
-from face_recognition.domain.models.identity_split import IdentitySplitManifest
+from face_recognition.application.validate_identity_split import validate_identity_split
+from face_recognition.domain.models.identity_split import (
+    IdentityPartition, IdentitySplitManifest, IdentitySplitSpec, PartitionCounts, SessionPartition, SplitSampleReference,
+)
+from face_recognition.infrastructure.persistence.processed_dataset_catalog import reject_json_constant
 
 
 class IdentitySplitPersistenceError(ValueError):
     pass
+
+
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate split JSON keys")
+        result[key] = value
+    return result
+
+
+def _fields(data, model):
+    if not isinstance(data, dict) or set(data) != set(model.__dataclass_fields__):
+        raise ValueError("Invalid split schema fields")
+    return data
+
+
+def read_identity_split(path: Path) -> IdentitySplitManifest:
+    """Load and strictly validate metadata only; never consult feature files."""
+    try:
+        with Path(path).open("r", encoding="utf-8") as stream:
+            data = json.load(stream, parse_constant=reject_json_constant, object_pairs_hook=_unique_object)
+        _fields(data, IdentitySplitManifest)
+        spec_data = _fields(data["specification"], IdentitySplitSpec)
+        if any(not isinstance(value, list) for value in spec_data.values()):
+            raise ValueError
+        spec = IdentitySplitSpec(**{name: tuple(value) for name, value in spec_data.items()})
+        if any(tuple(spec_data[name]) != getattr(spec, name) for name in spec_data):
+            raise ValueError("Noncanonical split specification")
+        assignments = tuple(SessionPartition(**{**_fields(row, SessionPartition),
+                                                 "partition": IdentityPartition(row["partition"])})
+                            for row in data["session_assignments"])
+        counts = tuple(PartitionCounts(**{**_fields(row, PartitionCounts),
+                                          "partition": IdentityPartition(row["partition"])})
+                       for row in data["partition_counts"])
+        samples = tuple(SplitSampleReference(**{**_fields(row, SplitSampleReference),
+                                                "partition": IdentityPartition(row["partition"])})
+                        for row in data["samples"])
+        values = {**data, "specification": spec, "session_assignments": assignments,
+                  "partition_counts": counts, "samples": samples,
+                  "partition_definitions": tuple(data["partition_definitions"]),
+                  "leakage_constraints": tuple(data["leakage_constraints"])}
+        manifest = IdentitySplitManifest(**values)
+        validate_identity_split(manifest)
+        return manifest
+    except Exception:
+        raise IdentitySplitPersistenceError(f"Invalid or unreadable identity split manifest: {Path(path)}") from None
 
 
 def write_identity_split(manifest: IdentitySplitManifest, output: Path, processed_root: Path) -> None:
