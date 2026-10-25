@@ -12,7 +12,7 @@ import numpy as np
 from face_recognition.application.training_folds import DevelopmentDataset
 from face_recognition.application.validate_identity_split import validate_identity_split
 from face_recognition.domain.models.dataset import CONDITIONS
-from face_recognition.domain.models.identity_split import IdentityPartition, IdentitySplitManifest
+from face_recognition.domain.models.identity_split import IdentityPartition, IdentitySplitManifest, SplitSampleReference
 from face_recognition.domain.models.processed_sample import BASELINE_REPRESENTATION
 from face_recognition.infrastructure.persistence.feature_metadata_reader import feature_metadata_from_json, scan_feature_record
 from face_recognition.infrastructure.persistence.processed_dataset_catalog import ProcessedDatasetCatalog, ProcessedDatasetReadError
@@ -39,19 +39,27 @@ class DevelopmentDatasetLoader(ProcessedDatasetCatalog):
         if partition is not IdentityPartition.KNOWN_TRAIN_POOL:
             raise DevelopmentDatasetReadError("Only known_train_pool may be requested for development")
         validate_identity_split(manifest)
-        expected_catalog = {(row.person_id, row.session_id, row.condition) for row in manifest.samples}
-        if (set(self.discover_conditions()) != expected_catalog
-                or self.expected_sample_count != manifest.total_sample_count):
-            raise DevelopmentDatasetReadError("Processed catalog/counts do not match the identity split")
+        self._validate_catalog(manifest)
         references = tuple(sorted(
             (row for row in manifest.samples if row.partition is IdentityPartition.KNOWN_TRAIN_POOL),
             key=lambda row: (row.session_id, row.person_id, CONDITIONS.index(row.condition), row.sample_index),
         ))
-        if not references:
-            raise DevelopmentDatasetReadError("Identity split contains no known training samples")
+        X = self._read_references(references)
         labels = {person: index for index, person in enumerate(manifest.specification.known_ids)}
+        y = np.fromiter((labels[row.person_id] for row in references), dtype=np.int32, count=len(references))
+        return DevelopmentDataset(X, y, references, manifest.specification.known_ids, manifest.specification.train_sessions)
+
+    def _validate_catalog(self, manifest: IdentitySplitManifest) -> None:
+        expected_catalog = {(row.person_id, row.session_id, row.condition) for row in manifest.samples}
+        if (set(self.discover_conditions()) != expected_catalog
+                or self.expected_sample_count != manifest.total_sample_count):
+            raise DevelopmentDatasetReadError("Processed catalog/counts do not match the identity split")
+
+    def _read_references(self, references: tuple[SplitSampleReference, ...], context: str = "development") -> np.ndarray:
+        """Internal reader: callers must authorize every reference before entry."""
+        if not references:
+            raise DevelopmentDatasetReadError("No authorized samples are available")
         X = None
-        y = np.empty(len(references), dtype=np.int32)
         dimensions = {}
         offset = 0
         limit = np.finfo(np.float32).max
@@ -90,14 +98,13 @@ class DevelopmentDatasetLoader(ProcessedDatasetCatalog):
                         if dimensions.setdefault(key[:2], size) != size:
                             raise ValueError
                         previous_timestamp = provenance.detector_timestamp_ms
-                        y[row_index] = labels[reference.person_id]
                     if previous_timestamp is None or index + 1 != len(expected):
                         raise ValueError
             except Exception:
                 raise DevelopmentDatasetReadError(
-                    f"Invalid or missing development sample: {key[0]}/{key[1]}/{key[2]} sample {index}"
+                    f"Invalid or missing {context} sample: {key[0]}/{key[1]}/{key[2]} sample {index}"
                 ) from None
             offset += len(expected)
         if self._read_manifest() != self._manifest:
             raise DevelopmentDatasetReadError("Processing manifest changed during development loading")
-        return DevelopmentDataset(X, y, references, manifest.specification.known_ids, manifest.specification.train_sessions)
+        return X

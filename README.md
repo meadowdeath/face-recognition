@@ -425,10 +425,50 @@ The external aggregate JSON report contains all 60 candidates, both folds' metri
 
 Comparisons use the **full-feature SVM freshly evaluated in this run** and the exact **k=512/C=1/gamma="scale"** grid row. No historical score or timing is hardcoded into the evaluator. Metric/latency deltas are candidate minus reference; feature reduction is reference dimension minus k (negative means more features), with percentage relative to that reference dimension. No real tuning results are documented yet.
 
+## Development UNKNOWN rejection calibration
+
+The surviving configurations are **ANOVA-512 / RBF SVM C=4, gamma=0.001** and **ANOVA-448 / RBF SVM C=4, gamma=0.001**, both with `probability=False`. This stage compares their ability to reject unseen identities; it does not reopen tuning or train a final recognizer.
+
+Unknown identities must be separated **by whole identity**, with all their sessions inheriting one role. Reusing calibration identities for final unknown evaluation would expose the threshold-selection procedure to the same people used to assess it. Assign roles explicitly **before inspecting rejection performance**. No role is inferred from session counts.
+
+`create_unknown_rejection_split` accepts `--identity-split`, a new external `--output`, and repeatable `--calibration-id` / `--holdout-id` arguments. Both lists are required, disjoint, and together must cover the source `unknown_pool` exactly. The logical manifest contains counts and pseudonymous IDs, not copied features. A canonical metadata-only identity-split digest binds it to its source; no absolute paths or feature-data fingerprints are stored. Existing files are never overwritten.
+
+Verify an existing unknown split and print counts **without opening any feature files**:
+
+```powershell
+python -m face_recognition.presentation.cli.create_unknown_rejection_split `
+  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
+  --verify "..\face-recognition-data\splits\unknown_rejection_split_v1.json"
+```
+
+Only the new calibration loader may open `unknown_calibration`; earlier development commands continue to protect the entire unknown pool. **`known_test` and `unknown_holdout` feature payloads remain untouched**. Source file catalogs and split metadata may be checked without reading protected payloads.
+
+```powershell
+python -m face_recognition.presentation.cli.calibrate_unknown_rejection `
+  --processed-root "..\face-recognition-data\data\processed" `
+  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
+  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
+  --report "..\face-recognition-data\reports\unknown_rejection_calibration_v1.json"
+```
+
+Each candidate performs two sequential, independent **known-fit-only** ANOVA → scaler → SVM fits. That fold's known out-of-session validation samples and the authorized unknown calibration samples are then scored by the fitted pipeline. Unknowns never reach any fitting step. Their feature matrix is reused read-only; no fitted models, decision vectors or per-sample confidences are persisted.
+
+The single confidence definition is **highest minus second-highest SVM OVR decision score**, in deterministic class order. These are margins, not probabilities. Existing SVM `predict` behavior supplies identity predictions, including its existing vote-tie behavior; no classifier parameters are changed. For binary SVC only, the signed decision value `d` is represented as class scores `[-d, d]`, giving the same top-two margin rule. Nonfinite scores and fewer than two class columns are rejected.
+
+Accept the predicted known identity when `margin >= threshold`; otherwise reject as `UNKNOWN`. Each fold searches sorted unique observed margins, valid interior midpoints, zero (accept all), and the next representable finite value above the maximum (reject all). It maximizes **binary balanced accuracy**, then prefers lower unknown **FAR** (fraction of unknown samples accepted), lower known **FRR** (fraction of known samples rejected), and higher threshold. Integer count comparisons avoid rounding-based false ties. Binary macro F1 is also reported; binary acceptance does not imply the identity was correct.
+
+Open-set diagnostics explicitly distinguish accepted-correct known samples, accepted-misidentified known samples, rejected known samples, rejected unknowns, and falsely accepted unknowns. Exact open-set accuracy counts only accepted-correct known samples plus rejected unknowns. Reports retain closed-set macro metrics as a separate reference.
+
+For each candidate, the **development rejection threshold** is the median of the two fold thresholds: after sorting `a <= b`, use `a + (b-a)/2`. The report includes their mean, median and absolute difference. Candidate ranking uses unweighted means at the fold-specific optimum thresholds: higher exact open-set accuracy, lower unknown FAR, higher known correct-identification rate, higher binary balanced accuracy, smaller threshold difference, then fewer features. Metrics at the transferred midpoint are stored separately for transparency. The same unknown calibration identities are scored in both folds; this is not additional independent data.
+
+The external aggregate JSON report contains split metadata, both candidates, thresholds, rates, means/population standard deviations, threshold stability, ranking, and the **selected open-set development candidate**. It includes no feature values, per-sample confidence/decision vectors or absolute paths, and uses atomic no-overwrite publication outside repository/input trees. CLI output is aggregate-only; exit codes are 0 success, 1 failure/interruption and 2 usage error. No real UNKNOWN calibration results are documented yet.
+
+**These are calibration-set development diagnostics, not independent evaluation results.** The SVM's absolute margin distribution may shift when refitted using more known training data. A later holdout stage must measure whether this median threshold transfers adequately. No final production model is selected or persisted, and the reserved holdouts have not been evaluated.
+
 ## Future work
 
 `LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.
 
 `LandmarkFeatureExtractor` flattens already identity-normalized points as `(x0, y0, z0, x1, y1, z1, ...)`, with three finite features per landmark. Capture does not invoke it.
 
-Remaining work: interpret reduction experiments; consider correlation/grouped landmark selection and geometric features; perform final holdout evaluation and unknown rejection; validate dataset capture on Pi hardware; benchmark deployment accuracy and throughput. These are not implemented yet.
+Remaining work: evaluate rejection-threshold transfer and reserved holdouts; consider correlation/grouped landmark selection and geometric features; validate dataset capture on Pi hardware; benchmark deployment accuracy and throughput. These are not implemented yet.
