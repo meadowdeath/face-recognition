@@ -279,6 +279,39 @@ The targeted aggregate contains near/far, translations, and roll. Yaw/pitch are 
 
 Add `--report "..\face-recognition-data\reports\normalization_quality_v1.json"` to write an aggregate-only JSON report. The report has no coordinates, feature vectors, per-person measurements, identity mappings, or absolute input paths. Its target must be new and outside both input trees; publication is atomic without overwrite. Relative and absolute input/report paths are accepted. Exit codes are 0 success, 1 evaluation/report failure, and 2 usage error. Nothing is written unless `--report` is supplied.
 
+## Session-based identity split
+
+Create a **logical split of `all_xyz_v1` references**, not copied feature files. Randomly splitting adjacent samples would let the same session's lighting, pose, and capture conditions appear in both training and testing. Whole sessions therefore stay in one partition, keyed by `(person_id, session_id)`:
+
+- `known_train_pool`: explicitly selected sessions of known identities. This is the only pool allowed for fitting feature selection, correlation filtering, PCA, StandardScaler, or classifiers. Future session-aware validation/model selection must stay inside this pool.
+- `known_test`: explicitly held-out sessions of known identities. Never use them to fit preprocessing, select features, tune hyperparameters, or choose a classifier; reserve them for final known-identity evaluation.
+- `unknown_pool`: **all sessions** of explicitly unknown identities. Keep it untouched by all training/model-selection operations. It is reserved for a later rejection stage and is **not yet a final test set**; this command does not subdivide it.
+
+Roles are never inferred from session counts. Repeat `--known-id` / `--unknown-id` for every dataset identity, and repeat `--train-session` / `--known-test-session` for the global known-session policy. Every identity must be assigned exactly one role. Every known identity must have exactly the requested train/test sessions: missing or extra known sessions fail rather than silently disappearing. Unknown identities may have any number/names of sessions. There are no fixed identity/session/sample counts and no intentionally excluded identities in this version.
+
+For the current session policy, this PowerShell command prompts for your actual pseudonymous ID lists without assuming their membership:
+
+```powershell
+$knownIds = @((Read-Host "Known IDs, comma-separated").Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+$unknownIds = @((Read-Host "Unknown IDs, comma-separated").Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+$splitArgs = @(
+  "--processed-root", "..\face-recognition-data\data\processed",
+  "--output", "..\face-recognition-data\splits\identity_split_v1.json",
+  "--train-session", "session_01",
+  "--train-session", "session_02",
+  "--known-test-session", "session_03"
+)
+foreach ($identityId in $knownIds) { $splitArgs += @("--known-id", $identityId) }
+foreach ($identityId in $unknownIds) { $splitArgs += @("--unknown-id", $identityId) }
+python -m face_recognition.presentation.cli.create_identity_split @splitArgs
+```
+
+The metadata reader shares processed manifest/path/catalog validation with the normalized reader. It scans inline feature scalars only to validate JSON, finiteness, and dimensions, discarding each value immediately; it never constructs feature vectors or invokes any ML fitting. Source files remain unchanged. Feature dimensions must be consistent across the representation, and inference dimensions consistent within each session. Final sample counts must match the completed representation manifest.
+
+The versioned split JSON records explicit roles, session assignments, partition definitions, counts, leakage constraints, and ordered sample references (`person_id`, `session_id`, `condition`, `sample_index`, `partition`, and a path relative to the processed root). Ordering is lexical person/session order, then capture-protocol condition order and sample index. It contains no features, coordinates, real-name mapping, or personal absolute paths. Keep this artifact outside Git; the writer refuses repository-local and processed-tree destinations. Publication is atomic without overwriting an existing file. Successful CLI output is aggregate only; exit codes are 0 success, 1 validation/write failure, and 2 usage error.
+
+No training, fold generation, feature selection, learned preprocessing, rejection thresholds, or model evaluation is performed. Later consumers must honor the recorded partitions; these logical rules are not filesystem access controls.
+
 ## Future work
 
 `LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.
