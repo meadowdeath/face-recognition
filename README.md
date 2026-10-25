@@ -259,6 +259,26 @@ Successful output contains aggregate participant/session/file/sample counts, rep
 
 Raw sources remain unchanged. Normalized landmarks and flattened features are still **biometric-derived artifacts and must not be committed to Git**. Repository-local raw/processed/model directories remain ignored, and the processing repository also refuses repository-local output paths.
 
+## Offline normalization quality evaluation
+
+Evaluate the existing raw and `normalized_landmarks_v1` representations without changing either input. `all_xyz_v1` is not required. From the repository root in PowerShell:
+
+```powershell
+python -m face_recognition.presentation.cli.evaluate_normalization `
+  --raw-root "..\face-recognition-data\data\raw" `
+  --processed-root "..\face-recognition-data\data\processed"
+```
+
+For each person/session separately, the evaluator builds a mean corrected-raw center template and a mean stored-normalized center template from all available center samples. Each condition's samples are compared only with that session's templates using the existing 3D per-landmark RMSE. Stored normalized data is **not normalized again**. Full provenance, dimensions, indices, counts and file catalogs must match; invalid input fails explicitly. Center statistics describe deviations from the same samples' mean (an in-sample baseline, not an independent centered test).
+
+Raw geometry uses `(x, y * image_height / image_width, z)` only. Native raw RMSE has image-width units, while normalized RMSE has interocular units, so subtracting their native magnitudes would be misleading. The evaluator additionally computes **comparable raw RMSE = native raw RMSE / center-template interocular distance**, using the production normalizer's eye references. This is a fixed reference-unit conversion per session: non-center raw samples receive no eye centering, roll correction, or per-sample scale normalization.
+
+Per-condition output includes native raw mean/std, comparable raw mean, normalized mean/std, sample pairs, signed absolute reduction, and percentage reduction. Reduction is `mean(comparable raw RMSE) - mean(normalized RMSE)`; percentage is `100 * reduction / mean(comparable raw RMSE)`, or `n/a` when its denominator is zero or the result is nonfinite. JSON also retains medians, extrema and comparable-raw std. Standard deviations are population statistics. Aggregates pool sample errors, so sessions with more samples contribute proportionally; face coordinates are never averaged across sessions or identities.
+
+The targeted aggregate contains near/far, translations, and roll. Yaw/pitch are reported separately and have no guaranteed invariance. Negative reductions are preserved. There are **no pass/fail or recognition thresholds**.
+
+Add `--report "..\face-recognition-data\reports\normalization_quality_v1.json"` to write an aggregate-only JSON report. The report has no coordinates, feature vectors, per-person measurements, identity mappings, or absolute input paths. Its target must be new and outside both input trees; publication is atomic without overwrite. Relative and absolute input/report paths are accepted. Exit codes are 0 success, 1 evaluation/report failure, and 2 usage error. Nothing is written unless `--report` is supplied.
+
 ## Future work
 
 `LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.
