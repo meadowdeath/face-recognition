@@ -361,7 +361,7 @@ python -m face_recognition.presentation.cli.evaluate_baseline_models `
 
 Each classifier/fold reports accuracy, macro precision/recall/F1 (`zero_division=0`), and a confusion matrix with sorted pseudonymous labels (rows true, columns predicted). Summaries use **unweighted fold means and population standard deviations**; matrices stay per fold. `perf_counter` measures fit (scaler plus model) and batch prediction (including validation transformation), excluding metric computation. Mean prediction latency is batch prediction time divided by validation sample count; it is not standalone streaming latency. Timings are descriptive.
 
-The required JSON report records these aggregates, fixed configurations, session/sample/feature counts, label order, protocol, and library versions. It contains no vectors, coordinates, individual sample predictions or absolute source paths. The report must be new, external to the repository, and outside processed/split inputs; publication is atomic without overwrite. CLI output is aggregate-only; exit codes are 0 success, 1 evaluation/report failure or interruption, and 2 usage error. Keep reports outside Git. No real model results are documented yet.
+The required JSON report records these aggregates, fixed configurations, session/sample/feature counts, label order, protocol, and library versions. It contains no vectors, coordinates, individual sample predictions or absolute source paths. The report must be new, external to the repository, and outside processed/split inputs; publication is atomic without overwrite. CLI output is aggregate-only; exit codes are 0 success, 1 evaluation/report failure or interruption, and 2 usage error. Keep reports outside Git.
 
 ## Leakage-safe feature reduction evaluation
 
@@ -393,7 +393,37 @@ The external, atomic, no-overwrite JSON report includes per-fold metrics, confus
 
 The primary metric is **mean macro F1**, followed by mean accuracy, fewer **mean retained dimensions across folds**, and lower mean prediction latency. Remaining ties use reduction ID and classifier name. Ranking is deterministic for recorded measurements; close timing ties can change order across runs. Metric/latency deltas are candidate minus baseline (positive latency delta means slower); feature reduction is original dimension minus mean retained dimension, with percentage relative to the original width. All per-fold dimensions remain available when PCA counts differ. There are no pass/fail thresholds and **no final model is selected**.
 
-For small synthetic experiments, repeat `--anova-k` and/or `--pca-variance` to explicitly replace that family's defaults (fractions such as `0.95`, not `95`). The full baseline is always included. No classifier tuning, correlation analysis or grouped landmark selection is implemented. No real reduction results are documented yet.
+For small synthetic experiments, repeat `--anova-k` and/or `--pca-variance` to explicitly replace that family's defaults (fractions such as `0.95`, not `95`). The full baseline is always included. This reduction command performs no classifier tuning, correlation analysis or grouped landmark selection.
+
+## Focused ANOVA + SVM development tuning
+
+The preceding development experiment identified **ANOVA-512 + RBF SVM** as the strongest tested configuration: mean accuracy **0.810385**, mean macro F1 **0.801956**, with fold F1 values **0.849215 / 0.754697**. The full-feature SVM reference had accuracy **0.773269** and macro F1 **0.770397**. These session-aware development observations motivate a focused search; they do not establish a final model. PCA is excluded from this stage.
+
+The tuning command evaluates exactly **60 configurations**, with no grid overrides:
+
+- ANOVA `k`: **384, 448, 512, 640, 768**.
+- SVM `C`: **0.5, 1.0, 2.0, 4.0**.
+- SVM `gamma`: **"scale", 0.001, 0.01**.
+- RBF kernel only, `probability=False`; all other SVM/scaler settings are inherited from the existing baseline.
+
+Each configuration uses both existing opposite-session folds inside `known_train_pool`. A fresh **SelectKBest(f_classif) → StandardScaler → SVM** pipeline fits exclusively on that fold's fit rows/labels. Validation is transformed and predicted only. **`known_test` and `unknown_pool` feature payloads remain untouched**. There is no random frame/sample split, probability calibration, final all-development-data fit, or model persistence.
+
+```powershell
+python -m face_recognition.presentation.cli.tune_anova_svm `
+  --processed-root "..\face-recognition-data\data\processed" `
+  --split-manifest "..\face-recognition-data\splits\identity_split_v1.json" `
+  --report "..\face-recognition-data\reports\anova_svm_tuning_v1.json"
+```
+
+The search runs **120 fold fits sequentially**, plus **two full-feature SVM reference fits**. It reuses the float32 source matrix, single-native-thread limit, timers, metrics and population-standard-deviation aggregation. Working models/matrices are released between runs. The fixed grid requires at least 768 source features and at least two known identities; invalid input fails before fitting.
+
+Rank by mean macro F1 first, then higher worst-fold macro F1, smaller absolute fold F1 gap, higher mean accuracy, fewer features, and lower mean batch prediction latency. Final ties use C and configured gamma order. Timings are descriptive, so timing ties can reorder across runs. The winning row is called a **selected development candidate**; unknown-rejection and final holdout stages are still outstanding.
+
+For each k, report shared selected indices across the two folds, overlap `100 * shared / k`, and Jaccard `shared / union`. Selections must remain identical for a given k/fold across C/gamma; otherwise the run fails. Default CLI output shows aggregate overlap and the top ten candidates, not indices or confusion matrices. SVM diagnostics record total/per-class support-vector **counts**, aligned with the deterministic pseudonymous label order; support-vector values are never serialized.
+
+The external aggregate JSON report contains all 60 candidates, both folds' metrics/confusion matrices/timings/counts, overlap diagnostics and technical indices, ranking, selected development candidate, search space and library versions. It refuses existing destinations and repository/input-tree locations, using the shared atomic report writer. No feature/support-vector values or absolute source paths are stored. Exit codes are 0 success, 1 failure/interruption, and 2 usage error.
+
+Comparisons use the **full-feature SVM freshly evaluated in this run** and the exact **k=512/C=1/gamma="scale"** grid row. No historical score or timing is hardcoded into the evaluator. Metric/latency deltas are candidate minus reference; feature reduction is reference dimension minus k (negative means more features), with percentage relative to that reference dimension. No real tuning results are documented yet.
 
 ## Future work
 
