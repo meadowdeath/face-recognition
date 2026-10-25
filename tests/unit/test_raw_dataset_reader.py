@@ -142,6 +142,19 @@ class RawDatasetReaderTests(unittest.TestCase):
         self.assertNotIn(secret, str(caught.exception))
         self.assertTrue(caught.exception.__suppress_context__)
 
+    def test_decoding_error_exposes_expected_file_index_without_source_values(self) -> None:
+        directory, _ = self.write_session()
+        path = directory / "center.jsonl"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        marker = "SYNTHETIC_INVALID_SAMPLE_NOT_FOR_LOGGING"
+        lines[1] = marker
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        with self.assertRaises(RawDatasetReadError) as caught:
+            list(self.reader.iter_samples())
+        self.assertEqual(caught.exception.sample_index, 1)
+        self.assertIn("sample_index=1", str(caught.exception))
+        self.assertNotIn(marker, str(caught.exception))
+
     def test_malformed_or_nonobject_manifest_is_rejected(self) -> None:
         directory, _ = self.write_session()
         for content in ("not JSON", "[]", "null", '{"unknown":NaN}'):

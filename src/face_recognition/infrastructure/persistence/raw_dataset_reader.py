@@ -16,12 +16,17 @@ from face_recognition.domain.models.dataset import (
     CONDITIONS, RawLandmarkSample, SessionManifest, validate_identifier,
 )
 from face_recognition.infrastructure.persistence.dataset_repository import (
-    FilesystemDatasetRepository, manifest_from_dict,
+    FilesystemDatasetRepository, manifest_from_dict, sample_from_json,
 )
 
 
 class RawDatasetReadError(ValueError):
     """Invalid source structure/data; messages contain paths, never sample values."""
+
+    def __init__(self, message: str, sample_index: int | None = None) -> None:
+        super().__init__(message)
+        # Expected zero-based file position, not an untrusted record field.
+        self.sample_index = sample_index
 
 
 @dataclass(frozen=True)
@@ -46,7 +51,7 @@ class RawDatasetReader:
         self.root = Path(root).resolve()
         if not self.root.is_dir():
             raise RawDatasetReadError(f"Raw dataset root must be an existing directory: {self.root}")
-        # Only read_condition() is used on this adapter, never open_session().
+        # Only shared batch validation is used on this adapter, never open_session().
         self._repository = FilesystemDatasetRepository(self.root)
 
     def _checked_path(self, path: Path) -> Path:
@@ -148,10 +153,23 @@ class RawDatasetReader:
         self._validate_session_files(directory, manifest)
         if condition not in manifest.completed_conditions:
             raise RawDatasetReadError(f"Condition is not declared completed in manifest: {session.directory}")
+        path = directory / (condition + ".jsonl")
         try:
-            return self._repository.read_condition(manifest, condition)
+            samples = []
+            with path.open("r", encoding="utf-8") as stream:
+                for index, line in enumerate(stream):
+                    try:
+                        samples.append(sample_from_json(line))
+                    except (ValueError, TypeError, OverflowError):
+                        raise RawDatasetReadError(
+                            f"Invalid sample JSON/schema; sample_index={index}: {path}", sample_index=index,
+                        ) from None
+            result = tuple(samples)
+            self._repository._validate_batch(manifest, condition, result)
+            return result
+        except RawDatasetReadError:
+            raise
         except (ValueError, TypeError, OSError, OverflowError):
-            path = session.directory / (condition + ".jsonl")
             raise RawDatasetReadError(
                 f"Invalid condition data: check metadata, indices, dimensions, landmarks, counts and timestamps: {path}"
             ) from None
