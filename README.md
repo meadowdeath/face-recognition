@@ -180,13 +180,13 @@ From the project root, with the Python 3.11 environment activated and the existi
 
 ```powershell
 $env:PYTHONPATH='src'
-python -m face_recognition.presentation.cli.capture --person-id p001 --session-id pc_trial_01 --camera opencv --display opencv
+python -m face_recognition.presentation.cli.capture --data-root "..\face-recognition-data\data\raw" --person-id p001 --session-id pc_trial_01 --camera opencv --display opencv
 ```
 
 For the upside-down Raspberry Pi camera and attached DRM screen:
 
 ```bash
-PYTHONPATH=src python -m face_recognition.presentation.cli.capture --person-id p001 --session-id session_01 --camera picamera2 --display drm --orientation rotate180
+PYTHONPATH=src python -m face_recognition.presentation.cli.capture --data-root ../face-recognition-data/data/raw --person-id p001 --session-id session_01 --camera picamera2 --display drm --orientation rotate180
 ```
 
 Use `--display none` for capture without a visual preview (still run in an interactive terminal). Existing OpenCV/Picamera2 cameras and displays are reused; Picamera2 remains optional on Windows. Source metadata records the backend/device, orientation, and stream sizes. Camera index, inference/display dimensions, and landmark drawing modes are configurable; rendering selections do not reduce the landmarks stored.
@@ -227,7 +227,37 @@ Only a full condition batch is published. JSONL data is written/fsynced to `.jso
 
 Run the **same command/configuration** to resume: metadata, model digest/version, protocol, and completed files are validated, completed conditions are skipped, and an unfinished condition restarts with SPACE and warm-up. A complete unmarked file left between publication and manifest update is validated and recovered; incomplete/corrupt final files or incompatible configuration fail clearly. Use a new session ID to change capture configuration. Run one capture process per session.
 
-Collect multiple independent sessions per person (approximately three is a later recommended protocol). **Future train/test separation must be by session**, never by randomly splitting adjacent frames from one capture burst. Splitting and training are not implemented. Generated contents under `data/raw/` are intentionally ignored by Git; `.gitkeep` preserves the directory. Keep the default data root for this repository behavior.
+Collect multiple independent sessions per person (approximately three is a later recommended protocol). **Future train/test separation must be by session**, never by randomly splitting adjacent frames from one capture burst. Splitting and training are not implemented. Use an external `--data-root` for biometric capture. Repository-local generated contents under `data/raw/` remain ignored by Git as a safeguard; `.gitkeep` preserves the directory.
+
+## Offline processing of external datasets
+
+Keep biometric datasets **outside this Git repository**, including all derived normalized landmarks and feature vectors. Expected sibling layout:
+
+```text
+Machine Learning/
+├── face-recognition/        source code and tests
+└── face-recognition-data/
+    └── data/
+        ├── raw/            canonical raw landmarks; never modified by processing
+        └── processed/      generated derived representations
+```
+
+From the repository root in PowerShell, with the Python 3.11 environment activated:
+
+```powershell
+$env:PYTHONPATH="src"
+python -m face_recognition.presentation.cli.process_dataset `
+  --raw-root "..\face-recognition-data\data\raw" `
+  --output-root "..\face-recognition-data\data\processed"
+```
+
+Both arguments are required and accept relative or absolute paths. Relative paths resolve from the current working directory. The raw root must exist. **The output root must not already exist, even if empty**; it must be outside the repository and must not overlap the raw tree in either direction. Use a new output directory for another run; nothing is overwritten or appended.
+
+The command reuses the read-only reader, existing normalizer, baseline extractor, and transactional processed repository. It uses each sample's own inference dimensions and preserves participant/session/condition/sample provenance. It processes only manifest-declared completed conditions. Separate `normalized_landmarks_v1/` and `all_xyz_v1/` directories retain `<person>/<session>/<condition>.jsonl`, with processing manifests and an aggregate run manifest. Normalization and feature generation happen only in the existing application/components, not in the CLI.
+
+Successful output contains aggregate participant/session/file/sample counts, representation names, and the resolved output directory. Errors are sanitized and sent to stderr; coordinates, feature-vector values, and raw records are never printed. Exit codes: **0** success, **1** input/processing failure or interruption, **2** argument/usage error. Failures stop the run; unpublished staging directories may remain with failed metadata. There is no automatic resume or deletion of failed staging data.
+
+Raw sources remain unchanged. Normalized landmarks and flattened features are still **biometric-derived artifacts and must not be committed to Git**. Repository-local raw/processed/model directories remain ignored, and the processing repository also refuses repository-local output paths.
 
 ## Future work
 
@@ -235,4 +265,4 @@ Collect multiple independent sessions per person (approximately three is a later
 
 `LandmarkFeatureExtractor` flattens already identity-normalized points as `(x0, y0, z0, x1, y1, z1, ...)`, with three finite features per landmark. Capture does not invoke it.
 
-Remaining work: derive representations from raw sessions; experimentally select a smaller landmark subset; derive geometric features; compare KNN, SVM, and Random Forest; reject unknown people; validate dataset capture on Pi hardware; benchmark accuracy and throughput. These are not implemented yet.
+Remaining work: experimentally select a smaller landmark subset; derive geometric features; compare KNN, SVM, and Random Forest; reject unknown people; validate dataset capture on Pi hardware; benchmark accuracy and throughput. These are not implemented yet.
