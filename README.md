@@ -685,7 +685,35 @@ Known-person and condition diagnostics expose FRR, correct/incorrect acceptance,
 
 Ranking is fixed: higher mean raw-score AUC, lower EER, lower FAR, lower FRR, higher correct known identification, higher open-set accuracy, lower accepted misidentification, then simpler rule (global before per-identity, no gate before gate), smaller window, and strategy name for exact ties. No weighted selection score or performance tolerance is introduced. The first row is only the **best V2 development candidate**.
 
-**V2 is not frozen and no production model is persisted.** After inspecting these diagnostics, freeze V2 **before collecting/evaluating** a new known session (conceptually `session_04`) and completely new unknown participants. Approximately three new unknown identities preserves comparability with V1; more improves breadth, and three is not a statistical law. These future data must remain untouched until one-time final V2 evaluation. No real V2 results are documented here.
+**The diagnostic command leaves V2 unfrozen and persists no production model.** The separate freeze step below establishes the experimental boundary **before collecting/evaluating** a new known session (conceptually `session_04`) and completely new unknown participants. Approximately three new unknown identities preserves comparability with V1; more improves breadth, and three is not a statistical law. These future data must remain untouched until one-time final V2 evaluation. No real V2 results are documented here.
+
+## Freezing V2 before new final-test collection
+
+V1 remains final and immutable. Its identity classifier generalized strongly to the held-out known session, while its rejection calibration did not transfer nearly as well. Even with exact neighbor self-exclusion, known calibration used the training/reference population and could still exploit very similar adjacent observations. Those calibration results were not independent generalization estimates.
+
+The completed V2 study instead used cross-session known predictions and identity-level UNKNOWN rotations. Its selected **development** candidate is now frozen as **`svm_top1_global__window_7__normal`**: `all_xyz_v1` (1434 features), ANOVA `SelectKBest(f_classif)` k=448, StandardScaler, RBF SVC C=4, gamma=0.001, probability=False. Rejection uses the **maximum OVR class decision score**, with higher scores meaning KNOWN and **one global threshold**. Mean_5nn, margin, centroid and per-identity thresholds remain diagnostic alternatives, not the frozen primary mechanism.
+
+Window size stays **7**. Aggregate rejection scores with the **median**; aggregate SVM identity predictions by majority/plurality vote, then summed corresponding class decision scores over all frames, then deterministic class order. The extra strict-majority consistency rejection gate is **disabled**. Offline windows remain non-overlapping within person/session/condition, ordered by sample index, with incomplete tails discarded. A future rolling Raspberry buffer is not implemented here.
+
+```powershell
+python -m face_recognition.presentation.cli.freeze_v2_open_set_config `
+  --diagnostic-report "..\face-recognition-data\reports\v2_open_set_diagnostics_v1.json" `
+  --output "..\face-recognition-data\models\open_set_config_v2.json"
+```
+
+This command requires **only the aggregate diagnostic JSON**. It validates report completion, fixed architecture/policies, all strategy/rotation coverage, confusion/count/metric consistency and the declared ranking/winner. It copies only whitelisted aggregate evidence and provenance, including the exact report-byte SHA-256, original identity-split digest and V1 final-report digest. It neither fits a model nor opens biometric payloads or future data. The external configuration is published atomically without overwriting any existing destination; no force/unfreeze or parameter overrides are provided. There are no fitted parameters, participant IDs, source paths or numeric production threshold in the manifest.
+
+The frozen **future numeric-threshold procedure** is cross-session OOF calibration, not training-pool resubstitution:
+
+1. Fit ANOVA/scaler/SVC separately on original known sessions 01+02, 01+03 and 02+03; score the respective held-out session 03, 02 and 01. Actual session identifiers are recorded from the report. No known sample is scored by a model fitted on its own session.
+2. Score **all current original UNKNOWN development identities** under each of those same three models. Selection already used UNKNOWN identity rotations; the final pre-test threshold may now use all existing development identities. Future UNKNOWN participants are excluded.
+3. Construct frozen window-7 median top1 scores separately in every fold and role. Pool known OOF windows **once each**; pool UNKNOWN windows **once per model**, giving three model observations per unknown window. These are calibration observations, not independent validation samples. Balanced accuracy gives the two roles equal importance despite their population counts.
+4. Run the existing exact observed-score/midpoint/boundary search. Choose higher binary balanced accuracy, then lower FAR, lower FRR, higher threshold. FAR caps 20%/10%/5% remain diagnostic and do not replace this selection rule. Never copy a fold threshold or recalibrate from the final SVM's own known training predictions.
+5. Refit the identity pipeline on all three original known sessions, without UNKNOWN fitting. **Directly transfer the pooled OOF threshold** to this all-session model. The refit stage must record fold score/threshold stability and assess transfer using development diagnostics only. No automatic score-scale alignment is authorized; if it proves necessary, stop and explicitly declare a new development-only policy/version before new data collection or access.
+
+The final all-session SVM may have a shifted score scale: OOF calibration and full refitting are intentionally distinct. This limitation must be assessed before collecting/accessing future final data, never corrected using their outcomes. The future model and numeric threshold must both be persisted and immutable before final-test collection/evaluation.
+
+**V2 configuration is frozen; its final model and numeric threshold are not yet produced, and V2 final evaluation has not occurred.** Independent final data must be new: a known session conceptually `session_04`, plus UNKNOWN participants absent from V2 development. Approximately three new UNKNOWN identities preserves V1 comparability; more is welcome, and three is not an algorithm requirement. New data must not influence feature selection, SVM settings, rejection method, temporal policy or threshold calibration. Development results are not final generalization results. Different choices after this boundary require a new version and explicit experimental reasoning.
 
 ## Future work
 
