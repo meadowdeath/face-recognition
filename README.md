@@ -715,6 +715,33 @@ The final all-session SVM may have a shifted score scale: OOF calibration and fu
 
 **V2 configuration is frozen; its final model and numeric threshold are not yet produced, and V2 final evaluation has not occurred.** Independent final data must be new: a known session conceptually `session_04`, plus UNKNOWN participants absent from V2 development. Approximately three new UNKNOWN identities preserves V1 comparability; more is welcome, and three is not an algorithm requirement. New data must not influence feature selection, SVM settings, rejection method, temporal policy or threshold calibration. Development results are not final generalization results. Different choices after this boundary require a new version and explicit experimental reasoning.
 
+## Frozen V2 refit and cross-session threshold calibration
+
+V2 architecture and calibration policy must already be frozen. The following command validates that exact configuration and the original identity-split digest, then rejects any changed identity/session catalog **before opening feature payloads**. Original V1 known-test/unknown-holdout data are now authorized V2 development data; future `session_04` and new UNKNOWN participants remain prohibited. There are no hyperparameter, threshold, window or force overrides.
+
+```powershell
+python -m face_recognition.presentation.cli.refit_v2_open_set_model `
+  --processed-root "..\face-recognition-data\data\processed" `
+  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
+  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
+  --frozen-config "..\face-recognition-data\models\open_set_config_v2.json" `
+  --output-dir "..\face-recognition-data\models\open_set_v2"
+```
+
+Three sequential fold models fit ANOVA-448 → StandardScaler → fixed RBF SVC **only on their two known fit sessions**. Held-out known sessions supply OOF `svm_top1 = max(decision_function)` scores. Every fold also scores all original UNKNOWN development identities, without UNKNOWN fitting. Scores use median aggregation over complete non-overlapping windows of 7 within person/session/condition, ordered by sample index; trailing samples are counted and discarded. SVM identity voting and its score-sum/class-order tie rules remain unchanged, with no consistency gate.
+
+Pool known OOF windows once each and UNKNOWN windows once per fold model. The manifest distinguishes unique source samples/windows from repeated UNKNOWN model observations and their used/discarded counts. Select one global threshold with the frozen balanced-accuracy → lower FAR → lower FRR → higher-threshold rule. Fold thresholds, score distributions, ROC AUC/EER and FAR 20%/10%/5% operating points are development diagnostics only; they never replace the pooled operational threshold. This avoids V1's overly easy same-training-pool rejection calibration.
+
+Only after pooled OOF threshold selection, fit the final ANOVA/scaler/SVC on **all three current known sessions together**. UNKNOWN data never fit preprocessing or SVM. Directly transfer the unchanged OOF threshold; do not recalibrate it from final-model training predictions. Final-model known/UNKNOWN development score distributions are calculated solely as transfer diagnostics, not generalization performance or another threshold population.
+
+The predeclared **`development_score_scale_guard_v1`** uses a score unit equal to `max(p90-p10 of pooled OOF known + UNKNOWN fold window scores, 0.1)`. The floor is one tenth of an OVR vote unit. A fold-threshold range or absolute final-versus-OOF known/UNKNOWN mean/median shift **above one unit warns; above three units fails**. Exact boundaries pass. Non-finite diagnostics fail. These conservative sanity checks are not statistical confidence bounds and cannot prove transfer; they are fixed before real execution. Gross fold mismatch stops before the final fit, and gross final-model mismatch stops before artifact publication. No automatic threshold alignment, alternate rejection rule or bypass flag is provided. Failure requires explicit new development reasoning/protocol before future data collection/access.
+
+Successful publication creates only `manifest.json`, `feature_selector.joblib`, `scaler.joblib`, `identity_svm.joblib` and `threshold.json`. **There is no 5-NN reference artifact.** All fitted artifacts are biometric-derived, local-only and must never be committed. Staging writes and integrity validation precede the completion manifest; publication refuses any existing output directory. Retained failed staging is marked incomplete and must not be used. Load only trusted locally created joblib files: hashes provide integrity, not authenticity. The loader checks hashes before deserialization, exact frozen provenance, dimensions/classes, hyperparameters and threshold/window policy without fitting, transforming or predicting. The recorded scikit-learn version is required; cross-platform deployment remains later work.
+
+The aggregate manifest/threshold JSON includes three-fold distributions and threshold stability, pooled calibration metrics, transfer checks, class mapping needed for inference, source/frozen-report provenance and artifact hashes. It contains no individual scores, features, source sample IDs or absolute paths. Existing `.gitignore` protections remain sufficient; all outputs must stay external.
+
+**V2 final evaluation has not occurred.** Only after this workflow succeeds and the fitted model/threshold are persisted and immutable may new independent known-session/UNKNOWN data be collected and evaluated. They must not change this model or its threshold. No real refit or final-test results are documented here.
+
 ## Future work
 
 `LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.

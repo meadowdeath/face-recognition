@@ -41,6 +41,26 @@ class V2StudyLoader(DevelopmentDatasetLoader):
         study_folds(source)
         if baseline.identity_split_sha256 != partition.source_identity_split_sha256:
             raise V2StudyError("V2 source differs from the completed V1 experiment")
+        return self._load_original(source, partition)
+
+    def load_frozen_development(self, source, partition, config):
+        """Authorize original membership/counts from frozen provenance, before payload opens."""
+        from face_recognition.domain.models.v2_open_set_config import FrozenV2OpenSetConfiguration
+        validate_unknown_split(source, partition)
+        if (not isinstance(config, FrozenV2OpenSetConfiguration)
+                or config != FrozenV2OpenSetConfiguration(config.provenance, config.development_evidence, config.known_cross_session_folds)
+                or partition.source_identity_split_sha256 != config.provenance.original_identity_split_sha256
+                or study_folds(source) != config.known_cross_session_folds):
+            raise V2StudyError("Frozen V2 source/session provenance mismatch; no future data permitted")
+        known = known_references(source)
+        unknown = tuple(s for s in source.samples if s.partition is IdentityPartition.UNKNOWN_POOL)
+        e = config.development_evidence
+        if ((len(known), len(unknown), len(source.specification.known_ids), len(source.specification.unknown_ids))
+                != (e.known_source_samples, e.unknown_source_samples, e.known_identity_count, e.unknown_identity_count)):
+            raise V2StudyError("Frozen V2 development counts differ from original split")
+        return self._load_original(source, partition)
+
+    def _load_original(self, source, partition):
         self._validate_catalog(source)  # Future sessions/IDs fail before any feature file opens.
         known = known_references(source)
         unknown = tuple(s for s in source.samples if s.partition is IdentityPartition.UNKNOWN_POOL)
