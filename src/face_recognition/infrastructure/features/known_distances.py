@@ -43,6 +43,15 @@ class KnownDistanceScorer:
             raise UnknownRejectionError("Distance inputs must be a finite nonempty numeric matrix") from None
 
     def fit(self, X_fit: np.ndarray, y_fit: np.ndarray, identity_count: int) -> "KnownDistanceScorer":
+        return self._initialize_reference(X_fit, y_fit, identity_count)
+
+    @classmethod
+    def from_reference_arrays(cls, reference: np.ndarray, labels: np.ndarray, identity_count: int,
+                              *, neighbor_counts: tuple[int, ...] = (5,)) -> "KnownDistanceScorer":
+        """Validate/restore persisted references without invoking any fit API."""
+        return cls(neighbor_counts=neighbor_counts)._initialize_reference(reference, labels, identity_count)
+
+    def _initialize_reference(self, X_fit: np.ndarray, y_fit: np.ndarray, identity_count: int) -> "KnownDistanceScorer":
         values, labels = self._matrix(X_fit, copy=True), np.asarray(y_fit)
         required = max(count for _, count in self._scores)
         if len(values) < required:

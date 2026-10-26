@@ -149,8 +149,20 @@ def _load_artifacts(root: Path, manifest: dict, frozen: LoadedFrozenConfiguratio
                 or counts["windows"] < 1 or counts["used_samples"] != counts["windows"] * a.temporal_window_size
                 or counts["used_samples"] + counts["discarded_samples"] != counts["source_samples"]):
             raise ValueError
-    scorer = KnownDistanceScorer(neighbor_counts=(a.novelty_neighbor_count,)).fit(reference, labels, count)
+    scorer = KnownDistanceScorer.from_reference_arrays(reference, labels, count, neighbor_counts=(a.novelty_neighbor_count,))
     return LoadedOpenSetModel(FittedOpenSetParts(selector, scaler, svm, scorer, class_ids), manifest, float(numeric))
+
+
+def model_fingerprints(path: Path) -> tuple[tuple[str, str], ...]:
+    """Read-only hashes for every model file, including its manifest."""
+    try:
+        root = Path(path).resolve()
+        names = ("manifest.json", *ARTIFACTS)
+        if Path(path).is_symlink() or any((root / name).is_symlink() or not (root / name).is_file() for name in names):
+            raise ValueError
+        return tuple((name, _hash(root / name)) for name in names)
+    except Exception:
+        raise OpenSetModelError("Cannot fingerprint complete local model artifacts") from None
 
 
 def load_open_set_model(path: Path, frozen: LoadedFrozenConfiguration) -> LoadedOpenSetModel:

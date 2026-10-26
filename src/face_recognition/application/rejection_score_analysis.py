@@ -5,7 +5,7 @@ import numpy as np
 from face_recognition.application.rejection_metrics import calibrate_threshold, threshold_points
 from face_recognition.application.unknown_rejection_split import UnknownRejectionError
 from face_recognition.domain.models.rejection_score_evaluation import (
-    FAR_TARGETS, EqualErrorPoint, FarOperatingPoint, ScoreAnalysis, ScoreDistribution,
+    FAR_TARGETS, EqualErrorPoint, FarOperatingPoint, ScoreAnalysis, ScoreDistribution, ScoreSeparation,
 )
 
 
@@ -31,6 +31,22 @@ def roc_auc_known_positive(known: np.ndarray, unknown: np.ndarray) -> float:
     return (2 * int(below.sum()) + int((through - below).sum())) / (2 * len(known) * len(unknown))
 
 
+def _eer_key(point, nk: int, nu: int):
+    return (abs((nu - point.unknown_rejected) * nk - point.known_rejected * nu),
+            nu - point.unknown_rejected, point.known_rejected, -point.threshold)
+
+
+def score_separation(known: np.ndarray, unknown: np.ndarray) -> ScoreSeparation:
+    """ROC/EER diagnostics, NEVER calls calibration or chooses operational threshold."""
+    known, unknown = _scores(known), _scores(unknown)
+    point = min(threshold_points(known, np.ones(len(known), dtype=bool), unknown, allow_negative=True),
+                key=lambda row: _eer_key(row, len(known), len(unknown)))
+    m = point.metrics
+    eer = EqualErrorPoint((m.unknown_false_acceptance_rate + m.known_rejection_rate) / 2, point.threshold,
+                          m.unknown_false_acceptance_rate, m.known_rejection_rate)
+    return ScoreSeparation(roc_auc_known_positive(known, unknown), eer, score_distribution(known), score_distribution(unknown))
+
+
 def analyze_scores(known: np.ndarray, correct: np.ndarray, unknown: np.ndarray) -> ScoreAnalysis:
     calibration = calibrate_threshold(known, correct, unknown, allow_negative=True)
     nk, nu = len(known), len(unknown)
@@ -41,7 +57,7 @@ def analyze_scores(known: np.ndarray, correct: np.ndarray, unknown: np.ndarray) 
         ua = nu - point.unknown_rejected
         ka = nk - point.known_rejected
         # Common denominator nk*nu makes exact closest-error comparisons possible.
-        key = (abs(ua * nk - point.known_rejected * nu), ua, point.known_rejected, -point.threshold)
+        key = _eer_key(point, nk, nu)
         if eer_key is None or key < eer_key:
             eer_key = key
             metrics = point.metrics

@@ -627,10 +627,37 @@ Artifacts are staged, flushed, hashed and structurally validated before the comp
 
 **This stage ends before final evaluation.** Only after the fitted artifacts and numeric threshold are completed and validated may the next stage load `known_test` and `unknown_holdout` for the one-time final evaluation. Do not change this fitted model based on those holdout results. No real refit/calibration results are documented here yet.
 
+## One-time final open-set holdout evaluation
+
+The development configuration and fitted/calibrated model must already be frozen. This command evaluates **`known_test`** (the known identities' held-out session) and **`unknown_holdout`** (identities never used for novelty calibration). It reads only those two feature populations; development/calibration feature payloads are not opened. This is the first intentional holdout evaluation stage. **Final holdout results must not be used to modify this model version.**
+
+```powershell
+python -m face_recognition.presentation.cli.evaluate_final_open_set `
+  --processed-root "..\face-recognition-data\data\processed" `
+  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
+  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
+  --model-dir "..\face-recognition-data\models\open_set_v1" `
+  --frozen-config "..\face-recognition-data\models\open_set_config_v1.json" `
+  --development-report "..\face-recognition-data\reports\temporal_distance_novelty_v1.json" `
+  --report "..\face-recognition-data\reports\final_open_set_evaluation_v1.json"
+```
+
+The extra metadata inputs provide independent provenance checks. `--frozen-config` must match the fitted manifest's recorded byte digest. `--development-report` must match the frozen configuration's original development-report digest; its unknown partition must exactly match the supplied unknown split. This binds the calibration/holdout identity assignment without changing the existing model manifest or needing development features. Keep the original frozen files unchanged.
+
+The loader verifies completion, artifact hashes, frozen configuration, fitted dimensions/classes and the persisted finite threshold. The inference path invokes **transform/predict/score only**: no ANOVA/scaler/SVM/neighbor fitting, no `fit_transform`, no threshold calibration and no model-parameter overrides. Persisted references are restored through validation only. Model files, including the manifest, are hashed before and after evaluation and checked again before report publication. No model file is updated to mark evaluation; the final report is its separate audit record.
+
+Final closed-set identity metrics use **every known-test frame before rejection**: accuracy, macro precision/recall/F1, per-class support and a confusion matrix with pseudonymous technical labels. Temporal metrics retain non-overlapping **window 7** inside person/session/condition, sample-index ordering and trailing discard. Median mean_5nn confidence is compared with the **unchanged persisted threshold**, and SVM votes use the frozen score-sum/class-order tie rules. Used/discarded counts are explicit; frame metrics still include frames discarded from temporal windows.
+
+Frame-level and temporal ROC AUC/EER describe final separability. **EER thresholds are diagnostic only and never replace the operational threshold.** There is no balanced-accuracy or FAR operating-point search for new operational settings on holdout data. FAR/FRR, acceptance/rejection, correct/misidentified known acceptance, exact open-set accuracy and binary metrics all use the persisted threshold.
+
+The external atomic, no-overwrite JSON report includes model/configuration digests, partition counts, final closed-set and open-set results, aggregate condition diagnostics, vote stability and score-distribution summaries. Known per-class confusion information may use pseudonymous IDs; there are no participant-specific condition tables, per-sample predictions/scores/distances, vectors or absolute paths. Development comparison values are read from frozen evidence, not hardcoded historical numbers. Existing reports are refused before any holdout payload is opened; there is no force option. Invoke this once for the frozen model version and retain the report.
+
+**Calibration performance is not final generalization performance.** Known calibration reused the training pool with exact neighbor self-exclusion; high calibration AUC/balanced accuracy describe an easier problem than a new known session. CLI/report labels keep calibration, development selection, final frame identity and final temporal open-set performance separate. A legitimately different model requires a new version and experimental protocol; do not use this holdout to tune `open_set_v1`. No real final results are documented here before manual execution.
+
 ## Future work
 
 `LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.
 
 `LandmarkFeatureExtractor` flattens already identity-normalized points as `(x0, y0, z0, x1, y1, z1, ...)`, with three finite features per landmark. Capture does not invoke it.
 
-Remaining work after manually completing the frozen refit: evaluate the reserved holdouts once. Later work includes the Raspberry live buffer and deployment benchmarking. Alternative feature/model experiments require a separate development version rather than tuning against final holdout results.
+After manually executing and preserving the one-time final report, later work includes the Raspberry live buffer and deployment benchmarking. Alternative feature/model experiments require a separate development version and protocol rather than tuning against this final holdout.

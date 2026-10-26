@@ -52,6 +52,16 @@ class ScoreAnalysis:
 
 
 @dataclass(frozen=True)
+class ScoreSeparation:
+    """Threshold-independent diagnostics only; contains no operational calibration."""
+    roc_auc: float
+    equal_error_point: EqualErrorPoint
+    known_distribution: ScoreDistribution
+    unknown_distribution: ScoreDistribution
+    diagnostic_only: bool = True
+
+
+@dataclass(frozen=True)
 class ScoreFoldResult:
     fold_name: str
     fit_session_ids: tuple[str, ...]
