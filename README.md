@@ -522,6 +522,36 @@ The external atomic, no-overwrite JSON report contains ROC AUC, discrete EER and
 
 Every row includes deltas against the **same score's window-size-1 reference**. Rank by higher mean AUC, lower EER, lower FAR, higher correct known identification, higher exact open-set accuracy, lower FRR, then smaller window; final ties use score name. Larger windows are not automatically better: inspect improvements and discarded samples before choosing decision latency. The first-ranked row is only the **best temporal open-set development candidate**. These are calibration-set diagnostics, not independent holdout estimates; no final model is selected or persisted, and no real temporal results are documented yet.
 
+## Distance-based novelty development evaluation
+
+Changing the rejection threshold alone trades false acceptance against false rejection; it does not improve separation of overlapping score distributions. Earlier margin/centroid and temporal experiments motivate a dedicated novelty score. **Identity classification** still asks which known person a sample resembles and uses the unchanged **ANOVA-448 → StandardScaler → RBF SVM C=4, gamma=0.001, probability=False**. **Novelty detection** separately asks whether the sample is sufficiently close to the known training population to accept that SVM identity.
+
+There are exactly three new scores in the ANOVA-selected, standardized **Euclidean** space:
+
+- `nearest_1`: negative distance to the nearest known fold-fit sample.
+- `mean_3nn`: negative mean distance to the three nearest known fold-fit samples.
+- `mean_5nn`: negative mean distance to the five nearest known fold-fit samples.
+
+All scores are oriented so larger means more likely KNOWN. References span **all known fit identities**, not just the SVM-predicted identity. The nearest neighbor's label is used only for the aggregate same-identity diagnostic, never as the recognized identity. Exact nearest-distance ties choose the earliest reference row in deterministic development order. At least five fit references are required because all three scores are evaluated together.
+
+Each of the two opposite-session development folds fits ANOVA, scaling, SVM, neighbor references and reference centroids using **known fold-fit data only**. Known validation and unknown calibration never enter those fits. Both existing `svm_margin` and `centroid_distance` are recalculated from the **same fitted models** for a controlled comparison; there are only two model fits, executed sequentially. **`known_test` and `unknown_holdout` biometric payloads remain untouched.** Temporal aggregation is intentionally excluded to isolate the distance score itself.
+
+```powershell
+python -m face_recognition.presentation.cli.evaluate_distance_novelty `
+  --processed-root "..\face-recognition-data\data\processed" `
+  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
+  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
+  --report "..\face-recognition-data\reports\distance_novelty_v1.json"
+```
+
+Distances are computed in query batches of at most **128 rows** against one owned, read-only float64 reference matrix. Float32 source matrices are unchanged; float64 query conversion and distance work are batched. Only the five smallest distances per query are reduced into scores; no full validation-plus-unknown pairwise matrix is retained. Native threads are limited to one.
+
+The external atomic, no-overwrite JSON report contains fold-level ROC AUC/EER, the existing balanced-accuracy threshold search and tie rules, FAR/FRR and identity metrics, 20%/10%/5% FAR operating points, threshold midpoint diagnostics, and reference deltas. Operating points accepting at most 1% of known samples retain the existing `impractical` flag. Positive-distance summaries are provided separately from signed-score summaries: count, mean, population std, median, and linear 10th/25th/75th/90th percentiles. Pooled distance counts are fold observations; the same unknown calibration samples are scored by both fold models.
+
+Nearest-same-identity rates for known validation and the largest aggregate nearest-label frequency for unknown calibration are diagnostic only. The latter is concentration, **not unknown identity accuracy**. Neither affects thresholds. No individual distances, neighbor sample IDs, reference matrices, feature/centroid vectors or absolute paths are saved.
+
+Rank novelty scores by higher mean AUC, lower EER, lower FAR, higher known correct identification, higher open-set accuracy, lower FRR, then fewer neighbors. Results are calibration-set development diagnostics, not independent holdout performance. Refitting can shift reference distances and thresholds. The winner is only the **best distance-based novelty development candidate**; no final model is selected, no temporal novelty windows are implemented, and no real novelty results are documented yet.
+
 ## Future work
 
 `LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.
