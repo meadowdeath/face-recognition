@@ -552,6 +552,30 @@ Nearest-same-identity rates for known validation and the largest aggregate neare
 
 Rank novelty scores by higher mean AUC, lower EER, lower FAR, higher known correct identification, higher open-set accuracy, lower FRR, then fewer neighbors. Results are calibration-set development diagnostics, not independent holdout performance. Refitting can shift reference distances and thresholds. The winner is only the **best distance-based novelty development candidate**; no final model is selected, no temporal novelty windows are implemented, and no real novelty results are documented yet.
 
+## Temporal distance-novelty development evaluation
+
+Distance novelty is now the main UNKNOWN development direction: frame-level `nearest_1` achieved AUC **0.823304**, FAR **0.089904**, FRR **0.347115**, while `mean_5nn` achieved AUC **0.826745**, FAR **0.143750**, FRR **0.277500**. These earlier development observations suggest a conservative nearest-neighbor behavior versus better known acceptance with five neighbors; they are not final holdout results. Both separated known/unknown observations better than the prior SVM-margin/centroid methods. This next experiment asks whether aggregating observations improves those two scores further; improvement is not assumed.
+
+Keep **ANOVA-448 → StandardScaler → RBF SVM C=4, gamma=0.001, probability=False** fixed. Only `nearest_1` and `mean_5nn` are computed; `mean_3nn` is excluded. All preprocessing, neighbor references and SVM fitting use **known fold-fit samples only**. Euclidean distance uses the existing bounded-batch implementation. Known validation and unknown calibration are transformed/scored only. **`known_test` and `unknown_holdout` biometric payloads remain untouched.**
+
+Use the existing **1/3/5/7-sample non-overlapping windows**, sorted by `sample_index` inside person/session/condition. Never combine groups, pad samples or slide overlapping windows into development metrics. Reject duplicate/gapped indices and record trailing remainders. Identity is chosen by the largest **SVM** vote count; tied counts use summed class decision scores across all frames, then deterministic class order. Neighbors never select identity. Window novelty confidence is the **median of all per-frame novelty scores**, with higher scores meaning more likely KNOWN.
+
+For current **20-sample** condition captures, window 5 yields **four complete windows with no discarded samples**. Window 7 yields two windows, uses 14 samples and discards six. These efficiencies are reported; window 5 gets no ranking bonus. Static, time-spaced capture samples remain an approximation to temporal observations, not a live-video latency measurement.
+
+```powershell
+python -m face_recognition.presentation.cli.evaluate_temporal_distance_novelty `
+  --processed-root "..\face-recognition-data\data\processed" `
+  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
+  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
+  --report "..\face-recognition-data\reports\temporal_distance_novelty_v1.json"
+```
+
+Two known-only fold models serve all eight method/window configurations. Each of the **16 fold/method/window analyses** independently calibrates its window threshold with the existing balanced-accuracy, lower FAR, lower FRR, higher-threshold rule; frame thresholds are never reused. Report ROC AUC, EER/threshold, FAR/FRR, correct/misidentified known acceptance, exact open-set accuracy, binary metrics and the existing 20%/10%/5% FAR diagnostics (including impractical points). Every delta compares against the **same method at window size 1**.
+
+The external atomic, no-overwrite JSON report also includes used/discarded counts, aggregate condition diagnostics at global fold thresholds, vote stability and unweighted fold means/population std. Unknown windows are scored by both fold models, so summed counts represent fold observations. There are no participant-level condition metrics, individual distances, neighbor IDs, confidence arrays, vote sequences, reference vectors or absolute paths.
+
+Rank by higher mean AUC, lower EER, lower FAR, higher correct known identification, higher open-set accuracy, lower FRR, smaller window, then smaller neighbor count. The winner is only the **best temporal distance-novelty development candidate**. Calibration observations are not independent holdout estimates, refitting may shift distance thresholds, no final recognizer or Raspberry rolling buffer is created, and no real temporal-distance results are documented yet.
+
 ## Future work
 
 `LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.

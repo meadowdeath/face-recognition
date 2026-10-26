@@ -92,3 +92,19 @@ class KnownDistanceTests(unittest.TestCase):
         self.assertTrue(all(np.array_equal(a, b) for (_, a), (_, b) in zip(initial.confidence, scorer.score(query).confidence)))
         self.assertNotIn("array", repr(scorer))
         self.assertNotIn("array", repr(initial))
+
+    def test_requested_one_five_subset_preserves_original_scores_without_mean_three(self):
+        query = self.X[:2]
+        original = dict(KnownDistanceScorer().fit(self.X, self.y, 2).score(query).confidence)
+        scorer = KnownDistanceScorer(neighbor_counts=(5, 1)).fit(self.X, self.y, 2)
+        result = scorer.score(query)
+        self.assertEqual(scorer._scores, (("nearest_1", 1), ("mean_5nn", 5)))
+        self.assertEqual(tuple(name for name, _ in result.confidence), ("nearest_1", "mean_5nn"))
+        self.assertTrue(all(np.array_equal(values, original[name]) for name, values in result.confidence))
+
+    def test_only_nonempty_unique_subsets_of_existing_neighbor_counts_are_allowed(self):
+        for counts in ((), (2,), (7,), (1, 1), (True,), (1, 3, 5, 9)):
+            with self.assertRaises(UnknownRejectionError):
+                KnownDistanceScorer(neighbor_counts=counts)
+        scorer = KnownDistanceScorer(neighbor_counts=(1,)).fit(self.X[:2], np.array([0, 1]), 2)
+        self.assertEqual(tuple(name for name, _ in scorer.score(self.X[:1]).confidence), ("nearest_1",))

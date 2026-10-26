@@ -113,17 +113,43 @@ class TemporalOpenSetEvaluator:
         self.runner = runner
 
     def evaluate(self, known: DevelopmentDataset, unknown: UnknownCalibrationData) -> TemporalOpenSetReport:
+        try:
+            completed = self.evaluate_results(known, unknown)
+            ranking = rank_temporal_results(completed)
+            return TemporalOpenSetReport(known.X.shape[1], len(known.label_to_person), known.label_to_person, TEMPORAL_MODEL,
+                                          self.runner.configuration_for(TEMPORAL_MODEL), unknown.partition,
+                                          completed, ranking, ranking[0], self.runner.versions)
+        except UnknownRejectionError:
+            raise
+        except Exception:
+            raise UnknownRejectionError("Temporal report construction failed") from None
+
+    def evaluate_results(self, known: DevelopmentDataset, unknown: UnknownCalibrationData, *,
+                         score_families: tuple[str, ...] = TEMPORAL_SCORES,
+                         minimum_fit_samples: int = 1) -> tuple[TemporalResult, ...]:
+        """Shared fixed-model window/calibration core; callers supply score outputs.
+
+        No classifier or score is fitted here. Existing and distance-novelty
+        runners provide fold-local predictions and confidence arrays. Reports
+        and ranking remain specific to each experiment.
+        """
         context = "Invalid authorized temporal data"
         try:
+            if (not score_families or len(set(score_families)) != len(score_families)
+                    or any(not isinstance(name, str) or not name for name in score_families)
+                    or type(minimum_fit_samples) is not int or minimum_fit_samples < 1):
+                raise ValueError
             validate_rejection_data(known, unknown, minimum_features=TEMPORAL_MODEL.k)
             folds = create_session_folds(known)
+            if any(len(fold.fit.indices) < minimum_fit_samples for fold in folds):
+                raise UnknownRejectionError(f"At least {minimum_fit_samples} known fit samples per fold are required")
             labels = {person: index for index, person in enumerate(known.label_to_person)}
             cases = []
             for fold in folds:
                 context = f"Temporal inference failed: {fold.name}"
                 output = self.runner.infer_fold(*fold.fit.arrays(), *fold.validation.arrays(), unknown.X, len(labels))
-                if (tuple(name for name, _ in output.known.confidence) != TEMPORAL_SCORES
-                        or tuple(name for name, _ in output.unknown.confidence) != TEMPORAL_SCORES
+                if (tuple(name for name, _ in output.known.confidence) != score_families
+                        or tuple(name for name, _ in output.unknown.confidence) != score_families
                         or output.known.decisions.shape != (len(fold.validation.indices), len(labels))
                         or output.unknown.decisions.shape != (len(unknown.samples), len(labels))):
                     raise ValueError
@@ -146,7 +172,7 @@ class TemporalOpenSetEvaluator:
                 # Per-frame decisions/models do not survive into the next fit.
                 del output, known_plan, unknown_plan
             results = []
-            for index, family in enumerate(TEMPORAL_SCORES):
+            for index, family in enumerate(score_families):
                 for size in WINDOW_SIZES:
                     selected = [case[size] for case in cases]
                     thresholds = [case.analyses[index].calibration.threshold for case in selected]
@@ -176,10 +202,7 @@ class TemporalOpenSetEvaluator:
                 row.mean_metrics.known_correct_identification_rate - references[row.score_family].mean_metrics.known_correct_identification_rate,
                 row.mean_metrics.open_set_exact_accuracy - references[row.score_family].mean_metrics.open_set_exact_accuracy,
             )) for row in results)
-            ranking = rank_temporal_results(completed)
-            return TemporalOpenSetReport(known.X.shape[1], len(labels), known.label_to_person, TEMPORAL_MODEL,
-                                          self.runner.configuration_for(TEMPORAL_MODEL), unknown.partition,
-                                          completed, ranking, ranking[0], self.runner.versions)
+            return completed
         except UnknownRejectionError:
             raise
         except Exception:
