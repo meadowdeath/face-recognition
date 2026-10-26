@@ -600,10 +600,37 @@ Full refitting changes the ANOVA subset, scaling, SVM and reference population, 
 
 Final holdouts must never influence architecture, ANOVA k, SVM parameters, novelty method, temporal window, metric definitions or threshold selection. Their results are **evaluation, not another tuning round**. The manifest freezes metric definitions and the development window policy; a future rolling latest-7 Raspberry buffer remains unimplemented. **`known_test` and `unknown_holdout` remain untouched.**
 
+## Full-development refit and numeric threshold calibration
+
+The configuration must already be frozen. This command reads and validates it exactly; there are **no model/threshold overrides or force option**. It uses the existing authorized loaders for **all `known_train_pool`** (the current `session_01` + `session_02` together) and only the designated **`unknown_calibration`** identities. **`known_test` and `unknown_holdout` payloads remain unopened.** Counts and identity/session assignments come from the split manifests, not hardcoded participant totals.
+
+Refit **SelectKBest(f_classif), k=448 → StandardScaler → RBF SVC C=4, gamma=0.001, probability=False** on all known development samples. The transformed known samples alone form the Euclidean **mean_5nn** reference set; neither unknown calibration nor holdouts fit any component. SVM remains the identity classifier. The reference lookup decides novelty only.
+
+Known calibration frames explicitly exclude their **own exact reference row before selecting five neighbors**, using the validated dataset/reference row alignment. At least six reference samples are required. Distinct samples with identical feature vectors remain eligible, including ties at zero distance. Unknown calibration uses the full known reference population without exclusion. Distance computation stays bounded to query batches; no complete population-by-population distance matrix is retained.
+
+Calibrate on **median frame novelty scores over complete windows of 7**, grouped by person/session/condition in sample-index order, non-overlapping, with trailing remainders discarded. Aggregate identity with the frozen SVM vote/tie policy. Use the existing exact signed-score threshold search: higher binary balanced accuracy, then lower FAR, lower FRR, higher threshold. ROC AUC/EER and 20%/10%/5% FAR points are calibration diagnostics and never replace the selected threshold. These known calibration scores are training resubstitution with neighbor self-exclusion, **not independent generalization accuracy**; no training accuracy is advertised.
+
+```powershell
+python -m face_recognition.presentation.cli.refit_open_set_model `
+  --processed-root "..\face-recognition-data\data\processed" `
+  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
+  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
+  --frozen-config "..\face-recognition-data\models\open_set_config_v1.json" `
+  --output-dir "..\face-recognition-data\models\open_set_v1"
+```
+
+The external output contains `feature_selector.joblib`, `scaler.joblib`, `identity_svm.joblib`, `novelty_reference.npz`, `threshold.json`, and `manifest.json`. NPZ uses non-pickle arrays: transformed references, integer reference labels, and the sorted pseudonymous class mapping needed for inference. It contains no source sample IDs or unknown calibration features. The manifest contains architecture/policy, frozen-config byte digest, identity-split metadata digest, aggregate calibration metrics/counts, library versions and SHA-256 hashes for the five component artifacts. The original frozen configuration is preserved as a provenance snapshot; its null threshold describes the pre-refit state, while the model's root threshold is calibrated.
+
+**All fitted selectors, scaler state, SVM/support vectors and reference arrays are biometric-derived local-only artifacts. Never commit them.** Output inside the repository or overlapping inputs is refused; existing output directories are never overwritten. Existing Git ignores continue to protect repository-local `data/raw`, `data/processed` and `models`; the command requires external model output.
+
+Artifacts are staged, flushed, hashed and structurally validated before the completed manifest is written **last**, then published by same-filesystem directory rename. Failed/interrupted staging is retained locally as incomplete without a completed manifest and must not be used. `load_open_set_model(path, loaded_frozen_configuration)` verifies hashes/provenance, dimensions, classes and a finite window-7 threshold **without calling predict/transform or loading a dataset**. Load only trusted locally created joblib artifacts: hashes check integrity, not authenticity. The loader currently requires the recorded scikit-learn version; Raspberry deployment/portability is a later stage.
+
+**This stage ends before final evaluation.** Only after the fitted artifacts and numeric threshold are completed and validated may the next stage load `known_test` and `unknown_holdout` for the one-time final evaluation. Do not change this fitted model based on those holdout results. No real refit/calibration results are documented here yet.
+
 ## Future work
 
 `LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.
 
 `LandmarkFeatureExtractor` flattens already identity-normalized points as `(x0, y0, z0, x1, y1, z1, ...)`, with three finite features per landmark. Capture does not invoke it.
 
-Remaining work: refit/calibrate using the frozen development-only policy; freeze the trained pipeline and numeric threshold; then evaluate the reserved holdouts once. Later work includes the Raspberry live buffer and deployment benchmarking. Alternative feature/model experiments require a separate development version rather than tuning against final holdout results.
+Remaining work after manually completing the frozen refit: evaluate the reserved holdouts once. Later work includes the Raspberry live buffer and deployment benchmarking. Alternative feature/model experiments require a separate development version rather than tuning against final holdout results.

@@ -57,7 +57,13 @@ class KnownDistanceScorer:
         self.fit_samples = len(values)
         return self
 
-    def score(self, X: np.ndarray) -> KnownDistanceObservations:
+    def reference_arrays(self) -> tuple[np.ndarray, np.ndarray]:
+        """Infrastructure persistence access to read-only biometric-derived arrays."""
+        if not hasattr(self, "_reference"):
+            raise UnknownRejectionError("Known distance scorer must be fitted first")
+        return self._reference, self._labels
+
+    def score(self, X: np.ndarray, *, exclude_reference_indices: np.ndarray | None = None) -> KnownDistanceObservations:
         if not hasattr(self, "_reference"):
             raise UnknownRejectionError("Known distance scorer must be fitted first")
         # Conversion is batched too; avoid a full float64 query-matrix copy.
@@ -66,6 +72,13 @@ class KnownDistanceScorer:
             raise UnknownRejectionError("Distance query dimensions must match known references")
         confidence = [(name, np.empty(len(X), dtype=np.float64)) for name, _ in self._scores]
         required = max(count for _, count in self._scores)
+        excluded = None
+        if exclude_reference_indices is not None:
+            excluded = np.asarray(exclude_reference_indices)
+            if (excluded.shape != (len(X),) or not np.issubdtype(excluded.dtype, np.integer)
+                    or np.any(excluded < 0) or np.any(excluded >= len(self._reference))
+                    or len(self._reference) <= required):
+                raise UnknownRejectionError("Self-exclusion requires one valid reference-row index per query and enough OTHER references")
         nearest_labels = np.empty(len(X), dtype=self._labels.dtype)
         for start in range(0, len(X), self.batch_size):
             stop = min(start + self.batch_size, len(X))
@@ -74,6 +87,13 @@ class KnownDistanceScorer:
                 distances = euclidean_distances(query, self._reference)
             if not np.isfinite(distances).all():
                 raise UnknownRejectionError("Nonfinite Euclidean distance calculation")
+            if excluded is not None:
+                indices = excluded[start:stop]
+                if not np.array_equal(query, self._reference[indices]):
+                    raise UnknownRejectionError("Self-excluded query must match its indexed source reference row")
+                # Mask the exact row before any nearest selection, including
+                # when duplicate vectors tie at zero distance.
+                distances[np.arange(stop - start), indices] = np.inf
             nearest_labels[start:stop] = self._labels[np.argmin(distances, axis=1)]
             distances.partition(required - 1, axis=1)
             nearest = np.sort(distances[:, :required], axis=1)
