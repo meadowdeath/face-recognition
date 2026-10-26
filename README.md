@@ -500,6 +500,28 @@ Rank the eight model/score combinations by higher mean AUC, lower mean EER, lowe
 
 The external aggregate JSON report uses atomic no-overwrite publication and contains no per-sample scores, feature/support vectors, centroid vectors, class scale vectors or absolute source paths. The CLI prints aggregate diagnostics only. Calibration-set metrics are not independent holdout estimates; any threshold transfer after refitting still requires later holdout evaluation. No real score-comparison results are documented yet, and no final recognizer is selected or persisted.
 
+## Temporal open-set development evaluation
+
+Single-frame rejection did not separate known and unknown samples adequately: the best distance-score development result still rejected many known observations. Attendance decisions should therefore be evaluated across several observations rather than relying on one inference. This experiment keeps **ANOVA-448 → StandardScaler → RBF SVM C=4, gamma=0.001, probability=False** fixed and compares only **centroid_distance** and the **svm_margin** reference. There is no new classifier, score family or model tuning.
+
+Use **non-overlapping windows of 1, 3, 5 and 7 samples**. Within each person/session/condition, sort by `sample_index`, anchor at the smallest index, and discard only trailing incomplete windows. Duplicate or missing indices fail explicitly. Windows never cross an identity, session or condition. Overlapping windows are avoided because shared samples would inflate the apparent observation count. These time-spaced, static-condition captures approximate temporal observations; they do not measure continuous-video performance or end-to-end decision latency. A later Raspberry implementation may use a rolling live window, but none is introduced here.
+
+Identity aggregation uses the largest vote count. Ties use the highest sum of that class's SVM decision scores **across every frame**, then deterministic class order for an exact remaining tie. Confidence is the **median of every frame's confidence**, including frames voting for another identity; larger always means more likely KNOWN. Vote diagnostics distinguish unanimous windows, a unique but non-unanimous plurality (the reported majority category), and tied top vote counts before tie breaking.
+
+There are only **two sequential identity-model fits**, one per known development fold. ANOVA, scaling, SVM and centroids use known fold-fit data only. Each fold/score/window size independently calibrates its threshold using known out-of-session validation windows and `unknown_calibration` windows, reusing the existing balanced-accuracy objective and FAR/FRR/higher-threshold tie rules. Frame thresholds are never reused for larger windows. **`known_test` and `unknown_holdout` biometric payloads remain untouched.**
+
+```powershell
+python -m face_recognition.presentation.cli.evaluate_temporal_open_set `
+  --processed-root "..\face-recognition-data\data\processed" `
+  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
+  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
+  --report "..\face-recognition-data\reports\temporal_open_set_v1.json"
+```
+
+The external atomic, no-overwrite JSON report contains ROC AUC, discrete EER and threshold, balanced-accuracy calibration, FAR/FRR and identification metrics, 20%/10%/5% FAR diagnostics, and used/discarded/window counts. It retains fold-specific thresholds, their midpoint development threshold, and separate metrics at that midpoint. Means are unweighted across folds, with population standard deviations; count totals are **fold observations**, so unknown windows scored by both models are counted twice. Condition diagnostics aggregate across identities using each fold's global threshold, without condition-specific calibration or participant-level results. No per-frame scores, vote sequences, feature/centroid vectors or absolute paths are stored.
+
+Every row includes deltas against the **same score's window-size-1 reference**. Rank by higher mean AUC, lower EER, lower FAR, higher correct known identification, higher exact open-set accuracy, lower FRR, then smaller window; final ties use score name. Larger windows are not automatically better: inspect improvements and discarded samples before choosing decision latency. The first-ranked row is only the **best temporal open-set development candidate**. These are calibration-set diagnostics, not independent holdout estimates; no final model is selected or persisted, and no real temporal results are documented yet.
+
 ## Future work
 
 `LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.

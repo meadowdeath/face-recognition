@@ -17,13 +17,13 @@ from face_recognition.infrastructure.persistence.unknown_rejection_repository im
 from tests.identity_split_fakes import write_feature_dataset
 
 
-def rejection_fixture(directory: Path):
+def rejection_fixture(directory: Path, *, samples: int = 3):
     processed = directory / "processed"
     known_ids = ("known_a", "known_b", "known_c")
     unknown_ids = ("unknown_cal", "unknown_hold_a", "unknown_hold_b")
     people = {person: ("visit_a", "visit_b", "reserved_visit") for person in known_ids}
     people.update(unknown_cal=("u1", "u2"), unknown_hold_a=("u1", "u2"), unknown_hold_b=("one",))
-    root = write_feature_dataset(processed, people, samples=3, landmarks=171)
+    root = write_feature_dataset(processed, people, samples=samples, landmarks=171)
     source = IdentitySplitPlanner().plan(FeatureMetadataReader(processed),
                                           IdentitySplitSpec(known_ids, unknown_ids, ("visit_a", "visit_b"), ("reserved_visit",)))
     partition = plan_unknown_split(source, UnknownSplitSpec(("unknown_cal",), ("unknown_hold_a", "unknown_hold_b")))

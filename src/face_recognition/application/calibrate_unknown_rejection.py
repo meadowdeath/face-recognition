@@ -56,13 +56,16 @@ def summarize_metrics(values, statistic):
     return model(**{name: statistic(getattr(row, name) for row in values) for name in model.__dataclass_fields__})
 
 
-def validate_rejection_data(known: DevelopmentDataset, unknown: UnknownCalibrationData) -> None:
+def validate_rejection_data(known: DevelopmentDataset, unknown: UnknownCalibrationData,
+                            *, minimum_features: int | None = None) -> None:
     DevelopmentDataset(known.X, known.y, known.samples, known.label_to_person, known.training_sessions)
     UnknownCalibrationData(unknown.X, unknown.samples, unknown.source, unknown.partition)
     expected_known = {row for row in unknown.source.samples if row.partition is IdentityPartition.KNOWN_TRAIN_POOL}
-    if (set(known.samples) != expected_known or known.label_to_person != unknown.source.specification.known_ids
+    required = max(c.k for c in REJECTION_CANDIDATES) if minimum_features is None else minimum_features
+    if (type(required) is not int or required < 1
+            or set(known.samples) != expected_known or known.label_to_person != unknown.source.specification.known_ids
             or known.training_sessions != unknown.source.specification.train_sessions
-            or known.X.shape[1] != unknown.X.shape[1] or known.X.shape[1] < max(c.k for c in REJECTION_CANDIDATES)
+            or known.X.shape[1] != unknown.X.shape[1] or known.X.shape[1] < required
             or len(known.label_to_person) < 2):
         raise UnknownRejectionError("Invalid authorized rejection calibration data")
 
