@@ -576,10 +576,34 @@ The external atomic, no-overwrite JSON report also includes used/discarded count
 
 Rank by higher mean AUC, lower EER, lower FAR, higher correct known identification, higher open-set accuracy, lower FRR, smaller window, then smaller neighbor count. The winner is only the **best temporal distance-novelty development candidate**. Calibration observations are not independent holdout estimates, refitting may shift distance thresholds, no final recognizer or Raspberry rolling buffer is created, and no real temporal-distance results are documented yet.
 
+## Freezing the open-set development configuration
+
+Development/model selection uses **`known_train_pool` + `unknown_calibration`**. The selected architecture is now fixed as **`all_xyz_v1` (1434 coordinates) → SelectKBest(f_classif), k=448 → StandardScaler → RBF SVC C=4, gamma=0.001, probability=False**, with **Euclidean mean_5nn novelty**, negative-distance confidence, **window 7**, median confidence and majority SVM identity voting. Ties use summed class decision scores across every window frame, then deterministic class order. Neighbors decide novelty only.
+
+```powershell
+python -m face_recognition.presentation.cli.freeze_open_set_config `
+  --development-report "..\face-recognition-data\reports\temporal_distance_novelty_v1.json" `
+  --output "..\face-recognition-data\models\open_set_config_v1.json"
+```
+
+The command reads **only the aggregate development report**, never feature JSONL files. It checks report completeness, exact architecture/scaler and development policies, the selected `mean_5nn__window_7` winner/ranking, opposite-session folds, and agreement between aggregate evidence and fold statistics. It records a SHA-256 digest of the **exact report bytes**, experiment/schema identifiers, and a small aggregate evidence summary. It does not copy paths, participant IDs, fitted parameters or fold thresholds. Output under `models` is configuration/provenance JSON, **not a trained model**. Publication is atomic, external to the repository and refuses every existing destination. There is no edit/unfreeze option; different choices require a new version/file and an explicit new development experiment.
+
+The numeric threshold remains **null / not calibrated**. The frozen future policy is:
+
+1. Refit ANOVA-448, StandardScaler and the fixed SVM on **all `known_train_pool`**, and build its full transformed 5-NN reference set.
+2. Score known calibration queries with **their own reference row excluded by `(person_id, session_id, condition, sample_index)`**. At least **five other references** (six total) are required; distinct samples with identical feature values remain eligible.
+3. Score only `unknown_calibration` against that known reference population. Neither unknown nor holdout samples fit preprocessing, SVM or references.
+4. Apply the frozen non-overlapping, person/session/condition **7-sample windows**, median novelty and SVM voting; discard trailing remainders. Search thresholds at **window level** with the existing signed-score observed/midpoint/boundary search. Select higher binary balanced accuracy, then lower FAR, lower FRR, higher threshold.
+5. Freeze that numeric threshold **before loading `known_test` or `unknown_holdout` payloads**. Only then may the next stage perform a one-time final holdout evaluation.
+
+Full refitting changes the ANOVA subset, scaling, SVM and reference population, so the absolute distance scale can shift. Copying the development fold threshold or its midpoint would not implement this calibration policy. Known calibration after refit with neighbor self-exclusion is still **not independent out-of-session validation**; the later holdouts must measure transfer. This commit serializes the procedure only: no final fitting, numerical calibration or holdout evaluation is performed.
+
+Final holdouts must never influence architecture, ANOVA k, SVM parameters, novelty method, temporal window, metric definitions or threshold selection. Their results are **evaluation, not another tuning round**. The manifest freezes metric definitions and the development window policy; a future rolling latest-7 Raspberry buffer remains unimplemented. **`known_test` and `unknown_holdout` remain untouched.**
+
 ## Future work
 
 `LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.
 
 `LandmarkFeatureExtractor` flattens already identity-normalized points as `(x0, y0, z0, x1, y1, z1, ...)`, with three finite features per landmark. Capture does not invoke it.
 
-Remaining work: evaluate rejection-threshold transfer and reserved holdouts; consider correlation/grouped landmark selection and geometric features; validate dataset capture on Pi hardware; benchmark deployment accuracy and throughput. These are not implemented yet.
+Remaining work: refit/calibrate using the frozen development-only policy; freeze the trained pipeline and numeric threshold; then evaluate the reserved holdouts once. Later work includes the Raspberry live buffer and deployment benchmarking. Alternative feature/model experiments require a separate development version rather than tuning against final holdout results.
