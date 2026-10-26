@@ -654,6 +654,39 @@ The external atomic, no-overwrite JSON report includes model/configuration diges
 
 **Calibration performance is not final generalization performance.** Known calibration reused the training pool with exact neighbor self-exclusion; high calibration AUC/balanced accuracy describe an easier problem than a new known session. CLI/report labels keep calibration, development selection, final frame identity and final temporal open-set performance separate. A legitimately different model requires a new version and experimental protocol; do not use this holdout to tune `open_set_v1`. No real final results are documented here before manual execution.
 
+## V2 open-set diagnostic study
+
+**V1 is closed.** Its fitted model, numeric threshold, frozen configuration and final report remain immutable. The completed V1 evaluation found a much larger problem in rejection than in closed-set identity recognition. V2 studies cross-session rejection rather than reusing V1's optimistic training-pool calibration. This study reads the aggregate V1 final report as a baseline, with a SHA-256 provenance check; it never loads or updates V1 trained artifacts.
+
+Existing V1 data now have a new, explicit role: **V2 development**. The original `session_03` and the original unknown holdout identities (in the current experiment, `p008/p009/p015`) are no longer independent V2 holdouts. Membership always comes from the original split manifests, never from these example IDs. The completed V1 report binds the original split digest, and an exact catalog check rejects additional sessions or identities before feature loading. Do not extend these original manifests with future data.
+
+```powershell
+python -m face_recognition.presentation.cli.evaluate_v2_open_set_diagnostics `
+  --processed-root "..\face-recognition-data\data\processed" `
+  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
+  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
+  --v1-final-report "..\face-recognition-data\reports\final_open_set_evaluation_v1.json" `
+  --report "..\face-recognition-data\reports\v2_open_set_diagnostics_v1.json"
+```
+
+Three sequential ephemeral models retain **all_xyz_v1 → ANOVA-448 → StandardScaler → RBF SVC C=4, gamma=0.001, probability=False**. Fold A fits original sessions 01+02 and scores 03; B fits 01+03 and scores 02; C fits 02+03 and scores 01. Session names are derived from the original split. Every known frame receives exactly one out-of-session identity prediction. All ANOVA/scaler/SVM fitting, Euclidean 5-NN references and predicted-class centroids use only the two fit sessions. No classifier tuning occurs.
+
+Compare four higher-is-known scalar scores: **SVM top1**, **SVM margin**, **negative mean_5nn distance**, and **negative predicted-class centroid distance**. Each gets a global threshold. Top1 and mean_5nn also get **predicted-identity thresholds**: require at least **10 eligible known and 10 eligible calibration-unknown windows** for that predicted identity; otherwise mark its threshold unavailable and use the deterministic global fallback. Support and fallback usage are reported. This support rule is fixed, not optimized.
+
+For each known-session fold, rotate **one entire existing unknown identity out** of threshold calibration, in lexical identity order. All remaining unknown identities calibrate; the held-out identity evaluates FAR. No unknown frame-random split occurs. Known out-of-session observations both calibrate and describe the threshold, so their rejection metrics are **not independent threshold-validation estimates**. The unknown identity rotations provide an additional development check, not final generalization evidence.
+
+Each of the six rules uses non-overlapping windows **1/3/5/7**, ordered by sample index inside person/session/condition; incomplete tails are counted and discarded. Confidence uses the median. Identity uses plurality vote, then the sum of corresponding SVM decision scores over all frames, then deterministic class order. For windows 3/5/7 additionally test the natural **strict-majority gate** (2/3, 3/5, 4/7); failing it forces UNKNOWN. Calibration includes these forced rejections in its denominators. This yields **42 configurations**, without rolling windows or extra agreement grids.
+
+Threshold selection retains exact balanced accuracy, lower FAR, lower FRR, then higher threshold. Scalar-global rules also report diagnostic FAR caps 20%/10%/5%, flagging acceptance of at most 1% of known observations as impractical. Per-identity rules do not imply a single global operating-point curve. Reported AUC/EER describe the **raw median scalar score**, even for gated/identity-conditioned rules; they do not measure those additional decisions.
+
+The external atomic, no-overwrite JSON report separates **frame OOF closed-set confusion** from **window binary/open-set confusion**, with integer observation counts and row-normalized rates. Known windows repeat across unknown rotations: role-adjusted matrices divide known rows by the rotation count before calculating overall open-set accuracy and binary F1, preventing artificial prevalence inflation. Unknown windows recur under all three known-session models. Unique source/window counts and repeated observation counts are labeled separately. AUC/EER use unweighted means over known-session/held-unknown cells; operating rates pool observations within each role.
+
+Known-person and condition diagnostics expose FRR, correct/incorrect acceptance, source support and closed-set errors. Unknown condition diagnostics are aggregate only; rotations use numeric indices, not per-unknown-person scores. Score distributions distinguish correct known, incorrect known and unknown frames, with population standard deviation, linear percentiles and overlap summaries; empty groups have count zero and null statistics. The report contains no individual scores, vectors, raw records, real names or absolute paths. Optional figures are omitted so plotting adds no dependency.
+
+Ranking is fixed: higher mean raw-score AUC, lower EER, lower FAR, lower FRR, higher correct known identification, higher open-set accuracy, lower accepted misidentification, then simpler rule (global before per-identity, no gate before gate), smaller window, and strategy name for exact ties. No weighted selection score or performance tolerance is introduced. The first row is only the **best V2 development candidate**.
+
+**V2 is not frozen and no production model is persisted.** After inspecting these diagnostics, freeze V2 **before collecting/evaluating** a new known session (conceptually `session_04`) and completely new unknown participants. Approximately three new unknown identities preserves comparability with V1; more improves breadth, and three is not a statistical law. These future data must remain untouched until one-time final V2 evaluation. No real V2 results are documented here.
+
 ## Future work
 
 `LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.
