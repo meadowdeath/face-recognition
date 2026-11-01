@@ -378,8 +378,8 @@ scorers, temporal windows/voting, rejection metrics, ROC/EER analysis, artifact
 hashing and aggregate JSON publication remain available as primitives.
 
 These primitives do not select a V3 model or train a recognizer. The nested
-protocol below defines V3 data roles only; no V3 novelty algorithm or experiment
-has run. See [the cleanup inventory](docs/v3_archive_cleanup.md)
+protocol below defines V3 data roles. The novelty comparison implementation is
+available, but no real V3 evaluation has run. See [the cleanup inventory](docs/v3_archive_cleanup.md)
 for the removed workflows and retained dependency boundaries.
 
 `LandmarkNormalizer` and `LandmarkFeatureExtractor` keep their existing behavior.
@@ -478,3 +478,113 @@ same-size feature-file edits require later record/content validation. No absolut
 source paths, feature vectors, individual scores or predictions are persisted.
 
 There are no V3 model results yet.
+
+## V3 nested novelty-score comparison
+
+This experiment isolates novelty detection from identity classification. Identity
+is fixed to **all_xyz_v1 / 1434 inputs → SelectKBest(f_classif), k=448 →
+StandardScaler → RBF SVC C=4, gamma=0.001, probability=False**. SVC uses OVR
+decision scores, break_ties=False, cache_size=128 and random_state=42. The scaler
+keeps its normal centering/scaling/copy behavior. There is no feature-count or
+classifier search and no change to normalization or XYZ ordering.
+
+Exactly four higher-is-KNOWN scores are compared:
+
+| Candidate | Frame knownness score |
+| --- | --- |
+| `svm_top1` (control) | Maximum class-ordered SVM decision score |
+| `svm_margin` | Largest minus second-largest SVM decision score |
+| `centroid_distance` | Negative Euclidean distance to the **SVM-predicted** identity's fit-only centroid |
+| `mahalanobis_distance` | Negative Mahalanobis distance to the **SVM-predicted** identity's fit-only distribution |
+
+Mahalanobis references use per-class sklearn LedoitWolf covariance with
+assume_centered=False and store_precision=False. Add a deterministic ridge
+`1e-8 * max(1, trace(covariance)/dimension)` and use Cholesky solves, without an
+unregularized sample-covariance inverse. The ridge covers completely constant
+classes as well as high-dimensional/singular fits. No class centroid, covariance
+or preprocessing step sees UNKNOWN or held-out known-session fitting data.
+No combined score or additional novelty candidate is evaluated.
+
+Every method uses **non-overlapping windows of 7**, inside person/session/condition,
+ordered by sample index. Incomplete tails are counted and discarded. Confidence
+is the median of all seven frame scores; identity uses the retained plurality
+vote, all-frame decision-score sum for ties, then deterministic class order.
+There is no consistency gate or window-size search. Closed-set KNOWN frame
+metrics include trailing frames independently of rejection.
+
+The existing protocol is authoritative. For each of its 18 inner splits, fit
+preprocessing/SVM/references on the one KNOWN fit session; calibrate each method
+on the separate KNOWN calibration session and four UNKNOWN calibration identities;
+then validate at that unchanged threshold on the third KNOWN session and two
+disjoint UNKNOWN validation identities. Threshold search enumerates unique scores,
+finite interior midpoints and finite accept-all/reject-all boundaries. Acceptance
+uses `score >= threshold`. Select higher exact integer balanced-accuracy numerator,
+then lower FAR, lower FRR, then **higher numeric threshold**. AUC/EER remain
+diagnostics and never replace an operational threshold.
+
+Select one method per outer fold by **higher mean inner-validation balanced
+accuracy**, lower mean FAR, lower mean FRR, higher mean AUC, then the table's
+candidate order. Inner means weight the 18 splits equally. Inner comparisons are
+development evidence, not independent final performance.
+
+Before the outer refit, construct a threshold from **inner calibration windows
+only**. For a physical `(person, session, condition, seven sample indices)` window,
+deduplicate repeated observations from the same fit-session model, then take the
+median score across distinct fit models. This happens **after** each model's
+window-7 median. KNOWN windows contribute two distinct session-held-out models;
+UNKNOWN windows contribute three. Repeated rotations produce six raw observations
+per KNOWN window and twelve per UNKNOWN window, but each physical window enters
+the final threshold search **once**. Reports distinguish raw, distinct-model and
+unique physical-window counts. Pooling does not invent cross-model identity votes:
+its calibration metrics are binary only. Do not average the 18 inner thresholds.
+
+Refit the fixed identity pipeline and selected score references on all three
+KNOWN outer-development sessions. Transfer the pooled threshold **directly and
+unchanged**. Development-only diagnostics compare cross-fitted and final-model
+KNOWN/UNKNOWN window distributions, mean/median shifts and acceptance-rate shifts.
+A final development median outside cross-fitted p10/p90 raises a descriptive
+warning; it does not change the method, normalize scores, recalibrate or reject a
+result. KNOWN final-model development scores are explicitly **training
+resubstitution diagnostics**, not generalization or threshold-calibration data.
+Direct score-scale transfer is an assumption tested by the outer results, not a
+guarantee. No outer-test value performs alignment or threshold selection.
+
+Only after selection and threshold construction is the outer test scored once.
+It reports closed-set identity accuracy/macro precision/recall/F1, temporal
+acceptance/rejection, FAR/FRR, correct/incorrect accepted identity rates, exact
+open-set accuracy, binary metrics and diagnostic AUC/EER. Report unweighted outer
+fold means/population standard deviations, including **fold-level** AUC/EER;
+do not pool raw outer scores from different models or score families. **The four
+outer folds are V3's nested-CV generalization estimate. V3 has no independent
+untouched final holdout; V2 remains the last version with one.**
+
+```powershell
+python -m face_recognition.presentation.cli.evaluate_v3_novelty `
+  --processed-root "..\face-recognition-data\v3\processed" `
+  --protocol "..\face-recognition-data\v3\splits\cv_protocol_v1.json" `
+  --report "..\face-recognition-data\v3\reports\novelty_comparison_v1.json"
+```
+
+The command refuses an existing report before payload/model work. It validates
+the protocol digests/regenerated roles and exact current catalog/processing
+manifest before decoding payloads into one read-only float32 matrix. All records
+must have 1434 finite values, correct identity/session/condition provenance,
+contiguous ordered indices and increasing timestamps; session dimensions and
+aggregate declared sample counts must agree. Payload bytes are fingerprinted
+while decoding. File timestamps/catalog and protocol bytes are checked again
+before publication. Integrity validation includes outer-test files, but their
+values are not supplied to inner fitting, calibration or selection.
+
+Execution is sequential with one native thread. Identical inner fit populations
+reuse cached inference keyed by protocol/content digests, outer fold, exact fit
+sessions and full fixed configuration. Three inner models are fitted per outer
+fold, then released after scoring; thresholds are **never** cached across
+calibration populations. One final outer model is fitted afterward. No trained
+model or reference parameters are persisted. The external JSON is atomic,
+no-overwrite and aggregate-only: provenance, configuration, inner summaries and
+results, outer metrics, pooling/transport diagnostics and selection frequencies.
+It contains no feature vectors, per-sample scores/predictions, centroids,
+covariances, support vectors or absolute source paths. Elapsed times are omitted
+so identical inputs produce deterministic report JSON in the same environment.
+
+No real V3 novelty-comparison results have been recorded yet.
