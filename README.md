@@ -379,7 +379,8 @@ hashing and aggregate JSON publication remain available as primitives.
 
 These primitives do not select a V3 model or train a recognizer. The nested
 protocol below defines V3 data roles. The novelty comparison implementation is
-available, but no real V3 evaluation has run. See [the cleanup inventory](docs/v3_archive_cleanup.md)
+available and the initial comparison has completed. The same-model calibration
+refinement below has not yet run on real data. See [the cleanup inventory](docs/v3_archive_cleanup.md)
 for the removed workflows and retained dependency boundaries.
 
 `LandmarkNormalizer` and `LandmarkFeatureExtractor` keep their existing behavior.
@@ -477,7 +478,7 @@ metadata. These are **metadata fingerprints, not biometric payload hashes**:
 same-size feature-file edits require later record/content validation. No absolute
 source paths, feature vectors, individual scores or predictions are persisted.
 
-There are no V3 model results yet.
+The protocol defines data roles only; execution is described below.
 
 ## V3 nested novelty-score comparison
 
@@ -587,4 +588,84 @@ It contains no feature vectors, per-sample scores/predictions, centroids,
 covariances, support vectors or absolute source paths. Elapsed times are omitted
 so identical inputs produce deterministic report JSON in the same environment.
 
-No real V3 novelty-comparison results have been recorded yet.
+The initial comparison completed and its external `novelty_comparison_v1.json`
+must remain immutable. It selected Mahalanobis in all four outer folds, and all
+four reported threshold-transport shift warnings. These observations motivate the
+structural calibration refinement below, not another novelty-method search.
+
+## V3 same-model Mahalanobis calibration refinement
+
+This is **V3 threshold-calibration refinement under cross-validation**. The
+initial outer-CV results have already been inspected and motivated the revision;
+it is **not a pristine untouched final evaluation or independent final
+generalization estimate**. V3 has no additional untouched holdout. V2 remains
+the last independent external holdout experiment.
+
+Mahalanobis is now fixed. The all_xyz_v1/1434 → ANOVA-448 → StandardScaler →
+RBF SVC C=4, gamma=0.001, probability=False pipeline, existing regularized
+Mahalanobis implementation, non-overlapping window 7, median confidence,
+plurality/tie rules and disabled consistency gate are unchanged. No alternative
+novelty methods or inner strategy search run in this study.
+
+The existing protocol continues to authorize identities, sessions, catalog and
+outer tests. Derive a new calibration role cyclically: the next session after
+the outer-test session in the globally ordered specification calibrates; the
+other two development sessions fit. For the current session names:
+
+| Outer fold | KNOWN fit sessions | KNOWN calibration | KNOWN test |
+| --- | --- | --- | --- |
+| outer_01 | session_03, session_04 | session_02 | session_01 |
+| outer_02 | session_01, session_04 | session_03 | session_02 |
+| outer_03 | session_01, session_02 | session_04 | session_03 |
+| outer_04 | session_02, session_03 | session_01 | session_04 |
+
+The table is derived, not hardcoded: each known session is test once, calibration
+once and fit twice. **All six outer-development UNKNOWN identities**, with both
+sessions, calibrate; the two outer-test UNKNOWN identities remain excluded.
+Only the two KNOWN fit sessions fit the selector, scaler, SVM and class
+distributions. UNKNOWN observations never fit a component.
+
+Fit **one model per outer fold**, then freeze it before scoring calibration data.
+Calibrate a single threshold on window-7 median Mahalanobis knownness scores from
+the designated KNOWN session and UNKNOWN development identities. Reuse the exact
+search: maximize binary balanced accuracy, then lower FAR, lower FRR, then higher
+numeric threshold, over observed values, finite interior midpoints and finite
+boundary cases. ROC AUC/EER are diagnostics and never replace this threshold.
+
+**Do not refit anything after calibration.** The exact same selector, scaler,
+SVM and covariance references score outer test at the calibrated threshold.
+The sealed fold session checks fit-generation count, component identities and
+an in-memory learned-state SHA-256 before/after scoring. It exposes no refit API,
+permits one calibration and one test query per population role, and freezes the
+threshold once. State fingerprinting streams serialization bytes into a digest;
+no fitted parameters or model file are written. Reports explicitly record
+`threshold_transport = "none_same_model_calibration"`, one fit per fold and
+unchanged model-state digests.
+
+```powershell
+python -m face_recognition.presentation.cli.evaluate_v3_mahalanobis_calibration `
+  --processed-root "..\face-recognition-data\v3\processed" `
+  --protocol "..\face-recognition-data\v3\splits\cv_protocol_v1.json" `
+  --selection-report "..\face-recognition-data\v3\reports\novelty_comparison_v1.json" `
+  --report "..\face-recognition-data\v3\reports\mahalanobis_calibration_v1.json"
+```
+
+The required selection report supplies **method-selection provenance only**:
+validate protocol/catalog, fixed configuration, four Mahalanobis selections and
+source population metadata before payload/model work. Its payload digest must
+match the strict V3 loader's current source bytes. Prior outer thresholds and
+performance metrics are not calibration inputs. The original report and
+protocol remain read-only and are fingerprinted again before publication.
+
+The strict loader, input integrity checks and atomic external no-overwrite
+publication are reused. Outer payloads are validated up front for integrity but
+never enter fitting or calibration populations. A new aggregate-only report
+records cyclic roles, calibration UNKNOWN IDs, calibration metrics and thresholds,
+closed-set/open-set outer metrics, AUC/EER, frame/window/discard counts and
+no-refit evidence. Four-fold means/population std and FAR/FRR min/max preserve
+fold-level results; raw score distributions are never pooled across folds.
+There are no feature vectors, per-sample scores/predictions, covariance matrices,
+support vectors, real names or absolute source paths in the report. There is no
+overwrite/force option or production-model persistence.
+
+No real same-model calibration performance results have been recorded yet.
