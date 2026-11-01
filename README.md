@@ -4,6 +4,8 @@ Layered Python project for facial landmark detection now and experimental identi
 
 **Current milestone:** OpenCV webcam or Picamera2 camera → asynchronous MediaPipe Tasks Face Landmarker → OpenCV window, native DRM preview, or console benchmark metrics. Press `q` in the OpenCV window or Ctrl+C to quit. Face detection and landmarks do not identify a person.
 
+**Offline experiment status:** V1 and V2 have completed independent final evaluation and are experimentally closed. See [completed V2 final results](#completed-v2-independent-final-holdout-results). Final results must not be used to retune either model version.
+
 ## Stack and architecture
 
 **Python 3.11 is the only currently supported Python version** (`>=3.11,<3.12`). The dependencies are NumPy 1.26.4, opencv-contrib-python 4.10.0.84, MediaPipe 0.10.14, protobuf 4.25.9, and scikit-learn 1.7.2. The same versions are pinned in `pyproject.toml` and `requirements.txt`; `requirements-rpi.txt` includes those shared requirements.
@@ -685,7 +687,7 @@ Known-person and condition diagnostics expose FRR, correct/incorrect acceptance,
 
 Ranking is fixed: higher mean raw-score AUC, lower EER, lower FAR, lower FRR, higher correct known identification, higher open-set accuracy, lower accepted misidentification, then simpler rule (global before per-identity, no gate before gate), smaller window, and strategy name for exact ties. No weighted selection score or performance tolerance is introduced. The first row is only the **best V2 development candidate**.
 
-**The diagnostic command leaves V2 unfrozen and persists no production model.** The separate freeze step below establishes the experimental boundary **before collecting/evaluating** a new known session (conceptually `session_04`) and completely new unknown participants. Approximately three new unknown identities preserves comparability with V1; more improves breadth, and three is not a statistical law. These future data must remain untouched until one-time final V2 evaluation. No real V2 results are documented here.
+**The diagnostic command leaves V2 unfrozen and persists no production model.** The separate freeze step below established the experimental boundary **before collecting/evaluating** a new known session (`session_04`) and completely new unknown participants. Approximately three new unknown identities preserves comparability with V1; more improves breadth, and three is not a statistical law. Those data remained untouched until the completed one-time final V2 evaluation recorded below.
 
 ## Freezing V2 before new final-test collection
 
@@ -713,7 +715,7 @@ The frozen **future numeric-threshold procedure** is cross-session OOF calibrati
 
 The final all-session SVM may have a shifted score scale: OOF calibration and full refitting are intentionally distinct. This limitation must be assessed before collecting/accessing future final data, never corrected using their outcomes. The future model and numeric threshold must both be persisted and immutable before final-test collection/evaluation.
 
-**V2 configuration is frozen; its final model and numeric threshold are not yet produced, and V2 final evaluation has not occurred.** Independent final data must be new: a known session conceptually `session_04`, plus UNKNOWN participants absent from V2 development. Approximately three new UNKNOWN identities preserves V1 comparability; more is welcome, and three is not an algorithm requirement. New data must not influence feature selection, SVM settings, rejection method, temporal policy or threshold calibration. Development results are not final generalization results. Different choices after this boundary require a new version and explicit experimental reasoning.
+**At the configuration-freeze boundary, the final model and numeric threshold had not yet been produced and final evaluation had not occurred.** Independent final data were required to be new: a known session (`session_04`), plus UNKNOWN participants absent from V2 development. Approximately three new UNKNOWN identities preserves V1 comparability; more improves breadth, and three is not an algorithm requirement. The subsequent refit and completed final results are recorded below. Final data must not influence feature selection, SVM settings, rejection method, temporal policy or threshold calibration. Development results are not final generalization results. Different choices after this boundary require a new version and explicit experimental reasoning.
 
 ## Frozen V2 refit and cross-session threshold calibration
 
@@ -740,7 +742,7 @@ Successful publication creates only `manifest.json`, `feature_selector.joblib`, 
 
 The aggregate manifest/threshold JSON includes three-fold distributions and threshold stability, pooled calibration metrics, transfer checks, class mapping needed for inference, source/frozen-report provenance and artifact hashes. It contains no individual scores, features, source sample IDs or absolute paths. Existing `.gitignore` protections remain sufficient; all outputs must stay external.
 
-**V2 final evaluation has not occurred.** Only after this workflow succeeds and the fitted model/threshold are persisted and immutable may new independent known-session/UNKNOWN data be collected and evaluated. They must not change this model or its threshold. No real refit or final-test results are documented here.
+**The refit workflow ended before final evaluation.** The fitted model and numeric threshold were persisted and made immutable before independent known-session/UNKNOWN data were evaluated. Those final data must not change this model or its threshold. The completed final evaluation is recorded below; its results are separate from development calibration.
 
 ## Independent final V2 holdout evaluation
 
@@ -763,7 +765,7 @@ Use the same command with **`--validate-only`** to validate the existing output 
 
 The manifest binds exact config/development-report/model-manifest/processing-manifest digests and development split provenance, with deterministic role/file ordering. Its status is **catalog_validated**, not a claim that record contents were inspected. Features share JSONL records with their metadata, so record width (1434), finite scalars, timestamps, sample indices, image dimensions and provenance are validated by the shared decoders **after catalog authorization and before any inference**. All records must pass; malformed data are never skipped. This two-phase boundary keeps manifest creation metadata-only.
 
-After catalog validation, execute the following **ONCE** for the immutable fitted model:
+The following command documents the **completed one-time evaluation** of the immutable fitted model. Do not rerun it to select a different model, threshold or operating point:
 
 ```powershell
 python -m face_recognition.presentation.cli.evaluate_final_v2_open_set `
@@ -781,7 +783,60 @@ This command cross-checks the development report against the frozen configuratio
 
 The report separates final KNOWN frame-level closed-set metrics/confusion/per-class support from final temporal open-set FAR/FRR, acceptance/rejection, correct/misidentified known acceptance, exact accuracy and binary metrics. It also includes used/discarded counts, condition aggregates, vote stability, aggregate score distributions and descriptive differences from frozen development evidence. ROC AUC/EER are final separability diagnostics; the EER cutpoint **never replaces the persisted threshold**. Development selection and OOF calibration metrics remain labeled separately from independent final generalization.
 
-Final report publication is atomic, external and refuses every existing destination before any final payload access; model fingerprints are checked again before writing. The report contains digests, aggregate metrics and pseudonymous labels only where needed for known identity confusion, with no feature vectors, sample predictions/scores, unknown-person diagnostics or absolute source paths. No model, source data, split, frozen config or development report is modified. **Final V2 results must not be used to retune this model version.** There is no automatic tuning or model replacement after evaluation, and no real final V2 metrics are documented here before manual execution.
+Final report publication is atomic, external and refuses every existing destination before any final payload access; model fingerprints are checked again before writing. The report contains digests, aggregate metrics and pseudonymous labels only where needed for known identity confusion, with no feature vectors, sample predictions/scores, unknown-person diagnostics or absolute source paths. No model, source data, split, frozen config or development report is modified. **Final V2 results must not be used to retune this model version.** There is no automatic tuning or model replacement after evaluation. The completed aggregate results follow.
+
+## Completed V2 independent final holdout results
+
+**These are independent final generalization results. V2 is now experimentally closed.** The final KNOWN session and new UNKNOWN identities were not used for training, feature selection, scaling, classifier fitting, rejection selection, threshold calibration or temporal/model selection. The architecture and numeric threshold were frozen before final evaluation.
+
+| Final population | Identities | Sessions | Frames |
+| --- | ---: | ---: | ---: |
+| KNOWN | 10 | 10 | 2600 |
+| UNKNOWN | 3 | 6 | 1560 |
+
+The immutable identity pipeline was **`all_xyz_v1` (1434 input features) → ANOVA `SelectKBest(f_classif)`, k=448 → StandardScaler → RBF SVC**, with **C=4**, **gamma=0.001** and **probability=False**. Rejection used **`svm_top1` with one global frozen threshold of `9.30272696145`**, with higher scores meaning KNOWN. Temporal decisions used **window 7**, **median score aggregation**, **majority/plurality identity voting**, and **no consistency rejection gate**. Voting ties retained the summed corresponding SVM decision-score rule, then deterministic class order. Windows were non-overlapping within identity/session/condition, with incomplete tails discarded.
+
+Closed-set identity metrics use all final KNOWN **frames before rejection**:
+
+| Final closed-set metric | Value |
+| --- | ---: |
+| Accuracy | 0.878462 |
+| Macro precision | 0.885321 |
+| Macro recall | 0.878462 |
+| Macro F1 | 0.876944 |
+
+Temporal open-set operational metrics use the **unchanged persisted threshold**:
+
+| Final temporal open-set metric | Value |
+| --- | ---: |
+| KNOWN windows | 260 |
+| UNKNOWN windows | 156 |
+| ROC AUC (diagnostic) | 0.727761 |
+| EER (diagnostic) | 0.332051 |
+| UNKNOWN false-acceptance rate (FAR) | 0.416667 |
+| KNOWN false-rejection rate (FRR) | 0.280769 |
+| KNOWN acceptance rate | 0.719231 |
+| UNKNOWN rejection rate | 0.583333 |
+| Correct KNOWN identification rate | 0.688462 |
+| Accepted-KNOWN misidentification rate | 0.030769 |
+| Open-set exact accuracy | 0.649038 |
+| Binary balanced accuracy | 0.651282 |
+| Binary macro F1 | 0.649609 |
+
+FAR is the fraction of UNKNOWN windows accepted as KNOWN; FRR is the fraction of KNOWN windows rejected as UNKNOWN. Correct KNOWN identification requires both acceptance and the correct identity. Open-set exact accuracy counts accepted, correctly identified KNOWN windows plus rejected UNKNOWN windows over all windows. ROC AUC and EER describe final separation only; their diagnostic cutpoints must not replace the frozen threshold.
+
+Development selection and OOF calibration remain distinct from these final results:
+
+| Metric | V2 development selection | Independent final | Final minus development |
+| --- | ---: | ---: | ---: |
+| ROC AUC | 0.846953 | 0.727761 | -0.119191 |
+| Open-set accuracy | 0.774231 | 0.649038 | -0.125192 |
+
+The separate **OOF calibration** achieved **ROC AUC=0.846323** and **binary balanced accuracy=0.788462**. These are development threshold-calibration measurements, not independent final generalization performance. Displayed metrics are rounded; deltas are retained from the evaluation output. Comparisons and deltas are descriptive only.
+
+The final data showed a **substantial generalization gap, especially for UNKNOWN rejection**. Compared with V1, V2 reduced KNOWN false rejection (**FRR 0.450000 → 0.280769**) but increased false acceptance on new UNKNOWN identities (**FAR 0.198718 → 0.416667**). This false-acceptance rate is **unacceptably high for the intended attendance application**; useful closed-set identity recognition does not establish adequate open-set rejection.
+
+**Do not retune V2 using these results.** Its model, threshold, configuration and final report remain immutable. Any future change to normalization, features, novelty/rejection detection, threshold policy, classifier or temporal decision policy must be treated as a **new model version with a new experimental protocol**, rather than a correction to V2 based on its final holdout.
 
 ## Future work
 
@@ -789,4 +844,4 @@ Final report publication is atomic, external and refuses every existing destinat
 
 `LandmarkFeatureExtractor` flattens already identity-normalized points as `(x0, y0, z0, x1, y1, z1, ...)`, with three finite features per landmark. Capture does not invoke it.
 
-After manually executing and preserving the one-time final report, later work includes the Raspberry live buffer and deployment benchmarking. Alternative feature/model experiments require a separate development version and protocol rather than tuning against this final holdout.
+V1 and V2 final reports are now completed experimental records. Later Raspberry live-buffer or deployment benchmarking must not be presented as evidence that V2's UNKNOWN rejection is adequate. Further normalization, feature, novelty-detection, threshold-policy or classifier experiments require a new model version and protocol; the completed V2 holdout must not become a retuning loop for V2.
