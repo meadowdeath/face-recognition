@@ -742,6 +742,47 @@ The aggregate manifest/threshold JSON includes three-fold distributions and thre
 
 **V2 final evaluation has not occurred.** Only after this workflow succeeds and the fitted model/threshold are persisted and immutable may new independent known-session/UNKNOWN data be collected and evaluated. They must not change this model or its threshold. No real refit or final-test results are documented here.
 
+## Independent final V2 holdout evaluation
+
+The V1 final workflow remains unchanged. Its `KNOWN_TEST`/`UNKNOWN_POOL` sample references cannot authorize V2's newly collected sessions and identities. Keep **`identity_split_v1.json` and `unknown_rejection_split_v1.json` unchanged**: they define the development population against which final independence is checked. A separate external `final_holdout_v2.json` declares the final KNOWN/UNKNOWN person/session pairs and complete condition-file catalog. It contains no feature vectors or predictions.
+
+Create that manifest from catalog/aggregate metadata only:
+
+```powershell
+python -m face_recognition.presentation.cli.create_final_v2_holdout `
+  --processed-root "..\face-recognition-data\final_holdout_v2\processed" `
+  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
+  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
+  --model-dir "..\face-recognition-data\models\open_set_v2" `
+  --frozen-config "..\face-recognition-data\models\open_set_config_v2.json" `
+  --development-report "..\face-recognition-data\reports\v2_open_set_diagnostics_v1.json" `
+  --output "..\face-recognition-data\splits\final_holdout_v2.json"
+```
+
+Use the same command with **`--validate-only`** to validate the existing output without modifying it. Creation refuses overwrite. Both modes read only split/config/report/model metadata, model hashes, directory names and the completed `all_xyz_v1/processing_manifest.json`; **no JSONL file is opened and no estimator is deserialized**. KNOWN membership derives from the frozen class mapping, every class must be present, known sessions must be new for that person, and UNKNOWN identities must be absent from *all* development roles. No person/session/condition may be omitted or silently ignored. IDs, session names, cohort sizes and samples per condition are not algorithm constants.
+
+The manifest binds exact config/development-report/model-manifest/processing-manifest digests and development split provenance, with deterministic role/file ordering. Its status is **catalog_validated**, not a claim that record contents were inspected. Features share JSONL records with their metadata, so record width (1434), finite scalars, timestamps, sample indices, image dimensions and provenance are validated by the shared decoders **after catalog authorization and before any inference**. All records must pass; malformed data are never skipped. This two-phase boundary keeps manifest creation metadata-only.
+
+After catalog validation, execute the following **ONCE** for the immutable fitted model:
+
+```powershell
+python -m face_recognition.presentation.cli.evaluate_final_v2_open_set `
+  --processed-root "..\face-recognition-data\final_holdout_v2\processed" `
+  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
+  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
+  --final-holdout "..\face-recognition-data\splits\final_holdout_v2.json" `
+  --model-dir "..\face-recognition-data\models\open_set_v2" `
+  --frozen-config "..\face-recognition-data\models\open_set_config_v2.json" `
+  --development-report "..\face-recognition-data\reports\v2_open_set_diagnostics_v1.json" `
+  --report "..\face-recognition-data\reports\final_open_set_evaluation_v2.json"
+```
+
+This command cross-checks the development report against the frozen configuration and original split metadata, verifies model artifact hashes and fitted dimensions/classes, and fingerprints every model file immediately before final feature loading and after evaluation. It transforms/predicts with the **persisted selector, scaler and SVM only**. There is no fitting, calibration, operational threshold search, parameter override or force option. The unchanged persisted global threshold applies to median `svm_top1` confidence in non-overlapping windows of 7 within identity/session/condition. Trailing remainders are discarded; plurality voting and score-sum/class-order ties remain fixed, with no consistency gate.
+
+The report separates final KNOWN frame-level closed-set metrics/confusion/per-class support from final temporal open-set FAR/FRR, acceptance/rejection, correct/misidentified known acceptance, exact accuracy and binary metrics. It also includes used/discarded counts, condition aggregates, vote stability, aggregate score distributions and descriptive differences from frozen development evidence. ROC AUC/EER are final separability diagnostics; the EER cutpoint **never replaces the persisted threshold**. Development selection and OOF calibration metrics remain labeled separately from independent final generalization.
+
+Final report publication is atomic, external and refuses every existing destination before any final payload access; model fingerprints are checked again before writing. The report contains digests, aggregate metrics and pseudonymous labels only where needed for known identity confusion, with no feature vectors, sample predictions/scores, unknown-person diagnostics or absolute source paths. No model, source data, split, frozen config or development report is modified. **Final V2 results must not be used to retune this model version.** There is no automatic tuning or model replacement after evaluation, and no real final V2 metrics are documented here before manual execution.
+
 ## Future work
 
 `LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.

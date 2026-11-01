@@ -26,6 +26,35 @@ from face_recognition.infrastructure.persistence.v2_open_set_config_repository i
 V2_ARTIFACTS = ("feature_selector.joblib", "scaler.joblib", "identity_svm.joblib", "threshold.json")
 
 
+def v2_model_fingerprints(path):
+    """Read-only fingerprints, including completion metadata; no deserialization."""
+    try:
+        root = Path(path).resolve()
+        names = ("manifest.json", *V2_ARTIFACTS)
+        if (Path(path).is_symlink() or {p.name for p in root.iterdir()} != set(names)
+                or any((root / name).is_symlink() or not (root / name).is_file() for name in names)):
+            raise ValueError
+        return tuple((name, _hash(root / name)) for name in names)
+    except Exception:
+        raise OpenSetModelError("Cannot fingerprint complete local V2 model artifacts") from None
+
+
+def read_v2_model_metadata(path, config, config_sha256):
+    """Validate aggregate model/threshold metadata and all hashes, never unpickle."""
+    try:
+        before = v2_model_fingerprints(path)
+        root = Path(path).resolve()
+        manifest = _read_json(root / "manifest.json")
+        snapshot = _validate_metadata(manifest, config, config_sha256)
+        if (any(manifest["artifacts"][name]["sha256"] != dict(before)[name] for name in V2_ARTIFACTS)
+                or _read_json(root / "threshold.json") != _threshold_payload(manifest, snapshot)
+                or v2_model_fingerprints(path) != before):
+            raise ValueError
+        return manifest, before
+    except Exception:
+        raise OpenSetModelError("Invalid or changed V2 model metadata/artifact hashes") from None
+
+
 def _threshold_payload(manifest, snapshot):
     a = snapshot["architecture"]
     return {"schema_version": 1, "frozen_config_sha256": manifest["frozen_config_sha256"],
