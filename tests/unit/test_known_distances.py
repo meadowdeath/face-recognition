@@ -4,7 +4,7 @@ from unittest.mock import patch
 import numpy as np
 from sklearn.metrics.pairwise import euclidean_distances
 
-from face_recognition.application.unknown_rejection_split import UnknownRejectionError
+from face_recognition.domain.models.rejection import RejectionError
 from face_recognition.infrastructure.features.known_distances import KnownDistanceScorer
 
 
@@ -53,28 +53,28 @@ class KnownDistanceTests(unittest.TestCase):
 
     def test_insufficient_reference_samples_rejected_for_joint_experiment(self):
         for count in (1, 2, 3, 4):
-            with self.assertRaisesRegex(UnknownRejectionError, "At least 5 known fit reference"):
+            with self.assertRaisesRegex(RejectionError, "At least 5 known fit reference"):
                 KnownDistanceScorer().fit(self.X[:count], self.y[:count], 2)
 
     def test_invalid_fit_query_or_batch_size_rejected_without_values(self):
         for size in (0, 129, True, 1.5):
-            with self.assertRaises(UnknownRejectionError):
+            with self.assertRaises(RejectionError):
                 KnownDistanceScorer(batch_size=size)
         for invalid in (np.nan, np.inf, -np.inf):
             X = self.X.copy()
             X[0, 0] = invalid
-            with self.assertRaises(UnknownRejectionError):
+            with self.assertRaises(RejectionError):
                 KnownDistanceScorer().fit(X, self.y, 2)
-            with self.assertRaises(UnknownRejectionError):
+            with self.assertRaises(RejectionError):
                 KnownDistanceScorer().fit(self.X, self.y, 2).score(X)
-        with self.assertRaises(UnknownRejectionError):
+        with self.assertRaises(RejectionError):
             KnownDistanceScorer().score(self.X)
         scorer = KnownDistanceScorer().fit(self.X, self.y, 2)
         for query in (np.ones((2, 3)), np.empty((0, 2)), np.array([["PRIVATE", "VALUE"]])):
-            with self.assertRaises(UnknownRejectionError) as caught:
+            with self.assertRaises(RejectionError) as caught:
                 scorer.score(query)
             self.assertNotIn("PRIVATE", str(caught.exception))
-        with self.assertRaises(UnknownRejectionError):
+        with self.assertRaises(RejectionError):
             KnownDistanceScorer().fit(self.X, np.zeros(6, dtype=int), 2)
 
     def test_reference_owned_readonly_and_input_not_mutated(self):
@@ -104,7 +104,7 @@ class KnownDistanceTests(unittest.TestCase):
 
     def test_only_nonempty_unique_subsets_of_existing_neighbor_counts_are_allowed(self):
         for counts in ((), (2,), (7,), (1, 1), (True,), (1, 3, 5, 9)):
-            with self.assertRaises(UnknownRejectionError):
+            with self.assertRaises(RejectionError):
                 KnownDistanceScorer(neighbor_counts=counts)
         scorer = KnownDistanceScorer(neighbor_counts=(1,)).fit(self.X[:2], np.array([0, 1]), 2)
         self.assertEqual(tuple(name for name, _ in scorer.score(self.X[:1]).confidence), ("nearest_1",))

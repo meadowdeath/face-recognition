@@ -3,8 +3,8 @@ import unittest
 import numpy as np
 
 from face_recognition.application.rejection_metrics import calibrate_threshold, decision_margin, evaluate_threshold
-from face_recognition.application.unknown_rejection_split import UnknownRejectionError
-from face_recognition.domain.models.rejection_score_evaluation import CENTROID_SCALE_EPSILON
+from face_recognition.domain.models.rejection import RejectionError
+from face_recognition.domain.models.score_analysis import CENTROID_SCALE_EPSILON
 from face_recognition.infrastructure.features.rejection_scores import PredictedClassCentroidScorer, decision_top1
 
 
@@ -17,7 +17,7 @@ class RejectionScoreTests(unittest.TestCase):
 
     def test_top1_rejects_nonfinite_and_invalid_score_columns(self):
         for values in (np.ones((2, 1)), np.ones(2), np.array([[1, np.nan]]), np.array([[np.inf, 1]])):
-            with self.assertRaises(UnknownRejectionError):
+            with self.assertRaises(RejectionError):
                 decision_top1(values)
 
     def test_centroids_and_class_median_scales_use_true_fit_labels(self):
@@ -54,16 +54,16 @@ class RejectionScoreTests(unittest.TestCase):
         self.assertTrue(before == X.tobytes())
 
     def test_invalid_centroid_data_predicted_labels_and_unfitted_usage_fail(self):
-        with self.assertRaises(UnknownRejectionError):
+        with self.assertRaises(RejectionError):
             PredictedClassCentroidScorer().score(np.ones((1, 1)), np.array([0]))
         for X, y in ((np.array([[np.nan], [1.]]), np.array([0, 1])),
                      (np.ones((2, 1)), np.array([0, 0])), (np.ones((2, 1)), np.array([0., 1.]))):
-            with self.assertRaises(UnknownRejectionError):
+            with self.assertRaises(RejectionError):
                 PredictedClassCentroidScorer().fit(X, y, 2)
         scorer = PredictedClassCentroidScorer().fit(np.array([[0.], [1.]]), np.array([0, 1]), 2)
         for X, predicted in ((np.array([[np.inf]]), np.array([0])), (np.ones((1, 1)), np.array([2])),
                              (np.ones((1, 2)), np.array([0]))):
-            with self.assertRaises(UnknownRejectionError):
+            with self.assertRaises(RejectionError):
                 scorer.score(X, predicted)
 
     def test_signed_distance_thresholds_and_original_margin_defaults(self):
@@ -74,7 +74,7 @@ class RejectionScoreTests(unittest.TestCase):
         self.assertEqual(result.metrics.binary_balanced_accuracy, 1)
         self.assertEqual(result.metrics.known_correct_identification_rate, .5)
         self.assertEqual(result.metrics.known_misidentification_rate, .5)
-        with self.assertRaises(UnknownRejectionError):
+        with self.assertRaises(RejectionError):
             calibrate_threshold(known, correct, unknown)
         positive_known, positive_unknown = np.array([.9, .8]), np.array([.1, .2])
         self.assertEqual(calibrate_threshold(positive_known, correct, positive_unknown),

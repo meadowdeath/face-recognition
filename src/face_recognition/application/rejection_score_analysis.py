@@ -3,8 +3,8 @@
 import numpy as np
 
 from face_recognition.application.rejection_metrics import calibrate_threshold, threshold_points
-from face_recognition.application.unknown_rejection_split import UnknownRejectionError
-from face_recognition.domain.models.rejection_score_evaluation import (
+from face_recognition.domain.models.rejection import RejectionError
+from face_recognition.domain.models.score_analysis import (
     FAR_TARGETS, EqualErrorPoint, FarOperatingPoint, ScoreAnalysis, ScoreDistribution, ScoreSeparation,
 )
 
@@ -12,7 +12,7 @@ from face_recognition.domain.models.rejection_score_evaluation import (
 def _scores(values: np.ndarray) -> np.ndarray:
     values = np.asarray(values, dtype=np.float64)
     if values.ndim != 1 or not len(values) or not np.isfinite(values).all():
-        raise UnknownRejectionError("Confidence scores must be a finite nonempty vector")
+        raise RejectionError("Confidence scores must be a finite nonempty vector")
     return values
 
 

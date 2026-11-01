@@ -6,7 +6,7 @@ from sklearn.metrics import roc_auc_score
 
 from face_recognition.application.rejection_metrics import calibrate_threshold, evaluate_threshold, threshold_candidates
 from face_recognition.application.rejection_score_analysis import analyze_scores, roc_auc_known_positive, score_distribution
-from face_recognition.application.unknown_rejection_split import UnknownRejectionError
+from face_recognition.domain.models.rejection import RejectionError
 
 
 class RejectionScoreAnalysisTests(unittest.TestCase):
@@ -87,7 +87,7 @@ class RejectionScoreAnalysisTests(unittest.TestCase):
 
     def test_invalid_empty_nonfinite_analysis_inputs_fail(self):
         for values in (np.array([]), np.array([np.nan]), np.array([np.inf])):
-            with self.assertRaises(UnknownRejectionError):
+            with self.assertRaises(RejectionError):
                 score_distribution(values)
-            with self.assertRaises(UnknownRejectionError):
+            with self.assertRaises(RejectionError):
                 roc_auc_known_positive(values, np.array([0.]))

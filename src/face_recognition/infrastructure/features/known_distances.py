@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 import numpy as np
 from sklearn.metrics.pairwise import euclidean_distances
 
-from face_recognition.application.unknown_rejection_split import UnknownRejectionError
-from face_recognition.domain.models.distance_novelty import NOVELTY_NEIGHBORS
+from face_recognition.domain.models.rejection import RejectionError
+NOVELTY_NEIGHBORS = (("nearest_1", 1), ("mean_3nn", 3), ("mean_5nn", 5))
 
 
 @dataclass(frozen=True, eq=False)
@@ -19,17 +19,17 @@ class KnownDistanceScorer:
     """Own one float64 reference copy; use <=batch_size by N distance work arrays.
 
     Requested existing scores share one nearest-distance calculation. Defaults
-    retain the original 1/3/5 experiment. Row ties only affect the aggregate
+    calculate the supported 1/3/5-neighbor scores. Row ties only affect the aggregate
     identity diagnostic, never SVM identity predictions.
     """
 
     def __init__(self, *, batch_size: int = 128, neighbor_counts: tuple[int, ...] = (1, 3, 5)) -> None:
         if type(batch_size) is not int or not 1 <= batch_size <= 128:
-            raise UnknownRejectionError("Distance batch size must be an integer from 1 to 128")
+            raise RejectionError("Distance batch size must be an integer from 1 to 128")
         self.batch_size = batch_size
         if (not neighbor_counts or any(type(count) is not int or count not in (1, 3, 5) for count in neighbor_counts)
                 or len(set(neighbor_counts)) != len(neighbor_counts)):
-            raise UnknownRejectionError("Request a nonempty unique subset of existing 1/3/5-neighbor scores")
+            raise RejectionError("Request a nonempty unique subset of existing 1/3/5-neighbor scores")
         self._scores = tuple((name, count) for name, count in NOVELTY_NEIGHBORS if count in neighbor_counts)
 
     @staticmethod
@@ -40,7 +40,7 @@ class KnownDistanceScorer:
                 raise ValueError
             return values
         except (ValueError, TypeError, OverflowError):
-            raise UnknownRejectionError("Distance inputs must be a finite nonempty numeric matrix") from None
+            raise RejectionError("Distance inputs must be a finite nonempty numeric matrix") from None
 
     def fit(self, X_fit: np.ndarray, y_fit: np.ndarray, identity_count: int) -> "KnownDistanceScorer":
         return self._initialize_reference(X_fit, y_fit, identity_count)
@@ -55,11 +55,11 @@ class KnownDistanceScorer:
         values, labels = self._matrix(X_fit, copy=True), np.asarray(y_fit)
         required = max(count for _, count in self._scores)
         if len(values) < required:
-            raise UnknownRejectionError(f"At least {required} known fit reference samples are required for the requested neighbor scores")
+            raise RejectionError(f"At least {required} known fit reference samples are required for the requested neighbor scores")
         if (labels.shape != (len(values),) or not np.issubdtype(labels.dtype, np.integer)
                 or type(identity_count) is not int or identity_count < 2
                 or not np.array_equal(np.unique(labels), np.arange(identity_count))):
-            raise UnknownRejectionError("Distance references require deterministic known fit labels")
+            raise RejectionError("Distance references require deterministic known fit labels")
         self._reference, self._labels = values, labels.copy()
         self._reference.setflags(write=False)
         self._labels.setflags(write=False)
@@ -69,16 +69,16 @@ class KnownDistanceScorer:
     def reference_arrays(self) -> tuple[np.ndarray, np.ndarray]:
         """Infrastructure persistence access to read-only biometric-derived arrays."""
         if not hasattr(self, "_reference"):
-            raise UnknownRejectionError("Known distance scorer must be fitted first")
+            raise RejectionError("Known distance scorer must be fitted first")
         return self._reference, self._labels
 
     def score(self, X: np.ndarray, *, exclude_reference_indices: np.ndarray | None = None) -> KnownDistanceObservations:
         if not hasattr(self, "_reference"):
-            raise UnknownRejectionError("Known distance scorer must be fitted first")
+            raise RejectionError("Known distance scorer must be fitted first")
         # Conversion is batched too; avoid a full float64 query-matrix copy.
         X = np.asarray(X)
         if X.ndim != 2 or not len(X) or X.shape[1] != self._reference.shape[1]:
-            raise UnknownRejectionError("Distance query dimensions must match known references")
+            raise RejectionError("Distance query dimensions must match known references")
         confidence = [(name, np.empty(len(X), dtype=np.float64)) for name, _ in self._scores]
         required = max(count for _, count in self._scores)
         excluded = None
@@ -87,7 +87,7 @@ class KnownDistanceScorer:
             if (excluded.shape != (len(X),) or not np.issubdtype(excluded.dtype, np.integer)
                     or np.any(excluded < 0) or np.any(excluded >= len(self._reference))
                     or len(self._reference) <= required):
-                raise UnknownRejectionError("Self-exclusion requires one valid reference-row index per query and enough OTHER references")
+                raise RejectionError("Self-exclusion requires one valid reference-row index per query and enough OTHER references")
         nearest_labels = np.empty(len(X), dtype=self._labels.dtype)
         for start in range(0, len(X), self.batch_size):
             stop = min(start + self.batch_size, len(X))
@@ -95,11 +95,11 @@ class KnownDistanceScorer:
             with np.errstate(over="ignore", invalid="ignore"):
                 distances = euclidean_distances(query, self._reference)
             if not np.isfinite(distances).all():
-                raise UnknownRejectionError("Nonfinite Euclidean distance calculation")
+                raise RejectionError("Nonfinite Euclidean distance calculation")
             if excluded is not None:
                 indices = excluded[start:stop]
                 if not np.array_equal(query, self._reference[indices]):
-                    raise UnknownRejectionError("Self-excluded query must match its indexed source reference row")
+                    raise RejectionError("Self-excluded query must match its indexed source reference row")
                 # Mask the exact row before any nearest selection, including
                 # when duplicate vectors tie at zero distance.
                 distances[np.arange(stop - start), indices] = np.inf

@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 
 from face_recognition.application.rejection_metrics import calibrate_threshold, decision_margin, evaluate_threshold, threshold_candidates
-from face_recognition.application.unknown_rejection_split import UnknownRejectionError
+from face_recognition.domain.models.rejection import RejectionError
 
 
 class RejectionMetricsTests(unittest.TestCase):
@@ -17,7 +17,7 @@ class RejectionMetricsTests(unittest.TestCase):
 
     def test_invalid_or_nonfinite_scores_rejected(self):
         for scores in (np.ones((2, 1)), np.ones(2), np.ones((0, 3)), np.array([[0, np.nan]]), np.array([[0, np.inf]])):
-            with self.assertRaises(UnknownRejectionError):
+            with self.assertRaises(RejectionError):
                 decision_margin(scores)
 
     def test_exact_open_set_cases_rates_and_binary_metrics(self):
@@ -75,5 +75,5 @@ class RejectionMetricsTests(unittest.TestCase):
     def test_empty_nonfinite_negative_and_mismatched_observations_fail(self):
         for known, correct, unknown in (([], [], [.1]), ([.2], [True], []), ([np.nan], [True], [.1]),
                                          ([-.1], [True], [.1]), ([.2], [True, False], [.1]), ([.2], [1], [.1])):
-            with self.assertRaises(UnknownRejectionError):
+            with self.assertRaises(RejectionError):
                 calibrate_threshold(np.array(known), np.array(correct), np.array(unknown))

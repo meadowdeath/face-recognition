@@ -6,14 +6,14 @@ from math import isfinite, nextafter, inf
 
 import numpy as np
 
-from face_recognition.application.unknown_rejection_split import UnknownRejectionError
-from face_recognition.domain.models.unknown_rejection import RejectionMetrics, ThresholdCalibration
+from face_recognition.domain.models.rejection import RejectionError
+from face_recognition.domain.models.rejection import RejectionMetrics, ThresholdCalibration
 
 
 def validated_decision_scores(scores: np.ndarray) -> np.ndarray:
     scores = np.asarray(scores, dtype=np.float64)
     if scores.ndim != 2 or not len(scores) or scores.shape[1] < 2 or not np.isfinite(scores).all():
-        raise UnknownRejectionError("Decision scores must be finite with at least two class columns")
+        raise RejectionError("Decision scores must be finite with at least two class columns")
     return scores
 
 
@@ -23,7 +23,7 @@ def decision_margin(scores: np.ndarray) -> np.ndarray:
     with np.errstate(over="ignore"):
         margin = top[:, 1] - top[:, 0]
     if not np.isfinite(margin).all():
-        raise UnknownRejectionError("Decision margins must be finite")
+        raise RejectionError("Decision margins must be finite")
     return margin
 
 
@@ -33,7 +33,7 @@ def _samples(known: np.ndarray, correct: np.ndarray, unknown: np.ndarray, *, all
             or correct.shape != known.shape or correct.dtype != np.bool_
             or not np.isfinite(known).all() or not np.isfinite(unknown).all()
             or (not allow_negative and (np.any(known < 0) or np.any(unknown < 0)))):
-        raise UnknownRejectionError("Invalid known/unknown confidence observations")
+        raise RejectionError("Invalid known/unknown confidence observations")
     return known, correct, unknown
 
 
@@ -42,7 +42,7 @@ def threshold_candidates(known: np.ndarray, unknown: np.ndarray, *, allow_negati
     values = np.unique(np.concatenate((known, unknown)).astype(np.float64, copy=False))
     upper = nextafter(float(values[-1]), inf)
     if not isfinite(upper):
-        raise UnknownRejectionError("No finite reject-all threshold boundary is representable")
+        raise RejectionError("No finite reject-all threshold boundary is representable")
     with np.errstate(over="ignore"):
         midpoints = values[:-1] + (values[1:] - values[:-1]) / 2
     fallback = values[:-1] / 2 + values[1:] / 2
@@ -68,7 +68,7 @@ def evaluate_threshold(known: np.ndarray, correct: np.ndarray, unknown: np.ndarr
                        *, allow_negative: bool = False) -> RejectionMetrics:
     known, correct, unknown = _samples(known, correct, unknown, allow_negative=allow_negative)
     if not isfinite(threshold) or (not allow_negative and threshold < 0):
-        raise UnknownRejectionError("Threshold must be finite and obey the configured score direction")
+        raise RejectionError("Threshold must be finite and obey the configured score direction")
     accepted = known >= threshold
     return _metrics(len(known), len(unknown), int((~accepted).sum()), int((unknown < threshold).sum()),
                     int((accepted & correct).sum()))

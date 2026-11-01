@@ -5,10 +5,10 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from face_recognition.application.unknown_rejection_split import UnknownRejectionError
+from face_recognition.domain.models.rejection import RejectionError
 from face_recognition.domain.models.dataset import CONDITIONS
 from face_recognition.domain.models.identity_split import SplitSampleReference
-from face_recognition.domain.models.temporal_open_set import WINDOW_SIZES, VoteRates, VoteStability, WindowCounts
+from face_recognition.domain.models.temporal import WINDOW_SIZES, VoteRates, VoteStability, WindowCounts
 
 
 @dataclass(frozen=True)
@@ -29,18 +29,18 @@ class WindowPlan:
 
 def build_windows(samples: tuple[SplitSampleReference, ...], size: int) -> WindowPlan:
     if type(size) is not int or size not in WINDOW_SIZES:
-        raise UnknownRejectionError("Temporal window size must be one of 1,3,5,7")
+        raise RejectionError("Temporal window size must be one of 1,3,5,7")
     groups = defaultdict(list)
     for position, sample in enumerate(samples):
         if sample.condition not in CONDITIONS or type(sample.sample_index) is not int or sample.sample_index < 0:
-            raise UnknownRejectionError("Invalid temporal source metadata")
+            raise RejectionError("Invalid temporal source metadata")
         groups[sample.person_id, sample.session_id, sample.condition].append((sample.sample_index, position))
     windows, condition_counts = [], defaultdict(lambda: [0, 0, 0, 0])
     for person, session, condition in sorted(groups, key=lambda key: (key[0], key[1], CONDITIONS.index(key[2]))):
         rows = sorted(groups[person, session, condition])
         indices = [index for index, _ in rows]
         if indices != list(range(indices[0], indices[0] + len(indices))):
-            raise UnknownRejectionError("Temporal groups require unique contiguous sample indices")
+            raise RejectionError("Temporal groups require unique contiguous sample indices")
         used = len(rows) // size * size
         for start in range(0, used, size):
             windows.append(SourceWindow(person, session, condition, tuple(position for _, position in rows[start:start + size])))
@@ -58,7 +58,7 @@ def vote_identity(predicted: np.ndarray, decisions: np.ndarray) -> tuple[int, st
     if (predicted.ndim != 1 or not len(predicted) or decisions.ndim != 2 or decisions.shape[0] != len(predicted)
             or decisions.shape[1] < 2 or not np.isfinite(decisions).all()
             or not np.issubdtype(predicted.dtype, np.integer) or np.any(predicted < 0) or np.any(predicted >= decisions.shape[1])):
-        raise UnknownRejectionError("Invalid temporal predictions or decision scores")
+        raise RejectionError("Invalid temporal predictions or decision scores")
     counts = np.bincount(predicted, minlength=decisions.shape[1])
     tied = np.flatnonzero(counts == counts.max())
     if len(tied) == 1:
@@ -66,7 +66,7 @@ def vote_identity(predicted: np.ndarray, decisions: np.ndarray) -> tuple[int, st
     with np.errstate(over="ignore"):
         sums = decisions[:, tied].sum(axis=0, dtype=np.float64)
     if not np.isfinite(sums).all():
-        raise UnknownRejectionError("Nonfinite summed temporal decision scores")
+        raise RejectionError("Nonfinite summed temporal decision scores")
     return int(tied[np.argmax(sums)]), "tie"
 
 
@@ -86,7 +86,7 @@ def aggregate_windows(plan: WindowPlan, predicted: np.ndarray, decisions: np.nda
             or not np.isfinite(decisions).all() or not confidence
             or len({name for name, _ in confidence}) != len(confidence)
             or any(np.asarray(values).shape != (len(predicted),) or not np.isfinite(values).all() for _, values in confidence)):
-        raise UnknownRejectionError("Temporal inference arrays must match source metadata and be finite")
+        raise RejectionError("Temporal inference arrays must match source metadata and be finite")
     winners = np.empty(len(plan.windows), dtype=np.int32)
     medians = [(name, np.empty(len(plan.windows), dtype=np.float64)) for name, _ in confidence]
     categories = {"unanimous": 0, "majority": 0, "tie": 0}
