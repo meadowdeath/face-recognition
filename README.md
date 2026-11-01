@@ -377,11 +377,104 @@ Reusable sklearn classifier/feature-transform pipelines, centroid and neighbor
 scorers, temporal windows/voting, rejection metrics, ROC/EER analysis, artifact
 hashing and aggregate JSON publication remain available as primitives.
 
-These primitives do not select a V3 model, define a V3 cross-validation protocol,
-train a recognizer or authorize reuse of archived holdouts. No V3 algorithm has
-been implemented yet. See [the cleanup inventory](docs/v3_archive_cleanup.md)
+These primitives do not select a V3 model or train a recognizer. The nested
+protocol below defines V3 data roles only; no V3 novelty algorithm or experiment
+has run. See [the cleanup inventory](docs/v3_archive_cleanup.md)
 for the removed workflows and retained dependency boundaries.
 
 `LandmarkNormalizer` and `LandmarkFeatureExtractor` keep their existing behavior.
 Live rolling-window inference, deployment benchmarking and attendance logic are
 not implemented by this cleanup.
+
+## V3 nested cross-validation protocol
+
+**V2 remains the last version with an independent final holdout.** No more data
+can be collected. V3 therefore uses the complete available population in nested
+cross-validation, rather than claiming a new independent final test. The generic
+session-split examples above are separate tools, not the V3 nested protocol.
+No archived V1/V2 workflow is restored.
+
+An external experiment specification assigns all identities and expected session
+names explicitly. The current experiment supplies 10 KNOWN identities with four
+sessions each and 8 UNKNOWN identities with two sessions each. Every cataloged
+identity must have exactly one role; no extra participant/session/condition is
+silently excluded. Session/identity names are not algorithm constants. A complete
+**synthetic** specification has this structure (supply all 10 actual KNOWN IDs
+and all 8 UNKNOWN IDs for the real experiment):
+
+```json
+{
+  "schema_version": 1,
+  "experiment_id": "open_set_v3",
+  "representation": "all_xyz_v1",
+  "known_ids": ["known_a", "known_b"],
+  "unknown_ids": ["novel_a", "novel_b", "novel_c", "novel_d", "novel_e", "novel_f", "novel_g", "novel_h"],
+  "known_sessions": ["session_01", "session_02", "session_03", "session_04"],
+  "unknown_sessions": ["session_01", "session_02"]
+}
+```
+
+Four outer folds hold out each configured KNOWN session once for **every KNOWN
+identity**. Lexically sorted UNKNOWN IDs are paired consecutively into four
+disjoint groups; each complete pair, including both sessions of each identity,
+is outer test exactly once. Outer fold ordering pairs the sorted known test
+sessions with these sorted UNKNOWN groups. Each outer development population
+thus has three KNOWN sessions and six UNKNOWN identities. Outer tests estimate
+generalization and must never influence that fold's feature/normalization,
+classifier, novelty strategy, hyperparameter or threshold decisions.
+
+Inside each outer fold, use all **six permutations** of the three KNOWN sessions
+as **fit / threshold calibration / validation**, one session per role. Cross
+these with the **three remaining UNKNOWN-pair validation rotations**, giving
+**18 inner splits per outer fold**. Four UNKNOWN identities calibrate and two
+validate; UNKNOWN samples never fit preprocessing, identity classifiers or
+novelty reference structures. ANOVA/scalers/classifiers/learned novelty steps may
+fit only KNOWN inner-fit data. Thresholds may use only the disjoint KNOWN and
+UNKNOWN inner-calibration roles. Inner validation compares strategies and must
+not adjust their thresholds. The KNOWN validation session is absent from both
+fit and calibration; UNKNOWN validation identities are absent from calibration.
+Role IDs inherit all of their cataloged sessions/conditions as appropriate.
+
+Repeated inner observations are not additional independent samples. Future
+evaluation code must report outer results separately, retain each fold's
+authorization boundary and construct any outer refit/threshold using only that
+fold's development data. This commit implements **partitions only**: it does
+not choose a model, fit anything, search thresholds, set a temporal window or
+define the later outer-refit threshold-transfer procedure. Outer results cannot
+be used to revise the selection process within that fold. Nested CV is internal
+evaluation of the prespecified procedure, not a newly collected independent test.
+
+Save the caller-provided specification externally, for example as
+`../face-recognition-data/v3/splits/experiment_v3.json`, then create the protocol:
+
+```powershell
+python -m face_recognition.presentation.cli.create_v3_cv_protocol `
+  --processed-root "..\face-recognition-data\v3\processed" `
+  --experiment-spec "..\face-recognition-data\v3\splits\experiment_v3.json" `
+  --output "..\face-recognition-data\v3\splits\cv_protocol_v1.json"
+```
+
+Add **`--validate-only`** to check an existing output against the current
+specification/catalog without writing. Creation uses external atomic
+no-overwrite publication, with no force option. Normal output is aggregate only.
+
+Catalog inspection reuses completed `all_xyz_v1` processing metadata and safe
+directory discovery. It checks error/rejection counts, exact roles/sessions,
+all 13 expected capture conditions per session, nonempty condition files and
+deterministic ordering. **No JSONL file is opened, hashed or decoded.** The
+manifest status is `catalog_validated`, not a claim that individual records or
+feature dimensions were inspected. A future payload loader must validate those
+before model execution. Other processed representations are not protocol inputs.
+
+The versioned manifest contains the normalized specification, observed sessions,
+relative condition-file references/sizes, all four outer folds and their inner
+splits, generation policy and SHA-256 digests. The processing-manifest digest
+hashes its exact bytes; specification/catalog/protocol digests use canonical
+metadata JSON. The protocol digest excludes only its own field. Reading a
+protocol regenerates the expected folds, so rehashing an illegal role assignment
+does not make it valid. Validate-only also detects changed source catalog
+metadata. These are **metadata fingerprints, not biometric payload hashes**:
+same-size feature-file edits require later record/content validation. No absolute
+source paths, feature vectors, individual scores or predictions are persisted.
+
+There are no V3 model results yet.
