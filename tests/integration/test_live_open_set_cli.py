@@ -1,4 +1,5 @@
 from contextlib import redirect_stdout, redirect_stderr
+from dataclasses import make_dataclass, replace
 from io import StringIO
 from types import SimpleNamespace
 import unittest
@@ -116,10 +117,55 @@ class LiveOpenSetCLITests(unittest.TestCase):
     def test_runtime_version_mismatch_is_explicit_and_not_silently_ignored(self):
         wanted = EvaluationVersions("3.11.13", "1.26.4", "1.16.0", "1.7.2")
         actual = EvaluationVersions("3.11.2", "1.26.4", "1.15.0", "1.7.2")
-        with self.assertRaisesRegex(V3RuntimeCompatibilityError, "python: bundle=3.11.13, runtime=3.11.2"):
+        with self.assertRaisesRegex(V3RuntimeCompatibilityError, "scipy .*exact dependency version required"):
             _check_runtime_versions(wanted, actual)
         _check_runtime_versions(wanted, wanted)
         stderr = StringIO()
         with patch.object(cli, "run_live_recognition", side_effect=V3RuntimeCompatibilityError("numpy: bundle=1.26.4, runtime=2.0")), redirect_stderr(stderr):
             self.assertEqual(cli.main(["--model-dir", "synthetic"]), 1)
         self.assertIn("numpy: bundle=1.26.4, runtime=2.0", stderr.getvalue())
+
+
+class RuntimeCompatibilityTests(unittest.TestCase):
+    def setUp(self):
+        self.bundle = EvaluationVersions("3.11.17", "1.26.4", "1.16.0", "1.7.2")
+
+    def test_older_python_patch_accepted(self):
+        _check_runtime_versions(self.bundle, replace(self.bundle, python="3.11.2"))
+
+    def test_newer_python_patch_accepted_in_both_directions(self):
+        _check_runtime_versions(replace(self.bundle, python="3.11.2"), self.bundle)
+        _check_runtime_versions(self.bundle, replace(self.bundle, python="3.11.20"))
+
+    def test_different_python_major_or_minor_rejected_without_prefix_matching(self):
+        for version in ("3.10.14", "3.12.1", "4.11.17", "3.1.17", "3.110.17"):
+            with self.subTest(version=version), self.assertRaisesRegex(V3RuntimeCompatibilityError, "Python major/minor incompatible"):
+                _check_runtime_versions(self.bundle, replace(self.bundle, python=version))
+
+    def test_malformed_python_metadata_rejected_on_either_side(self):
+        for version in ("3.11", "3.11.x", "3.11.17rc1", "3.11.17.extra", "03.11.17", "3.011.17", " 3.11.17", "", None, 3.11):
+            for expected, actual in ((self.bundle, replace(self.bundle, python=version)), (replace(self.bundle, python=version), self.bundle)):
+                with self.subTest(version=version), self.assertRaises(RejectionError):
+                    _check_runtime_versions(expected, actual)
+
+    def test_scikit_learn_patch_mismatch_still_rejected(self):
+        with self.assertRaisesRegex(V3RuntimeCompatibilityError, "scikit_learn .*exact dependency version required"):
+            _check_runtime_versions(self.bundle, replace(self.bundle, python="3.11.2", scikit_learn="1.7.1"))
+
+    def test_numpy_scipy_and_additional_recorded_dependency_remain_exact(self):
+        for name, version in (("numpy", "1.26.3"), ("scipy", "1.16.1")):
+            with self.subTest(name=name), self.assertRaisesRegex(V3RuntimeCompatibilityError, name + " .*exact dependency version required"):
+                _check_runtime_versions(self.bundle, replace(self.bundle, **{name: version}))
+        # Exercise the existing field-based policy without changing the manifest schema.
+        extended = make_dataclass("VersionsWithJoblib", [(name, str) for name in ("python", "numpy", "scipy", "scikit_learn", "joblib")])
+        wanted = extended("3.11.17", "1.26.4", "1.16.0", "1.7.2", "1.5.0")
+        with self.assertRaisesRegex(V3RuntimeCompatibilityError, "joblib .*exact dependency version required"):
+            _check_runtime_versions(wanted, replace(wanted, python="3.11.2", joblib="1.5.1"))
+
+    def test_malformed_dependency_metadata_still_rejected(self):
+        for value in ("", "1.26.4 invalid", None):
+            with self.subTest(value=value), self.assertRaises(RejectionError):
+                _check_runtime_versions(self.bundle, replace(self.bundle, numpy=value))
+
+    def test_matching_versions_pass_normally(self):
+        _check_runtime_versions(self.bundle, self.bundle)

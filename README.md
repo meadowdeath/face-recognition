@@ -1063,9 +1063,12 @@ asset defaults to `assets/face_landmarker.task` or an explicit
 `--landmarker-model` path. Deploy the same source package/branch. No processed/raw
 dataset, protocol or development report is required for live inference.
 Use the project's pinned runtime requirements and Raspberry system
-Picamera2/libcamera packages. The bundle loader requires exact **Python (including
-patch), NumPy, SciPy and scikit-learn** versions from `manifest.json`'s creation
-metadata. Install matching builds for each platform's architecture. Frozen pose
+Picamera2/libcamera packages. The bundle loader requires matching **Python
+major.minor** versions; patch releases may differ (for example, 3.11.17 and
+3.11.2 are compatible). Python metadata must be a numeric `major.minor.patch`
+release. **NumPy, SciPy, scikit-learn and every other recorded dependency still
+require exact versions** from `manifest.json`'s creation metadata. Install
+compatible builds for each platform's architecture. Frozen pose
 normalizer/Mahalanobis source fingerprints must also match, including line
 endings. Startup reports version/source mismatches and provides no bypass or
 automatic reconstruction/retraining. Preserve the trusted local bundle unchanged.

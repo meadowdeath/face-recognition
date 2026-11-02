@@ -45,10 +45,18 @@ def _check_runtime_versions(expected, actual):
         wanted, installed = getattr(expected, f.name), getattr(actual, f.name)
         if any(not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9.+_-]{1,80}", v) for v in (wanted, installed)):
             raise RejectionError("Invalid package version metadata")
-        if wanted != installed:
-            differences.append(f"{f.name}: bundle={wanted}, runtime={installed}")
+        if f.name == "python":
+            release = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+            parsed = tuple(re.fullmatch(release, version) for version in (wanted, installed))
+            if any(version is None for version in parsed):
+                raise RejectionError("Invalid Python version metadata; expected major.minor.patch")
+            versions = tuple(tuple(int(component) for component in version.groups()) for version in parsed)
+            if versions[0][:2] != versions[1][:2]:
+                differences.append(f"Python major/minor incompatible: bundle={wanted}, runtime={installed}")
+        elif wanted != installed:
+            differences.append(f"{f.name} (exact dependency version required): bundle={wanted}, runtime={installed}")
     if differences:
-        raise V3RuntimeCompatibilityError("V3 runtime mismatch; exact versions are required: " + "; ".join(differences))
+        raise V3RuntimeCompatibilityError("V3 runtime mismatch: " + "; ".join(differences))
 
 
 def _digest(value):
