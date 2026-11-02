@@ -10,7 +10,10 @@ from face_recognition.domain.models.face_landmarks import FaceLandmarks
 PROCESSED_SCHEMA_VERSION = 1
 NORMALIZED_REPRESENTATION = "normalized_landmarks_v1"
 BASELINE_REPRESENTATION = "all_xyz_v1"
+POSE_REPRESENTATION = "all_xyz_pose_v2"
 REPRESENTATIONS = (NORMALIZED_REPRESENTATION, BASELINE_REPRESENTATION)
+# The historical processing command continues to emit REPRESENTATIONS only.
+SUPPORTED_REPRESENTATIONS = (*REPRESENTATIONS, POSE_REPRESENTATION)
 
 
 @dataclass(frozen=True)

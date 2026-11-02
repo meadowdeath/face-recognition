@@ -13,7 +13,7 @@ from sklearn.feature_selection import SelectKBest, f_classif
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from face_recognition.domain.models.feature_reduction import FittedReductionMetadata, ReductionConfiguration
+from face_recognition.domain.models.feature_transforms import FittedReductionMetadata, ReductionConfiguration
 
 
 def feature_transform_steps(configuration: ReductionConfiguration, original_features: int) -> list[tuple[str, BaseEstimator]]:

@@ -8,11 +8,11 @@ from sklearn.preprocessing import StandardScaler
 from threadpoolctl import threadpool_limits
 
 from face_recognition.application.training_folds import create_session_folds
-from face_recognition.domain.models.feature_reduction import ReductionConfiguration
-from face_recognition.infrastructure.classifiers.sklearn_baselines import BASELINE_CONFIGURATIONS, build_baseline_pipeline
-from face_recognition.infrastructure.classifiers.sklearn_feature_reduction import build_reduction_pipeline
+from face_recognition.domain.models.feature_transforms import ReductionConfiguration
+from face_recognition.infrastructure.classifiers.sklearn_classification import CLASSIFIER_CONFIGURATIONS, build_classifier_pipeline
+from face_recognition.infrastructure.classifiers.sklearn_feature_transforms import build_reduction_pipeline
 from face_recognition.infrastructure.features.feature_transformers import feature_transform_steps, fitted_reduction_metadata
-from tests.feature_reduction_fakes import reduction_data
+from tests.classification_fakes import reduction_data
 
 
 class FeatureTransformerTests(unittest.TestCase):
@@ -23,7 +23,7 @@ class FeatureTransformerTests(unittest.TestCase):
 
     def test_anova_fits_only_fit_rows_and_preserves_selected_coordinate_order(self):
         configuration = ReductionConfiguration("anova", k=4)
-        model = build_reduction_pipeline(BASELINE_CONFIGURATIONS[0], configuration, 9)
+        model = build_reduction_pipeline(CLASSIFIER_CONFIGURATIONS[0], configuration, 9)
         observed = []
         original = SelectKBest.fit
 
@@ -48,7 +48,7 @@ class FeatureTransformerTests(unittest.TestCase):
 
     def test_validation_changes_do_not_influence_scores_or_selected_indices(self):
         config = ReductionConfiguration("anova", k=3)
-        first, second = (build_reduction_pipeline(BASELINE_CONFIGURATIONS[0], config, 9) for _ in range(2))
+        first, second = (build_reduction_pipeline(CLASSIFIER_CONFIGURATIONS[0], config, 9) for _ in range(2))
         with threadpool_limits(limits=1):
             first.fit(self.X, self.y)
             second.fit(self.X, self.y)
@@ -73,15 +73,15 @@ class FeatureTransformerTests(unittest.TestCase):
         configs = (ReductionConfiguration("baseline"), ReductionConfiguration("anova", k=2),
                    ReductionConfiguration("pca", explained_variance=.95))
         for reduction in configs:
-            for classifier in BASELINE_CONFIGURATIONS:
+            for classifier in CLASSIFIER_CONFIGURATIONS:
                 model = build_reduction_pipeline(classifier, reduction, 9)
                 self.assertEqual(tuple(model.named_steps), expected[reduction.method][classifier.name == "Random Forest"])
                 self.assertEqual(model.named_steps["classifier"].get_params(),
-                                 build_baseline_pipeline(classifier).named_steps["classifier"].get_params())
+                                 build_classifier_pipeline(classifier).named_steps["classifier"].get_params())
 
     def test_pca_scaler_and_components_fit_only_fit_session(self):
         config = ReductionConfiguration("pca", explained_variance=.95)
-        model = build_reduction_pipeline(BASELINE_CONFIGURATIONS[2], config, 9)
+        model = build_reduction_pipeline(CLASSIFIER_CONFIGURATIONS[2], config, 9)
         original = PCA.fit_transform
         seen = []
 
@@ -111,7 +111,7 @@ class FeatureTransformerTests(unittest.TestCase):
 
     def test_pca_is_numerically_repeatable_and_validation_does_not_refit(self):
         config = ReductionConfiguration("pca", explained_variance=.9)
-        models = [build_reduction_pipeline(BASELINE_CONFIGURATIONS[0], config, 9) for _ in range(2)]
+        models = [build_reduction_pipeline(CLASSIFIER_CONFIGURATIONS[0], config, 9) for _ in range(2)]
         with threadpool_limits(limits=1):
             for model in models:
                 model.fit(self.X, self.y)
@@ -126,4 +126,4 @@ class FeatureTransformerTests(unittest.TestCase):
                 X = self.X.copy()
                 X[0, 0] = value
                 with self.assertRaises(ValueError), threadpool_limits(limits=1):
-                    build_reduction_pipeline(BASELINE_CONFIGURATIONS[0], reduction, 9).fit(X, self.y)
+                    build_reduction_pipeline(CLASSIFIER_CONFIGURATIONS[0], reduction, 9).fit(X, self.y)

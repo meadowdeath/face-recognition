@@ -4,7 +4,7 @@ import unittest
 import numpy as np
 
 from face_recognition.application.temporal_windows import aggregate_windows, build_windows, vote_identity
-from face_recognition.application.unknown_rejection_split import UnknownRejectionError
+from face_recognition.domain.models.rejection import RejectionError
 from face_recognition.domain.models.identity_split import IdentityPartition, SplitSampleReference
 
 
@@ -57,13 +57,13 @@ class TemporalWindowTests(unittest.TestCase):
 
     def test_duplicates_gaps_and_unsupported_sizes_rejected(self):
         for samples in (references(3) + (references(1)[0],), (references(3)[0], references(3)[2])):
-            with self.assertRaisesRegex(UnknownRejectionError, "unique contiguous"):
+            with self.assertRaisesRegex(RejectionError, "unique contiguous"):
                 build_windows(samples, 1)
         for size in (0, 2, 4, 9, True):
-            with self.assertRaises(UnknownRejectionError):
+            with self.assertRaises(RejectionError):
                 build_windows(references(8), size)
         for sample in (replace(references(1)[0], sample_index=-1), replace(references(1)[0], condition="invalid")):
-            with self.assertRaises(UnknownRejectionError):
+            with self.assertRaises(RejectionError):
                 build_windows((sample,), 1)
 
     def test_unanimous_and_unique_plurality_votes(self):
@@ -99,9 +99,9 @@ class TemporalWindowTests(unittest.TestCase):
         plan = build_windows(references(4), 3)
         for invalid in (np.nan, np.inf, -np.inf):
             values = np.array([1., 2., 3., invalid])
-            with self.assertRaises(UnknownRejectionError):
+            with self.assertRaises(RejectionError):
                 aggregate_windows(plan, np.zeros(4, dtype=int), np.ones((4, 2)), (("svm_margin", values),))
-        with self.assertRaises(UnknownRejectionError):
+        with self.assertRaises(RejectionError):
             aggregate_windows(plan, np.array([0, 0, 0, 4]), np.ones((4, 2)), (("svm_margin", np.ones(4)),))
-        with self.assertRaises(UnknownRejectionError):
+        with self.assertRaises(RejectionError):
             vote_identity(np.array([0, 1]), np.full((2, 2), np.nan))

@@ -12,7 +12,7 @@ from math import isfinite
 from pathlib import Path
 
 from face_recognition.domain.models.identity_split import FeatureSampleMetadata
-from face_recognition.domain.models.processed_sample import BASELINE_REPRESENTATION, PROCESSED_SCHEMA_VERSION, SampleProvenance
+from face_recognition.domain.models.processed_sample import BASELINE_REPRESENTATION, POSE_REPRESENTATION, PROCESSED_SCHEMA_VERSION, SampleProvenance
 from face_recognition.infrastructure.persistence.processed_dataset_catalog import (
     ProcessedDatasetCatalog, ProcessedDatasetReadError, reject_json_constant,
 )
@@ -31,7 +31,8 @@ def feature_metadata_from_json(line: str) -> FeatureSampleMetadata:
     return scan_feature_record(line)
 
 
-def scan_feature_record(line: str, feature_consumer: Callable[[int, float], None] | None = None) -> FeatureSampleMetadata:
+def scan_feature_record(line: str, feature_consumer: Callable[[int, float], None] | None = None,
+                        *, representation: str = BASELINE_REPRESENTATION) -> FeatureSampleMetadata:
     """Single decoding implementation; an optional sink is used only by development loading.
 
     Metadata-only callers retain the original behavior. A development sink can
@@ -49,6 +50,8 @@ def scan_feature_record(line: str, feature_consumer: Callable[[int, float], None
         return index + 1
 
     try:
+        if representation not in (BASELINE_REPRESENTATION, POSE_REPRESENTATION):
+            raise ValueError
         index = expect(0, "{")
         metadata, seen = {}, set()
         actual_feature_count = None
@@ -94,7 +97,7 @@ def scan_feature_record(line: str, feature_consumer: Callable[[int, float], None
         if space(index) != len(line) or seen != _METADATA_FIELDS | {"features"}:
             raise ValueError
         if (type(metadata["schema_version"]) is not int or metadata["schema_version"] != PROCESSED_SCHEMA_VERSION
-                or metadata["representation"] != BASELINE_REPRESENTATION):
+                or metadata["representation"] != representation):
             raise ValueError
         provenance = SampleProvenance(**{name: metadata[name] for name in SampleProvenance.__dataclass_fields__})
         if metadata["source_relative_path"] != provenance.source_relative_path:

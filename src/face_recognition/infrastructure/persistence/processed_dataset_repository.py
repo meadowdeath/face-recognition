@@ -9,7 +9,7 @@ from typing import TextIO
 
 from face_recognition.config.settings import PROJECT_ROOT
 from face_recognition.domain.models.processed_sample import (
-    BASELINE_REPRESENTATION, NORMALIZED_REPRESENTATION, PROCESSED_SCHEMA_VERSION, REPRESENTATIONS,
+    BASELINE_REPRESENTATION, NORMALIZED_REPRESENTATION, POSE_REPRESENTATION, PROCESSED_SCHEMA_VERSION,
     BaselineFeatureSample, NormalizedLandmarkSample, ProcessingIssue, ProcessingSummary, SampleProvenance,
 )
 
@@ -31,9 +31,11 @@ def normalized_to_json(sample: NormalizedLandmarkSample) -> str:
     }, allow_nan=False, separators=(",", ":"))
 
 
-def baseline_to_json(sample: BaselineFeatureSample) -> str:
+def baseline_to_json(sample: BaselineFeatureSample, representation: str = BASELINE_REPRESENTATION) -> str:
+    if representation not in (BASELINE_REPRESENTATION, POSE_REPRESENTATION):
+        raise ProcessedDatasetPersistenceError("Unsupported feature representation")
     return json.dumps({
-        **_record_metadata(sample.provenance, BASELINE_REPRESENTATION, sample.landmark_count),
+        **_record_metadata(sample.provenance, representation, sample.landmark_count),
         "feature_count": len(sample.features.values), "features": sample.features.values,
     }, allow_nan=False, separators=(",", ":"))
 
@@ -42,13 +44,23 @@ class FilesystemProcessedDatasetRepository:
     """Write only derived data. Source/output roots must be disjoint.
 
     output_root must not already exist, even if empty. A sibling .tmp directory
-    holds both representations until the entire run succeeds. Failed staging
+    holds the configured representations until the entire run succeeds. Failed staging
     directories are retained with failed metadata where possible, never treated
     as final output. There is no append, overwrite, resume or automatic deletion.
     Source files and directory timestamps are never intentionally changed.
     """
 
-    def __init__(self, output_root: Path, source_root: Path) -> None:
+    def __init__(self, output_root: Path, source_root: Path, *, feature_representation=BASELINE_REPRESENTATION,
+                 normalized_representation=NORMALIZED_REPRESENTATION, normalization_name="LandmarkNormalizer",
+                 normalization_metadata=None) -> None:
+        if (feature_representation not in (BASELINE_REPRESENTATION, POSE_REPRESENTATION)
+                or normalized_representation not in (None, NORMALIZED_REPRESENTATION)
+                or (feature_representation == POSE_REPRESENTATION and normalized_representation is not None)):
+            raise ProcessedDatasetPersistenceError("Invalid representation output profile")
+        self.feature_representation = feature_representation
+        self.normalized_representation = normalized_representation
+        self.representations = ((normalized_representation,) if normalized_representation else ()) + (feature_representation,)
+        self.normalization_name, self.normalization_metadata = normalization_name, normalization_metadata
         if Path(output_root).is_symlink():
             raise ProcessedDatasetPersistenceError("Output root must not be a symlink")
         self.output_root = Path(output_root).resolve()
@@ -95,7 +107,7 @@ class FilesystemProcessedDatasetRepository:
         self.staging_root = Path(tempfile.mkdtemp(prefix=self.output_root.name + ".", suffix=".tmp",
                                                 dir=self.output_root.parent))
         self._started = True
-        for representation in REPRESENTATIONS:
+        for representation in self.representations:
             (self.staging_root / representation).mkdir()
         self._write_manifests("in_progress", ProcessingSummary())
 
@@ -132,12 +144,12 @@ class FilesystemProcessedDatasetRepository:
         if provenance.sample_index != expected_index or (previous is not None and provenance.condition_key < previous.condition_key):
             raise ProcessedDatasetPersistenceError("Samples must follow deterministic session/condition/index order")
         # Encode/validate both representations before writing either record.
-        lines = (normalized_to_json(normalized), baseline_to_json(baseline))
+        lines = ((normalized_to_json(normalized),) if self.normalized_representation else ()) + (baseline_to_json(baseline, self.feature_representation),)
         if not same_condition:
             self._close_streams()
             opened: list[TextIO] = []
             try:
-                for representation in REPRESENTATIONS:
+                for representation in self.representations:
                     path = stage / representation / provenance.source_relative_path
                     path.parent.mkdir(parents=True, exist_ok=True)
                     opened.append(path.open("x", encoding="utf-8", newline="\n"))
@@ -166,16 +178,18 @@ class FilesystemProcessedDatasetRepository:
         if self.staging_root is None:
             raise ProcessedDatasetPersistenceError("No staging directory")
         common = {"schema_version": PROCESSED_SCHEMA_VERSION, "completion_state": state,
-                  **asdict(summary), "normalization": "LandmarkNormalizer",
+                  **asdict(summary), "normalization": self.normalization_name,
                   "feature_extraction": "LandmarkFeatureExtractor",
                   "inference_dimensions": "per_source_sample"}
         if issue is not None:
             common["failure"] = asdict(issue)
+        if self.normalization_metadata is not None:
+            common["normalization_parameters"] = self.normalization_metadata
         self._write_json(self.staging_root / "processing_manifest.json",
-                         {**common, "representations": list(REPRESENTATIONS),
+                         {**common, "representations": list(self.representations),
                           "condition_files_per_representation": summary.conditions,
-                          "total_condition_files": summary.conditions * len(REPRESENTATIONS)})
-        for representation in REPRESENTATIONS:
+                          "total_condition_files": summary.conditions * len(self.representations)})
+        for representation in self.representations:
             self._write_json(self.staging_root / representation / "processing_manifest.json",
                              {**common, "representation": representation, "condition_files": summary.conditions})
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from face_recognition.domain.interfaces.normalization_evaluation import ConditionKey
 from face_recognition.domain.models.dataset import CONDITIONS, validate_identifier
-from face_recognition.domain.models.processed_sample import PROCESSED_SCHEMA_VERSION, REPRESENTATIONS
+from face_recognition.domain.models.processed_sample import PROCESSED_SCHEMA_VERSION, SUPPORTED_REPRESENTATIONS
 
 
 class ProcessedDatasetReadError(ValueError):
@@ -20,7 +20,7 @@ class ProcessedDatasetCatalog:
     error_type = ProcessedDatasetReadError
 
     def __init__(self, processed_root: Path, representation: str) -> None:
-        if representation not in REPRESENTATIONS:
+        if representation not in SUPPORTED_REPRESENTATIONS:
             raise self.error_type("Unsupported processed representation")
         self.representation = representation
         self.processed_root = Path(processed_root).resolve()

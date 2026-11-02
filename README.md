@@ -4,20 +4,20 @@ Layered Python project for facial landmark detection now and experimental identi
 
 **Current milestone:** OpenCV webcam or Picamera2 camera → asynchronous MediaPipe Tasks Face Landmarker → OpenCV window, native DRM preview, or console benchmark metrics. Press `q` in the OpenCV window or Ctrl+C to quit. Face detection and landmarks do not identify a person.
 
-**Offline experiment status:** V1 and V2 have completed independent final evaluation and are experimentally closed. See [completed V2 final results](#completed-v2-independent-final-holdout-results). Final results must not be used to retune either model version.
+**Offline experiment status:** V1 and V2 have completed independent final evaluation and are experimentally closed. See [archived V1/V2 results](#archived-v1v2-experiments). Final results must not be used to retune either model version.
 
 ## Stack and architecture
 
 **Python 3.11 is the only currently supported Python version** (`>=3.11,<3.12`). The dependencies are NumPy 1.26.4, opencv-contrib-python 4.10.0.84, MediaPipe 0.10.14, protobuf 4.25.9, and scikit-learn 1.7.2. The same versions are pinned in `pyproject.toml` and `requirements.txt`; `requirements-rpi.txt` includes those shared requirements.
 
-The reference Raspberry Pi environment is a Raspberry Pi 3B+ running Debian 12 Bookworm on aarch64 with Python 3.11.2. It supplies Picamera2 0.3.31, libcamera, and python3-libcamera through system packages. Windows uses the shared Python dependencies without Picamera2. Scikit-learn is used by offline baseline evaluation; the production preview does not import it. The new offline dependency has not been validated on Pi hardware.
+The reference Raspberry Pi environment is a Raspberry Pi 3B+ running Debian 12 Bookworm on aarch64 with Python 3.11.2. It supplies Picamera2 0.3.31, libcamera, and python3-libcamera through system packages. Windows uses the shared Python dependencies without Picamera2. Scikit-learn is used by reusable offline classifier/feature-transform primitives; the production preview does not import it. The new offline dependency has not been validated on Pi hardware.
 
 ```text
 src/face_recognition/
   domain/          Models and camera, detector, extractor, classifier contracts
   application/     Frame orchestration, dataset capture/processing, validation, development folds/evaluation
   infrastructure/  OpenCV and optional Picamera2 cameras, MediaPipe detector,
-                   normalization/baseline features, JSONL datasets, batch baselines; live classifier/model placeholders
+                   normalization/XYZ features, JSONL datasets, reusable sklearn pipelines and scorers
   presentation/    CLI, frame/overlay rendering, and selectable display adapters
   config/          Centralized settings
 assets/            Downloaded MediaPipe task model (ignored)
@@ -291,14 +291,14 @@ Create a **logical split of `all_xyz_v1` references**, not copied feature files.
 
 Roles are never inferred from session counts. Repeat `--known-id` / `--unknown-id` for every dataset identity, and repeat `--train-session` / `--known-test-session` for the global known-session policy. Every identity must be assigned exactly one role. Every known identity must have exactly the requested train/test sessions: missing or extra known sessions fail rather than silently disappearing. Unknown identities may have any number/names of sessions. There are no fixed identity/session/sample counts and no intentionally excluded identities in this version.
 
-For the current session policy, this PowerShell command prompts for your actual pseudonymous ID lists without assuming their membership:
+For an illustrative two-session training policy, this PowerShell command prompts for your actual pseudonymous ID lists without assuming their membership:
 
 ```powershell
 $knownIds = @((Read-Host "Known IDs, comma-separated").Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $unknownIds = @((Read-Host "Unknown IDs, comma-separated").Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $splitArgs = @(
   "--processed-root", "..\face-recognition-data\data\processed",
-  "--output", "..\face-recognition-data\splits\identity_split_v1.json",
+  "--output", "..\face-recognition-data\splits\identity_split.json",
   "--train-session", "session_01",
   "--train-session", "session_02",
   "--known-test-session", "session_03"
@@ -316,7 +316,7 @@ The split command performs no training, fold generation, feature selection, lear
 
 ## Session-aware development folds
 
-Only `known_train_pool` supplies development features. For the current protocol:
+Only `known_train_pool` supplies development features. The default two-session example is:
 
 ```text
 known_train_pool
@@ -335,513 +335,635 @@ Inspect aggregate counts without fitting any model:
 ```powershell
 python -m face_recognition.presentation.cli.inspect_training_folds `
   --processed-root "..\face-recognition-data\data\processed" `
-  --split-manifest "..\face-recognition-data\splits\identity_split_v1.json"
+  --split-manifest "..\face-recognition-data\splits\identity_split.json"
 ```
 
 This diagnostics command requires exactly two training sessions for automatic opposite folds. It prints fit/validation identity and sample counts only; exit codes are 0 success, 1 input/loading/fold failure, and 2 usage error. This command performs no feature selection, learned preprocessing, classifier fitting or evaluation.
 
-## Full-XYZ closed-set development baseline
+## Archived V1/V2 experiments
 
-The offline baseline uses **all `all_xyz_v1` coordinates in stored order**: 478 landmarks yield 1,434 features; code derives the dimension rather than hardcoding it. It reuses the two opposite training-session folds above and reads only `known_train_pool` payloads. `known_test` and `unknown_pool` remain untouched. This baseline exists for later comparison against dimensionality reduction, not final holdout evaluation or live recognition.
+V1 and V2 are experimentally closed. Their executable experiment workflows,
+model/config repositories, CLIs and experiment-only tests have been removed from
+V3 HEAD. The complete history remains in Git; **`v2-open-set-final`** preserves
+the completed V2 implementation and its historical operating instructions.
 
-Fixed configurations (no tuning):
+The following independent final holdout results are historical records only:
 
-- **KNN:** 5 neighbors, uniform weights, Euclidean distance, brute-force search, `n_jobs=1`.
-- **SVM:** RBF, `C=1.0`, `gamma="scale"`, probability estimation disabled, 128 MB cache, `random_state=42`.
-- **Random Forest:** 100 trees, Gini, unlimited depth, minimum split/leaf sizes 2/1, `max_features="sqrt"`, bootstrap enabled, no class weighting, `random_state=42`, `n_jobs=1`.
+| Final metric | V1 | V2 |
+| --- | ---: | ---: |
+| Closed-set frame accuracy | 0.927692 | 0.878462 |
+| Temporal ROC AUC | 0.736982 | 0.727761 |
+| UNKNOWN false-acceptance rate (FAR) | 0.198718 | 0.416667 |
+| KNOWN false-rejection rate (FRR) | 0.450000 | 0.280769 |
+| Open-set exact accuracy | 0.644231 | 0.649038 |
 
-Other estimator defaults follow pinned scikit-learn 1.7.2. KNN and SVM use fresh `Pipeline(StandardScaler(copy=True, with_mean=True, with_std=True), classifier)` instances per fold. Scalers fit **only on fit rows**; validation is transformed with those fitted parameters. Random Forest has no scaler in the baseline. At least two known identities and five fit samples are required; KNN's fixed neighbor count is never silently reduced.
+V2 evaluated 10 known identities / 10 sessions / 2600 frames and 3 new unknown
+identities / 6 sessions / 1560 frames. Its final closed-set macro F1 was 0.876944.
+Its selected development temporal AUC/open-set accuracy were 0.846953/0.774231,
+which did not transfer to the independent final population. Lower known false
+rejection came with unacceptably high false acceptance on new unknown identities.
+Calibration and development results are not final generalization measurements.
 
-Models run sequentially, with native BLAS/OpenMP threads limited to one through scikit-learn's required `threadpoolctl` dependency. Input remains one read-only `float32` matrix with fold views. Scaling necessarily allocates working matrices; SVM may internally convert to double precision. No fitted models, predictions or feature vectors are persisted.
+Neither archived model may be retuned from these final results. Changes to
+normalization, features, rejection/threshold policy, classifier or temporal
+policy belong to a new model version and experimental protocol.
 
-```powershell
-python -m face_recognition.presentation.cli.evaluate_baseline_models `
-  --processed-root "..\face-recognition-data\data\processed" `
-  --split-manifest "..\face-recognition-data\splits\identity_split_v1.json" `
-  --report "..\face-recognition-data\reports\baseline_identity_v1.json"
+## V3 development foundation
+
+Current HEAD retains capture/preview and Raspberry Pi runtime support, raw and
+processed datasets, normalization and its offline quality checks, all_xyz_v1
+feature extraction, logical session splits and fit-only development loading.
+Reusable sklearn classifier/feature-transform pipelines, centroid and neighbor
+scorers, temporal windows/voting, rejection metrics, ROC/EER analysis, artifact
+hashing and aggregate JSON publication remain available as primitives.
+
+These primitives do not select a V3 model or train a recognizer. The nested
+protocol below defines V3 data roles. The novelty comparison implementation is
+available and the initial comparison has completed. The same-model calibration
+refinement below has not yet run on real data. See [the cleanup inventory](docs/v3_archive_cleanup.md)
+for the removed workflows and retained dependency boundaries.
+
+`LandmarkNormalizer` and `LandmarkFeatureExtractor` keep their existing behavior.
+Live rolling-window inference, deployment benchmarking and attendance logic are
+not implemented by this cleanup.
+
+## V3 nested cross-validation protocol
+
+**V2 remains the last version with an independent final holdout.** No more data
+can be collected. V3 therefore uses the complete available population in nested
+cross-validation, rather than claiming a new independent final test. The generic
+session-split examples above are separate tools, not the V3 nested protocol.
+No archived V1/V2 workflow is restored.
+
+An external experiment specification assigns all identities and expected session
+names explicitly. The current experiment supplies 10 KNOWN identities with four
+sessions each and 8 UNKNOWN identities with two sessions each. Every cataloged
+identity must have exactly one role; no extra participant/session/condition is
+silently excluded. Session/identity names are not algorithm constants. A complete
+**synthetic** specification has this structure (supply all 10 actual KNOWN IDs
+and all 8 UNKNOWN IDs for the real experiment):
+
+```json
+{
+  "schema_version": 1,
+  "experiment_id": "open_set_v3",
+  "representation": "all_xyz_v1",
+  "known_ids": ["known_a", "known_b"],
+  "unknown_ids": ["novel_a", "novel_b", "novel_c", "novel_d", "novel_e", "novel_f", "novel_g", "novel_h"],
+  "known_sessions": ["session_01", "session_02", "session_03", "session_04"],
+  "unknown_sessions": ["session_01", "session_02"]
+}
 ```
 
-Each classifier/fold reports accuracy, macro precision/recall/F1 (`zero_division=0`), and a confusion matrix with sorted pseudonymous labels (rows true, columns predicted). Summaries use **unweighted fold means and population standard deviations**; matrices stay per fold. `perf_counter` measures fit (scaler plus model) and batch prediction (including validation transformation), excluding metric computation. Mean prediction latency is batch prediction time divided by validation sample count; it is not standalone streaming latency. Timings are descriptive.
+Four outer folds hold out each configured KNOWN session once for **every KNOWN
+identity**. Lexically sorted UNKNOWN IDs are paired consecutively into four
+disjoint groups; each complete pair, including both sessions of each identity,
+is outer test exactly once. Outer fold ordering pairs the sorted known test
+sessions with these sorted UNKNOWN groups. Each outer development population
+thus has three KNOWN sessions and six UNKNOWN identities. Outer tests estimate
+generalization and must never influence that fold's feature/normalization,
+classifier, novelty strategy, hyperparameter or threshold decisions.
 
-The required JSON report records these aggregates, fixed configurations, session/sample/feature counts, label order, protocol, and library versions. It contains no vectors, coordinates, individual sample predictions or absolute source paths. The report must be new, external to the repository, and outside processed/split inputs; publication is atomic without overwrite. CLI output is aggregate-only; exit codes are 0 success, 1 evaluation/report failure or interruption, and 2 usage error. Keep reports outside Git.
+Inside each outer fold, use all **six permutations** of the three KNOWN sessions
+as **fit / threshold calibration / validation**, one session per role. Cross
+these with the **three remaining UNKNOWN-pair validation rotations**, giving
+**18 inner splits per outer fold**. Four UNKNOWN identities calibrate and two
+validate; UNKNOWN samples never fit preprocessing, identity classifiers or
+novelty reference structures. ANOVA/scalers/classifiers/learned novelty steps may
+fit only KNOWN inner-fit data. Thresholds may use only the disjoint KNOWN and
+UNKNOWN inner-calibration roles. Inner validation compares strategies and must
+not adjust their thresholds. The KNOWN validation session is absent from both
+fit and calibration; UNKNOWN validation identities are absent from calibration.
+Role IDs inherit all of their cataloged sessions/conditions as appropriate.
 
-## Leakage-safe feature reduction evaluation
+Repeated inner observations are not additional independent samples. Future
+evaluation code must report outer results separately, retain each fold's
+authorization boundary and construct any outer refit/threshold using only that
+fold's development data. This commit implements **partitions only**: it does
+not choose a model, fit anything, search thresholds, set a temporal window or
+define the later outer-refit threshold-transfer procedure. Outer results cannot
+be used to revise the selection process within that fold. Nested CV is internal
+evaluation of the prespecified procedure, not a newly collected independent test.
 
-Retain the complete 1,434-coordinate `all_xyz_v1` baseline as the reference for assessing accuracy and complexity tradeoffs. The reduction experiment reruns matching classifier baselines with exactly the configurations above, then evaluates:
-
-- **ANOVA:** `SelectKBest(f_classif)`, retaining 256, 512, 768 or 1024 individual coordinates. No landmark grouping or correlation pruning is performed.
-- **PCA:** 90%, 95% or 99% explained variance, using full SVD, `copy=True`, and no whitening. The actual component count is reported independently for each fold.
-
-Every selector, scaler and PCA is fitted inside a fresh per-fold pipeline using only fit samples (and fit labels for ANOVA). Validation is only transformed. Fitting reduction globally before creating folds would leak validation information into feature selection or the learned coordinate system. **`known_test` and `unknown_pool` payloads remain untouched.**
-
-| Representation | KNN / SVM | Random Forest |
-|---|---|---|
-| Baseline | StandardScaler → classifier | classifier |
-| ANOVA | SelectKBest → StandardScaler → classifier | SelectKBest → classifier |
-| PCA | StandardScaler → PCA → classifier | StandardScaler → PCA → classifier |
-
-There is no second scaler after PCA. Selected ANOVA indices retain source-coordinate order. PCA components are not individual landmark coordinates. Source dimensions remain generic; an ANOVA count exceeding the source width fails explicitly, rather than being clipped or skipped.
-
-```powershell
-python -m face_recognition.presentation.cli.evaluate_feature_reduction `
-  --processed-root "..\face-recognition-data\data\processed" `
-  --split-manifest "..\face-recognition-data\splits\identity_split_v1.json" `
-  --report "..\face-recognition-data\reports\feature_reduction_v1.json"
-```
-
-The default grid is 24 representation/classifier configurations and 48 fold fits, executed sequentially with the existing single-thread resource policy. Each fit creates and releases its own working pipeline; no transformed-dataset cache is retained. Full SVD is deterministic within numerical tolerance and can make this experiment substantially slower than the baseline. Input stays `float32` where compatible; temporary scaling/SVD/model arrays are unavoidable.
-
-The external, atomic, no-overwrite JSON report includes per-fold metrics, confusion matrices, timings, actual dimensions, optional technical ANOVA indices, aggregate means/population standard deviations, and comparisons to the matching classifier baseline **from this run**. It contains no scores, component vectors, features, landmarks or absolute source paths. Fit/prediction timing includes all preprocessing; latency remains a batch average.
-
-The primary metric is **mean macro F1**, followed by mean accuracy, fewer **mean retained dimensions across folds**, and lower mean prediction latency. Remaining ties use reduction ID and classifier name. Ranking is deterministic for recorded measurements; close timing ties can change order across runs. Metric/latency deltas are candidate minus baseline (positive latency delta means slower); feature reduction is original dimension minus mean retained dimension, with percentage relative to the original width. All per-fold dimensions remain available when PCA counts differ. There are no pass/fail thresholds and **no final model is selected**.
-
-For small synthetic experiments, repeat `--anova-k` and/or `--pca-variance` to explicitly replace that family's defaults (fractions such as `0.95`, not `95`). The full baseline is always included. This reduction command performs no classifier tuning, correlation analysis or grouped landmark selection.
-
-## Focused ANOVA + SVM development tuning
-
-The preceding development experiment identified **ANOVA-512 + RBF SVM** as the strongest tested configuration: mean accuracy **0.810385**, mean macro F1 **0.801956**, with fold F1 values **0.849215 / 0.754697**. The full-feature SVM reference had accuracy **0.773269** and macro F1 **0.770397**. These session-aware development observations motivate a focused search; they do not establish a final model. PCA is excluded from this stage.
-
-The tuning command evaluates exactly **60 configurations**, with no grid overrides:
-
-- ANOVA `k`: **384, 448, 512, 640, 768**.
-- SVM `C`: **0.5, 1.0, 2.0, 4.0**.
-- SVM `gamma`: **"scale", 0.001, 0.01**.
-- RBF kernel only, `probability=False`; all other SVM/scaler settings are inherited from the existing baseline.
-
-Each configuration uses both existing opposite-session folds inside `known_train_pool`. A fresh **SelectKBest(f_classif) → StandardScaler → SVM** pipeline fits exclusively on that fold's fit rows/labels. Validation is transformed and predicted only. **`known_test` and `unknown_pool` feature payloads remain untouched**. There is no random frame/sample split, probability calibration, final all-development-data fit, or model persistence.
+Save the caller-provided specification externally, for example as
+`../face-recognition-data/v3/splits/experiment_v3.json`, then create the protocol:
 
 ```powershell
-python -m face_recognition.presentation.cli.tune_anova_svm `
-  --processed-root "..\face-recognition-data\data\processed" `
-  --split-manifest "..\face-recognition-data\splits\identity_split_v1.json" `
-  --report "..\face-recognition-data\reports\anova_svm_tuning_v1.json"
+python -m face_recognition.presentation.cli.create_v3_cv_protocol `
+  --processed-root "..\face-recognition-data\v3\processed" `
+  --experiment-spec "..\face-recognition-data\v3\splits\experiment_v3.json" `
+  --output "..\face-recognition-data\v3\splits\cv_protocol_v1.json"
 ```
 
-The search runs **120 fold fits sequentially**, plus **two full-feature SVM reference fits**. It reuses the float32 source matrix, single-native-thread limit, timers, metrics and population-standard-deviation aggregation. Working models/matrices are released between runs. The fixed grid requires at least 768 source features and at least two known identities; invalid input fails before fitting.
+Add **`--validate-only`** to check an existing output against the current
+specification/catalog without writing. Creation uses external atomic
+no-overwrite publication, with no force option. Normal output is aggregate only.
 
-Rank by mean macro F1 first, then higher worst-fold macro F1, smaller absolute fold F1 gap, higher mean accuracy, fewer features, and lower mean batch prediction latency. Final ties use C and configured gamma order. Timings are descriptive, so timing ties can reorder across runs. The winning row is called a **selected development candidate**; unknown-rejection and final holdout stages are still outstanding.
+Catalog inspection reuses completed `all_xyz_v1` processing metadata and safe
+directory discovery. It checks error/rejection counts, exact roles/sessions,
+all 13 expected capture conditions per session, nonempty condition files and
+deterministic ordering. **No JSONL file is opened, hashed or decoded.** The
+manifest status is `catalog_validated`, not a claim that individual records or
+feature dimensions were inspected. A future payload loader must validate those
+before model execution. Other processed representations are not protocol inputs.
 
-For each k, report shared selected indices across the two folds, overlap `100 * shared / k`, and Jaccard `shared / union`. Selections must remain identical for a given k/fold across C/gamma; otherwise the run fails. Default CLI output shows aggregate overlap and the top ten candidates, not indices or confusion matrices. SVM diagnostics record total/per-class support-vector **counts**, aligned with the deterministic pseudonymous label order; support-vector values are never serialized.
+The versioned manifest contains the normalized specification, observed sessions,
+relative condition-file references/sizes, all four outer folds and their inner
+splits, generation policy and SHA-256 digests. The processing-manifest digest
+hashes its exact bytes; specification/catalog/protocol digests use canonical
+metadata JSON. The protocol digest excludes only its own field. Reading a
+protocol regenerates the expected folds, so rehashing an illegal role assignment
+does not make it valid. Validate-only also detects changed source catalog
+metadata. These are **metadata fingerprints, not biometric payload hashes**:
+same-size feature-file edits require later record/content validation. No absolute
+source paths, feature vectors, individual scores or predictions are persisted.
 
-The external aggregate JSON report contains all 60 candidates, both folds' metrics/confusion matrices/timings/counts, overlap diagnostics and technical indices, ranking, selected development candidate, search space and library versions. It refuses existing destinations and repository/input-tree locations, using the shared atomic report writer. No feature/support-vector values or absolute source paths are stored. Exit codes are 0 success, 1 failure/interruption, and 2 usage error.
+The protocol defines data roles only; execution is described below.
 
-Comparisons use the **full-feature SVM freshly evaluated in this run** and the exact **k=512/C=1/gamma="scale"** grid row. No historical score or timing is hardcoded into the evaluator. Metric/latency deltas are candidate minus reference; feature reduction is reference dimension minus k (negative means more features), with percentage relative to that reference dimension. No real tuning results are documented yet.
+## V3 nested novelty-score comparison
 
-## Development UNKNOWN rejection calibration
+This experiment isolates novelty detection from identity classification. Identity
+is fixed to **all_xyz_v1 / 1434 inputs → SelectKBest(f_classif), k=448 →
+StandardScaler → RBF SVC C=4, gamma=0.001, probability=False**. SVC uses OVR
+decision scores, break_ties=False, cache_size=128 and random_state=42. The scaler
+keeps its normal centering/scaling/copy behavior. There is no feature-count or
+classifier search and no change to normalization or XYZ ordering.
 
-The surviving configurations are **ANOVA-512 / RBF SVM C=4, gamma=0.001** and **ANOVA-448 / RBF SVM C=4, gamma=0.001**, both with `probability=False`. This stage compares their ability to reject unseen identities; it does not reopen tuning or train a final recognizer.
+Exactly four higher-is-KNOWN scores are compared:
 
-Unknown identities must be separated **by whole identity**, with all their sessions inheriting one role. Reusing calibration identities for final unknown evaluation would expose the threshold-selection procedure to the same people used to assess it. Assign roles explicitly **before inspecting rejection performance**. No role is inferred from session counts.
+| Candidate | Frame knownness score |
+| --- | --- |
+| `svm_top1` (control) | Maximum class-ordered SVM decision score |
+| `svm_margin` | Largest minus second-largest SVM decision score |
+| `centroid_distance` | Negative Euclidean distance to the **SVM-predicted** identity's fit-only centroid |
+| `mahalanobis_distance` | Negative Mahalanobis distance to the **SVM-predicted** identity's fit-only distribution |
 
-`create_unknown_rejection_split` accepts `--identity-split`, a new external `--output`, and repeatable `--calibration-id` / `--holdout-id` arguments. Both lists are required, disjoint, and together must cover the source `unknown_pool` exactly. The logical manifest contains counts and pseudonymous IDs, not copied features. A canonical metadata-only identity-split digest binds it to its source; no absolute paths or feature-data fingerprints are stored. Existing files are never overwritten.
+Mahalanobis references use per-class sklearn LedoitWolf covariance with
+assume_centered=False and store_precision=False. Add a deterministic ridge
+`1e-8 * max(1, trace(covariance)/dimension)` and use Cholesky solves, without an
+unregularized sample-covariance inverse. The ridge covers completely constant
+classes as well as high-dimensional/singular fits. No class centroid, covariance
+or preprocessing step sees UNKNOWN or held-out known-session fitting data.
+No combined score or additional novelty candidate is evaluated.
 
-Verify an existing unknown split and print counts **without opening any feature files**:
+Every method uses **non-overlapping windows of 7**, inside person/session/condition,
+ordered by sample index. Incomplete tails are counted and discarded. Confidence
+is the median of all seven frame scores; identity uses the retained plurality
+vote, all-frame decision-score sum for ties, then deterministic class order.
+There is no consistency gate or window-size search. Closed-set KNOWN frame
+metrics include trailing frames independently of rejection.
+
+The existing protocol is authoritative. For each of its 18 inner splits, fit
+preprocessing/SVM/references on the one KNOWN fit session; calibrate each method
+on the separate KNOWN calibration session and four UNKNOWN calibration identities;
+then validate at that unchanged threshold on the third KNOWN session and two
+disjoint UNKNOWN validation identities. Threshold search enumerates unique scores,
+finite interior midpoints and finite accept-all/reject-all boundaries. Acceptance
+uses `score >= threshold`. Select higher exact integer balanced-accuracy numerator,
+then lower FAR, lower FRR, then **higher numeric threshold**. AUC/EER remain
+diagnostics and never replace an operational threshold.
+
+Select one method per outer fold by **higher mean inner-validation balanced
+accuracy**, lower mean FAR, lower mean FRR, higher mean AUC, then the table's
+candidate order. Inner means weight the 18 splits equally. Inner comparisons are
+development evidence, not independent final performance.
+
+Before the outer refit, construct a threshold from **inner calibration windows
+only**. For a physical `(person, session, condition, seven sample indices)` window,
+deduplicate repeated observations from the same fit-session model, then take the
+median score across distinct fit models. This happens **after** each model's
+window-7 median. KNOWN windows contribute two distinct session-held-out models;
+UNKNOWN windows contribute three. Repeated rotations produce six raw observations
+per KNOWN window and twelve per UNKNOWN window, but each physical window enters
+the final threshold search **once**. Reports distinguish raw, distinct-model and
+unique physical-window counts. Pooling does not invent cross-model identity votes:
+its calibration metrics are binary only. Do not average the 18 inner thresholds.
+
+Refit the fixed identity pipeline and selected score references on all three
+KNOWN outer-development sessions. Transfer the pooled threshold **directly and
+unchanged**. Development-only diagnostics compare cross-fitted and final-model
+KNOWN/UNKNOWN window distributions, mean/median shifts and acceptance-rate shifts.
+A final development median outside cross-fitted p10/p90 raises a descriptive
+warning; it does not change the method, normalize scores, recalibrate or reject a
+result. KNOWN final-model development scores are explicitly **training
+resubstitution diagnostics**, not generalization or threshold-calibration data.
+Direct score-scale transfer is an assumption tested by the outer results, not a
+guarantee. No outer-test value performs alignment or threshold selection.
+
+Only after selection and threshold construction is the outer test scored once.
+It reports closed-set identity accuracy/macro precision/recall/F1, temporal
+acceptance/rejection, FAR/FRR, correct/incorrect accepted identity rates, exact
+open-set accuracy, binary metrics and diagnostic AUC/EER. Report unweighted outer
+fold means/population standard deviations, including **fold-level** AUC/EER;
+do not pool raw outer scores from different models or score families. **The four
+outer folds are V3's nested-CV generalization estimate. V3 has no independent
+untouched final holdout; V2 remains the last version with one.**
 
 ```powershell
-python -m face_recognition.presentation.cli.create_unknown_rejection_split `
-  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
-  --verify "..\face-recognition-data\splits\unknown_rejection_split_v1.json"
+python -m face_recognition.presentation.cli.evaluate_v3_novelty `
+  --processed-root "..\face-recognition-data\v3\processed" `
+  --protocol "..\face-recognition-data\v3\splits\cv_protocol_v1.json" `
+  --report "..\face-recognition-data\v3\reports\novelty_comparison_v1.json"
 ```
 
-Only the new calibration loader may open `unknown_calibration`; earlier development commands continue to protect the entire unknown pool. **`known_test` and `unknown_holdout` feature payloads remain untouched**. Source file catalogs and split metadata may be checked without reading protected payloads.
+The command refuses an existing report before payload/model work. It validates
+the protocol digests/regenerated roles and exact current catalog/processing
+manifest before decoding payloads into one read-only float32 matrix. All records
+must have 1434 finite values, correct identity/session/condition provenance,
+contiguous ordered indices and increasing timestamps; session dimensions and
+aggregate declared sample counts must agree. Payload bytes are fingerprinted
+while decoding. File timestamps/catalog and protocol bytes are checked again
+before publication. Integrity validation includes outer-test files, but their
+values are not supplied to inner fitting, calibration or selection.
+
+Execution is sequential with one native thread. Identical inner fit populations
+reuse cached inference keyed by protocol/content digests, outer fold, exact fit
+sessions and full fixed configuration. Three inner models are fitted per outer
+fold, then released after scoring; thresholds are **never** cached across
+calibration populations. One final outer model is fitted afterward. No trained
+model or reference parameters are persisted. The external JSON is atomic,
+no-overwrite and aggregate-only: provenance, configuration, inner summaries and
+results, outer metrics, pooling/transport diagnostics and selection frequencies.
+It contains no feature vectors, per-sample scores/predictions, centroids,
+covariances, support vectors or absolute source paths. Elapsed times are omitted
+so identical inputs produce deterministic report JSON in the same environment.
+
+The initial comparison completed and its external `novelty_comparison_v1.json`
+must remain immutable. It selected Mahalanobis in all four outer folds, and all
+four reported threshold-transport shift warnings. These observations motivate the
+structural calibration refinement below, not another novelty-method search.
+
+## V3 same-model Mahalanobis calibration refinement
+
+This is **V3 threshold-calibration refinement under cross-validation**. The
+initial outer-CV results have already been inspected and motivated the revision;
+it is **not a pristine untouched final evaluation or independent final
+generalization estimate**. V3 has no additional untouched holdout. V2 remains
+the last independent external holdout experiment.
+
+Mahalanobis is now fixed. The all_xyz_v1/1434 → ANOVA-448 → StandardScaler →
+RBF SVC C=4, gamma=0.001, probability=False pipeline, existing regularized
+Mahalanobis implementation, non-overlapping window 7, median confidence,
+plurality/tie rules and disabled consistency gate are unchanged. No alternative
+novelty methods or inner strategy search run in this study.
+
+The existing protocol continues to authorize identities, sessions, catalog and
+outer tests. Derive a new calibration role cyclically: the next session after
+the outer-test session in the globally ordered specification calibrates; the
+other two development sessions fit. For the current session names:
+
+| Outer fold | KNOWN fit sessions | KNOWN calibration | KNOWN test |
+| --- | --- | --- | --- |
+| outer_01 | session_03, session_04 | session_02 | session_01 |
+| outer_02 | session_01, session_04 | session_03 | session_02 |
+| outer_03 | session_01, session_02 | session_04 | session_03 |
+| outer_04 | session_02, session_03 | session_01 | session_04 |
+
+The table is derived, not hardcoded: each known session is test once, calibration
+once and fit twice. **All six outer-development UNKNOWN identities**, with both
+sessions, calibrate; the two outer-test UNKNOWN identities remain excluded.
+Only the two KNOWN fit sessions fit the selector, scaler, SVM and class
+distributions. UNKNOWN observations never fit a component.
+
+Fit **one model per outer fold**, then freeze it before scoring calibration data.
+Calibrate a single threshold on window-7 median Mahalanobis knownness scores from
+the designated KNOWN session and UNKNOWN development identities. Reuse the exact
+search: maximize binary balanced accuracy, then lower FAR, lower FRR, then higher
+numeric threshold, over observed values, finite interior midpoints and finite
+boundary cases. ROC AUC/EER are diagnostics and never replace this threshold.
+
+**Do not refit anything after calibration.** The exact same selector, scaler,
+SVM and covariance references score outer test at the calibrated threshold.
+The sealed fold session checks fit-generation count, component identities and
+an in-memory learned-state SHA-256 before/after scoring. It exposes no refit API,
+permits one calibration and one test query per population role, and freezes the
+threshold once. State fingerprinting streams serialization bytes into a digest;
+no fitted parameters or model file are written. Reports explicitly record
+`threshold_transport = "none_same_model_calibration"`, one fit per fold and
+unchanged model-state digests.
 
 ```powershell
-python -m face_recognition.presentation.cli.calibrate_unknown_rejection `
-  --processed-root "..\face-recognition-data\data\processed" `
-  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
-  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
-  --report "..\face-recognition-data\reports\unknown_rejection_calibration_v1.json"
+python -m face_recognition.presentation.cli.evaluate_v3_mahalanobis_calibration `
+  --processed-root "..\face-recognition-data\v3\processed" `
+  --protocol "..\face-recognition-data\v3\splits\cv_protocol_v1.json" `
+  --selection-report "..\face-recognition-data\v3\reports\novelty_comparison_v1.json" `
+  --report "..\face-recognition-data\v3\reports\mahalanobis_calibration_v1.json"
 ```
 
-Each candidate performs two sequential, independent **known-fit-only** ANOVA → scaler → SVM fits. That fold's known out-of-session validation samples and the authorized unknown calibration samples are then scored by the fitted pipeline. Unknowns never reach any fitting step. Their feature matrix is reused read-only; no fitted models, decision vectors or per-sample confidences are persisted.
+The required selection report supplies **method-selection provenance only**:
+validate protocol/catalog, fixed configuration, four Mahalanobis selections and
+source population metadata before payload/model work. Its payload digest must
+match the strict V3 loader's current source bytes. Prior outer thresholds and
+performance metrics are not calibration inputs. The original report and
+protocol remain read-only and are fingerprinted again before publication.
 
-The single confidence definition is **highest minus second-highest SVM OVR decision score**, in deterministic class order. These are margins, not probabilities. Existing SVM `predict` behavior supplies identity predictions, including its existing vote-tie behavior; no classifier parameters are changed. For binary SVC only, the signed decision value `d` is represented as class scores `[-d, d]`, giving the same top-two margin rule. Nonfinite scores and fewer than two class columns are rejected.
+The strict loader, input integrity checks and atomic external no-overwrite
+publication are reused. Outer payloads are validated up front for integrity but
+never enter fitting or calibration populations. A new aggregate-only report
+records cyclic roles, calibration UNKNOWN IDs, calibration metrics and thresholds,
+closed-set/open-set outer metrics, AUC/EER, frame/window/discard counts and
+no-refit evidence. Four-fold means/population std and FAR/FRR min/max preserve
+fold-level results; raw score distributions are never pooled across folds.
+There are no feature vectors, per-sample scores/predictions, covariance matrices,
+support vectors, real names or absolute source paths in the report. There is no
+overwrite/force option or production-model persistence.
 
-Accept the predicted known identity when `margin >= threshold`; otherwise reject as `UNKNOWN`. Each fold searches sorted unique observed margins, valid interior midpoints, zero (accept all), and the next representable finite value above the maximum (reject all). It maximizes **binary balanced accuracy**, then prefers lower unknown **FAR** (fraction of unknown samples accepted), lower known **FRR** (fraction of known samples rejected), and higher threshold. Integer count comparisons avoid rounding-based false ties. Binary macro F1 is also reported; binary acceptance does not imply the identity was correct.
+The same-model study has completed. Its external
+`mahalanobis_calibration_v1.json` is immutable evidence, alongside the initial
+novelty comparison and protocol.
 
-Open-set diagnostics explicitly distinguish accepted-correct known samples, accepted-misidentified known samples, rejected known samples, rejected unknowns, and falsely accepted unknowns. Exact open-set accuracy counts only accepted-correct known samples plus rejected unknowns. Reports retain closed-set macro metrics as a separate reference.
+## V3 post-hoc Mahalanobis diagnostics
 
-For each candidate, the **development rejection threshold** is the median of the two fold thresholds: after sorting `a <= b`, use `a + (b-a)/2`. The report includes their mean, median and absolute difference. Candidate ranking uses unweighted means at the fold-specific optimum thresholds: higher exact open-set accuracy, lower unknown FAR, higher known correct-identification rate, higher binary balanced accuracy, smaller threshold difference, then fewer features. Metrics at the transferred midpoint are stored separately for transparency. The same unknown calibration identities are scored in both folds; this is not additional independent data.
+The diagnostic workflow localizes errors in the completed same-model study;
+it changes no model-selection or calibration decisions and makes no new final
+performance claim. V3 remains a cross-validation-based calibration refinement.
+V2 remains the last independent external holdout experiment.
 
-The external aggregate JSON report contains split metadata, both candidates, thresholds, rates, means/population standard deviations, threshold stability, ranking, and the **selected open-set development candidate**. It includes no feature values, per-sample confidence/decision vectors or absolute paths, and uses atomic no-overwrite publication outside repository/input trees. CLI output is aggregate-only; exit codes are 0 success, 1 failure/interruption and 2 usage error. No real UNKNOWN calibration results are documented yet.
+The study retained aggregate metrics and learned-state digests, not fitted
+models or individual observations. Diagnostics therefore **reconstruct each
+original two-session fit in memory** using the unchanged pipeline. Before any
+outer scoring, the reconstructed learned-state SHA-256 must equal the saved
+digest. Apply the **saved threshold**, without calibration, threshold search,
+ROC/EER threshold enumeration or strategy selection. Verify the model state
+after inference and require the saved outer counts, closed-set/operational
+metrics and score-distribution summaries to reproduce exactly. A mismatch in
+data, software versions, learned state or saved summaries fails explicitly;
+there is no fallback that changes the experiment. Grouped attributions are
+reconstructed, not extracted from previously retained individual predictions.
 
-**These are calibration-set development diagnostics, not independent evaluation results.** The SVM's absolute margin distribution may shift when refitted using more known training data. A later holdout stage must measure whether this median threshold transfers adequately. No final production model is selected or persisted, and the reserved holdouts have not been evaluated.
+Each fold reports KNOWN and UNKNOWN counts, acceptance/rejection rates and
+mean/median window knownness by all 13 conditions and by pose, distance,
+translation and center groups. KNOWN summaries also include correct accepted
+identification and accepted misidentification. Additional tables cover KNOWN
+test sessions, UNKNOWN identities and KNOWN condition-by-session effects.
+Severity tables sort by FRR/FAR, then error count and label. Contribution tables
+sort by error-window count and label, retaining all largest-count ties. Empty
+groups have zero counts and null rates/statistics.
 
-## Comparing UNKNOWN rejection scores
+Pool decision counts only across disjoint outer tests. Do not pool raw scores
+across fitted models: aggregate condition/group score summaries explicitly
+report unweighted means/population standard deviations of fold means and
+medians. Session/identity score summaries remain within their single test fold.
 
-The first margin-only experiment had FAR about **0.357 / 0.403** and FRR about **0.356 / 0.334** for ANOVA-512 / ANOVA-448, despite closed-set macro F1 around **0.817** for both. Stable fold thresholds did not imply adequate known/unknown separation. Closed-set classification chooses a known label; open-set rejection must additionally recognize when none of those identities is appropriate.
-
-This controlled comparison leaves the two **C=4, gamma=0.001, RBF, probability=False** identity classifiers unchanged. There are exactly four confidence definitions, all oriented so **larger means more likely KNOWN**:
-
-| Score family | Definition |
-|---|---|
-| `svm_margin` | Highest minus second-highest OVR decision score; retained as the reference |
-| `svm_top1` | Maximum OVR decision score |
-| `centroid_distance` | Negative Euclidean distance to the **SVM-predicted class** centroid in ANOVA-selected/scaled space |
-| `normalized_centroid_distance` | Negative predicted-class centroid distance divided by that class's median fit distance |
-
-Centroids are means of **known fold-fit samples only**, grouped by true fit labels. Class distance scales are medians of those same samples' distances to their own centroid, floored at a fixed **1e-8** in selected/scaled Euclidean units. Validation and unknown calibration data never affect centroids, scales, ANOVA, StandardScaler or SVM fitting. One fitted classifier per candidate/fold is shared by all four scores: **four identity-model fits total**, sequentially, with no transformed-dataset cache. Existing SVM identity predictions, class order and binary `[-d,d]` score convention are preserved.
+Sessions proxy time/place/environment context; conditions proxy
+pose/distance/translation. **There are no lighting labels**, so these summaries
+cannot identify lighting as a cause. Session, fold model and threshold effects
+are confounded. The report's neutral interpretation describes observed
+contributions and rates without causal or statistical-significance claims.
 
 ```powershell
-python -m face_recognition.presentation.cli.evaluate_rejection_scores `
-  --processed-root "..\face-recognition-data\data\processed" `
-  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
-  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
-  --report "..\face-recognition-data\reports\unknown_rejection_scores_v1.json"
+python -m face_recognition.presentation.cli.analyze_v3_mahalanobis_diagnostics `
+  --processed-root "..\face-recognition-data\v3\processed" `
+  --protocol "..\face-recognition-data\v3\splits\cv_protocol_v1.json" `
+  --evaluation-report "..\face-recognition-data\v3\reports\mahalanobis_calibration_v1.json" `
+  --report "..\face-recognition-data\v3\reports\mahalanobis_diagnostics_v1.json"
 ```
 
-This command uses only known development folds and the existing explicit `unknown_calibration` identities. **`known_test` and `unknown_holdout` biometric payloads remain untouched**, with separate protection flags in the report and guarded-file tests. It does not create a new unknown split, change identity roles, tune classifiers or reopen the 60-candidate grid.
+The strict V3 loader and input integrity checks are reused. Source protocol,
+evaluation and payload digests establish provenance; report references contain
+filenames rather than absolute local paths. Inputs remain read-only. The new
+external report is aggregate-only, atomic and no-overwrite, with no feature
+vectors, individual scores/predictions or fitted parameters. No real diagnostic
+conclusions are recorded here.
 
-Threshold-independent diagnostics include **ROC AUC with KNOWN positive**, calculated from continuous scores (probability a known score outranks an unknown score, counting ties by half), and discrete **EER**. EER uses the finite observed-score/midpoint/boundary operating point with FAR and FRR closest; ties prefer lower FAR, lower FRR, then higher threshold. Reported EER is `(FAR+FRR)/2` there, with no interpolation. The original balanced-accuracy threshold search and its FAR/FRR/higher-threshold tie rules remain unchanged; signed thresholds are enabled for negative-distance scores.
+## V3 controlled pose-representation experiment
 
-Diagnostic operating points target **FAR <=20%, <=10%, <=5%**. Under each cap, choose maximum known acceptance, then lower FAR, then higher threshold. **FAR** is the fraction of unknown samples accepted; **FRR** is the fraction of known samples rejected. Points accepting **at most 1% of known samples** are explicitly flagged `impractical` (the documented meaning of "effectively all rejected"), while retaining their thresholds and measured rates. This flag and the FAR caps are diagnostic conventions, **not application requirements**. A point with no finite feasible threshold is reported unavailable.
+Inspected Mahalanobis diagnostics identified strong KNOWN rejection in yaw and
+pitch conditions. This experiment varies **only the representation**:
+`all_xyz_v1` remains the baseline; `all_xyz_pose_v2` is a deterministic face-local
+coordinate candidate. Both retain all 478 XYZ landmarks (1434 values), in
+landmark order. Yaw left/right, pitch up/**pitch down**, and roll left/right are
+addressed by one geometric transform, without condition branches, identity
+labels, fitted statistics or learned frontalization.
 
-Per fold, report AUC, EER and its threshold, the balanced-accuracy calibration point, FAR-constrained points, and separate known/unknown score-distribution count, mean, population std, median, and linearly interpolated 10th/25th/75th/90th percentiles. Reports aggregate both folds, retain AUC/FAR/FRR/open-accuracy gaps, and include pooled score summaries. Pooled unknown counts are **score observations from two fitted models**, not additional independent subjects. Binary acceptance metrics remain separate from accepted-correct known identification, accepted-known misidentification, and exact open-set accuracy. Median-threshold diagnostics are also retained separately from fold-optimal metrics.
+For each raw face, first correct aspect ratio as in the existing normalizer:
+`p = (x, y * height/width, z)`. Use the same eye-corner groups
+`E0=mean(33,133)` and `E1=mean(362,263)`. Let
+`U=mean(10,109,338)` (forehead contour) and
+`D=mean(152,148,377)` (chin contour). Averaging reduces reliance on one point;
+these references still carry detector noise and may vary with expression.
 
-Rank the eight model/score combinations by higher mean AUC, lower mean EER, lower FAR at the balanced-accuracy threshold, higher correct-identification rate, higher exact open-set accuracy, smaller absolute threshold gap, then fewer ANOVA features. Final ties use score-family name. Threshold gaps are in each score's own units. Deltas compare each score with the **same classifier's margin reference from these identical fits**. The first-ranked result is only the **best rejection-score development candidate**.
+```text
+origin = (E0 + E1) / 2
+scale = ||E1 - E0||_2                  # 3D interocular distance
+x_hat = (E1 - E0) / scale
+v = D - U
+y_temp = v - dot(v, x_hat) * x_hat
+y_hat = y_temp / ||y_temp||_2
+z_hat = cross(x_hat, y_hat) / ||cross(x_hat, y_hat)||_2
+y_hat = cross(z_hat, x_hat)            # reconstruct orthogonal vertical
+q = (p - origin) / scale
+pose_xyz = (dot(q, x_hat), dot(q, y_hat), dot(q, z_hat))
+```
 
-The external aggregate JSON report uses atomic no-overwrite publication and contains no per-sample scores, feature/support vectors, centroid vectors, class scale vectors or absolute source paths. The CLI prints aggregate diagnostics only. Calibration-set metrics are not independent holdout estimates; any threshold transfer after refitting still requires later holdout evaluation. No real score-comparison results are documented yet, and no final recognizer is selected or persisted.
+The frame is right-handed: +x runs from the first eye group to the second,
++y is superior-to-inferior, and +z is their cross product (approximately away
+from the camera for a frontal image). There is no view-dependent sign flip.
+Reject non-finite geometry/results, eye/vertical lengths <= `1e-8` in corrected
+width-relative units, vertical residual <= `max(1e-8, 1e-6*||v||)`, or cross-product
+norm <= `1e-6`. Check basis orthonormality and determinant +1 within `1e-12`.
 
-## Temporal open-set development evaluation
+This canonicalizes ideal rigid rotations of the supplied geometry.
+**MediaPipe z is relative depth, not metric reconstruction.** This is
+face-relative pose reduction, not true metric 3D frontalization or a guarantee
+of pose invariance on real detections, occlusions or non-rigid expressions.
 
-Single-frame rejection did not separate known and unknown samples adequately: the best distance-score development result still rejected many known observations. Attendance decisions should therefore be evaluated across several observations rather than relying on one inference. This experiment keeps **ANOVA-448 → StandardScaler → RBF SVM C=4, gamma=0.001, probability=False** fixed and compares only **centroid_distance** and the **svm_margin** reference. There is no new classifier, score family or model tuning.
-
-Use **non-overlapping windows of 1, 3, 5 and 7 samples**. Within each person/session/condition, sort by `sample_index`, anchor at the smallest index, and discard only trailing incomplete windows. Duplicate or missing indices fail explicitly. Windows never cross an identity, session or condition. Overlapping windows are avoided because shared samples would inflate the apparent observation count. These time-spaced, static-condition captures approximate temporal observations; they do not measure continuous-video performance or end-to-end decision latency. A later Raspberry implementation may use a rolling live window, but none is introduced here.
-
-Identity aggregation uses the largest vote count. Ties use the highest sum of that class's SVM decision scores **across every frame**, then deterministic class order for an exact remaining tie. Confidence is the **median of every frame's confidence**, including frames voting for another identity; larger always means more likely KNOWN. Vote diagnostics distinguish unanimous windows, a unique but non-unanimous plurality (the reported majority category), and tied top vote counts before tie breaking.
-
-There are only **two sequential identity-model fits**, one per known development fold. ANOVA, scaling, SVM and centroids use known fold-fit data only. Each fold/score/window size independently calibrates its threshold using known out-of-session validation windows and `unknown_calibration` windows, reusing the existing balanced-accuracy objective and FAR/FRR/higher-threshold tie rules. Frame thresholds are never reused for larger windows. **`known_test` and `unknown_holdout` biometric payloads remain untouched.**
+Process raw capture into a **fresh, separate pose-only root**. The command
+preserves source provenance, timestamps, conditions and sample ordering/indices;
+it publishes only `all_xyz_pose_v2` plus manifests, with the transform definition
+recorded. Existing normalized/baseline datasets are never overwritten. Processing
+fails on invalid geometry, retaining failed staging rather than a completed run.
 
 ```powershell
-python -m face_recognition.presentation.cli.evaluate_temporal_open_set `
-  --processed-root "..\face-recognition-data\data\processed" `
-  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
-  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
-  --report "..\face-recognition-data\reports\temporal_open_set_v1.json"
+python -m face_recognition.presentation.cli.process_pose_dataset `
+  --raw-root "..\face-recognition-data\data\raw" `
+  --output-root "..\face-recognition-data\v3\pose_processed"
+
+python -m face_recognition.presentation.cli.evaluate_v3_pose_representation `
+  --baseline-root "..\face-recognition-data\v3\processed" `
+  --candidate-root "..\face-recognition-data\v3\pose_processed" `
+  --protocol "..\face-recognition-data\v3\splits\cv_protocol_v1.json" `
+  --report "..\face-recognition-data\v3\reports\pose_representation_v1.json"
 ```
 
-The external atomic, no-overwrite JSON report contains ROC AUC, discrete EER and threshold, balanced-accuracy calibration, FAR/FRR and identification metrics, 20%/10%/5% FAR diagnostics, and used/discarded/window counts. It retains fold-specific thresholds, their midpoint development threshold, and separate metrics at that midpoint. Means are unweighted across folds, with population standard deviations; count totals are **fold observations**, so unknown windows scored by both models are counted twice. Condition diagnostics aggregate across identities using each fold's global threshold, without condition-specific calibration or participant-level results. No per-frame scores, vote sequences, feature/centroid vectors or absolute paths are stored.
+The existing protocol and cyclic two-fit/one-calibration/one-test session roles
+are unchanged. Candidate catalog membership and every sample's provenance must
+match the baseline; candidate manifests/bytes have separate fingerprints.
+Strict width/finite-value/order/count checks remain in force. Both representations
+use ANOVA-448, StandardScaler, RBF SVC C=4/gamma=0.001/probability=False and the
+same regularized Mahalanobis implementation. Each representation/fold calibrates
+its own numeric threshold on the same allowed populations using the existing
+balanced-accuracy/FAR/FRR/higher-threshold rule. **No refit follows calibration**.
+Windows remain non-overlapping size 7, median score, existing plurality/tie
+rules, and no consistency gate. No classifier or novelty search occurs.
 
-Every row includes deltas against the **same score's window-size-1 reference**. Rank by higher mean AUC, lower EER, lower FAR, higher correct known identification, higher exact open-set accuracy, lower FRR, then smaller window; final ties use score name. Larger windows are not automatically better: inspect improvements and discarded samples before choosing decision latency. The first-ranked row is only the **best temporal open-set development candidate**. These are calibration-set diagnostics, not independent holdout estimates; no final model is selected or persisted, and no real temporal results are documented yet.
+Report overall outer-fold means/population standard deviations, condition-level
+KNOWN FRR/correct ID and score summaries, UNKNOWN FAR by condition/identity, and
+KNOWN session FRR. All 13 conditions, including **pitch_down**, appear in fold
+results and the CLI comparison table. Descriptive candidate-minus-baseline FRR
+deltas explicitly cover yaw, pitch, roll, near and far. Condition decision counts
+pool disjoint outer tests; raw score distributions are not pooled across models.
 
-## Distance-based novelty development evaluation
+The predeclared ranking is higher mean outer binary balanced accuracy, lower
+mean outer FRR, lower mean outer FAR, higher mean closed-set macro F1, then
+`all_xyz_v1` on an exact tie. Improved yaw alone cannot select the candidate.
+Reports are aggregate-only, atomic and no-overwrite; prior reports/protocols
+remain unchanged. This is an **iterative V3 study motivated by inspected
+diagnostics**, not an untouched final holdout or independent final generalization
+claim. V2 remains the last independent external holdout.
 
-Changing the rejection threshold alone trades false acceptance against false rejection; it does not improve separation of overlapping score distributions. Earlier margin/centroid and temporal experiments motivate a dedicated novelty score. **Identity classification** still asks which known person a sample resembles and uses the unchanged **ANOVA-448 → StandardScaler → RBF SVM C=4, gamma=0.001, probability=False**. **Novelty detection** separately asks whether the sample is sufficiently close to the known training population to accept that SVM identity.
+## Frozen V3 open-set development configuration
 
-There are exactly three new scores in the ANOVA-selected, standardized **Euclidean** space:
+The completed iterative comparison selected **all_xyz_pose_v2** under the
+predeclared highest-mean-outer-balanced-accuracy rule. These are development
+cross-validation results, **not independent final generalization**:
 
-- `nearest_1`: negative distance to the nearest known fold-fit sample.
-- `mean_3nn`: negative mean distance to the three nearest known fold-fit samples.
-- `mean_5nn`: negative mean distance to the five nearest known fold-fit samples.
+| Metric | all_xyz_v1 | all_xyz_pose_v2 |
+| --- | ---: | ---: |
+| Closed-set accuracy | 0.897500 | 0.948173 |
+| Closed-set macro F1 | 0.897409 | 0.948020 |
+| ROC AUC | 0.835956 | 0.890893 |
+| EER | 0.229808 | 0.179567 |
+| FAR | 0.120192 | 0.098558 |
+| FRR | 0.302885 | 0.261538 |
+| Open-set exact accuracy | 0.745879 | 0.782280 |
+| Binary balanced accuracy | 0.788462 | 0.819952 |
 
-All scores are oriented so larger means more likely KNOWN. References span **all known fit identities**, not just the SVM-predicted identity. The nearest neighbor's label is used only for the aggregate same-identity diagnostic, never as the recognized identity. Exact nearest-distance ties choose the earliest reference row in deterministic development order. At least five fit references are required because all three scores are evaluated together.
+Global improvement does not resolve pose sensitivity. KNOWN yaw-left FRR fell
+from 0.725000 to 0.662500, and yaw-right from 0.862500 to 0.762500; both remain
+difficult. Pitch-up did not improve (0.500000 to 0.512500); pitch-down remained
+0.412500. Session/context variation and harder-to-reject UNKNOWN identities
+(including p009 in prior diagnostics) remain limitations. MediaPipe relative
+depth is not metric 3D geometry. These limitations motivate no tuning in the
+freeze workflow.
 
-Each of the two opposite-session development folds fits ANOVA, scaling, SVM, neighbor references and reference centroids using **known fold-fit data only**. Known validation and unknown calibration never enter those fits. Both existing `svm_margin` and `centroid_distance` are recalculated from the **same fitted models** for a controlled comparison; there are only two model fits, executed sequentially. **`known_test` and `unknown_holdout` biometric payloads remain untouched.** Temporal aggregation is intentionally excluded to isolate the distance score itself.
+Freeze the existing pose-transform definition and implementation fingerprint,
+1434 inputs, ANOVA f_classif k=448, StandardScaler and RBF SVC
+C=4/gamma=0.001/probability=False. Mahalanobis remains the only operational
+novelty score, using the current per-class LedoitWolf/shrinkage, ridge and
+Cholesky implementation and the SVM-predicted class; knownness is negative
+distance. Preserve non-overlapping window 7, median score, existing
+plurality/decision-sum/class-order identity ties, and disabled consistency gate.
+
+**Same-model calibration is mandatory:** the fitted selector, scaler, SVM and
+Mahalanobis references/covariances that produce calibration scores must also
+use the resulting threshold. Record
+`threshold_transport="none_same_model_calibration"`; no post-calibration refit
+is allowed. Maximize binary balanced accuracy, then lower UNKNOWN FAR, lower
+KNOWN FRR, then higher numeric threshold, using the existing enumeration.
+AUC/EER remain diagnostic only. The freeze leaves the numeric threshold
+uncalibrated and the deployable fit/calibration population allocation undefined;
+the next stage must declare that allocation while preserving this principle.
 
 ```powershell
-python -m face_recognition.presentation.cli.evaluate_distance_novelty `
-  --processed-root "..\face-recognition-data\data\processed" `
-  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
-  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
-  --report "..\face-recognition-data\reports\distance_novelty_v1.json"
+python -m face_recognition.presentation.cli.freeze_v3_open_set_config `
+  --protocol "..\face-recognition-data\v3\splits\cv_protocol_v1.json" `
+  --novelty-report "..\face-recognition-data\v3\reports\novelty_comparison_v1.json" `
+  --calibration-report "..\face-recognition-data\v3\reports\mahalanobis_calibration_v1.json" `
+  --diagnostics-report "..\face-recognition-data\v3\reports\mahalanobis_diagnostics_v1.json" `
+  --pose-report "..\face-recognition-data\v3\reports\pose_representation_v1.json" `
+  --output "..\face-recognition-data\v3\models\open_set_config_v3.json"
 ```
 
-Distances are computed in query batches of at most **128 rows** against one owned, read-only float64 reference matrix. Float32 source matrices are unchanged; float64 query conversion and distance work are batched. Only the five smallest distances per query are reduced into scores; no full validation-plus-unknown pairwise matrix is retained. Native threads are limited to one.
+This metadata-only command validates the completed evidence chain and published
+winner, hashes the exact bytes of all five artifacts, and fingerprints the local
+normalization/Mahalanobis implementations. It never opens processed payloads,
+fits an estimator, recalibrates, or reruns an experiment. The immutable,
+deterministic configuration contains curated aggregate evidence, technical
+filenames/digests, methodological status and limitations; no biometric vectors,
+trained state or absolute paths. Publication is atomic and refuses overwrite,
+with no force/unfreeze option. Changed decisions require a new version and
+explicit development reasoning. **V3 has no additional untouched independent
+holdout; V2 remains the last independently evaluated external holdout.**
 
-The external atomic, no-overwrite JSON report contains fold-level ROC AUC/EER, the existing balanced-accuracy threshold search and tie rules, FAR/FRR and identity metrics, 20%/10%/5% FAR operating points, threshold midpoint diagnostics, and reference deltas. Operating points accepting at most 1% of known samples retain the existing `impractical` flag. Positive-distance summaries are provided separately from signed-score summaries: count, mean, population std, median, and linear 10th/25th/75th/90th percentiles. Pooled distance counts are fold observations; the same unknown calibration samples are scored by both fold models.
+## Deployable V3 construction and calibration
 
-Nearest-same-identity rates for known validation and the largest aggregate nearest-label frequency for unknown calibration are diagnostic only. The latter is concentration, **not unknown identity accuracy**. Neither affects thresholds. No individual distances, neighbor sample IDs, reference matrices, feature/centroid vectors or absolute paths are saved.
+Construct the operational model from `open_set_config_v3.json`; do not repeat
+selection, comparisons or cross-validation. Existing `all_xyz_pose_v2` payloads
+are loaded directly, without regenerating normalization. Frozen protocol and
+pose-report hashes authorize membership/catalog/payload provenance. By default,
+the command locates their recorded filenames under the sibling `splits/` and
+`reports/` directories; `--protocol`/`--pose-report` can locate relocated copies
+only when the frozen hashes still match.
 
-Rank novelty scores by higher mean AUC, lower EER, lower FAR, higher known correct identification, higher open-set accuracy, lower FRR, then fewer neighbors. Results are calibration-set development diagnostics, not independent holdout performance. Refitting can shift reference distances and thresholds. The winner is only the **best distance-based novelty development candidate**; no final model is selected, no temporal novelty windows are implemented, and no real novelty results are documented yet.
+The fixed chronological allocation is:
 
-## Temporal distance-novelty development evaluation
+| Role | Population | Sessions | Expected real frames |
+| --- | --- | --- | ---: |
+| Fit | All 10 registered KNOWN identities | session_01, session_02, session_03 | 7800 |
+| KNOWN calibration | Same 10 registered identities | session_04 | 2600 |
+| UNKNOWN calibration | All 8 development UNKNOWN identities | session_01, session_02 | 4160 |
 
-Distance novelty is now the main UNKNOWN development direction: frame-level `nearest_1` achieved AUC **0.823304**, FAR **0.089904**, FRR **0.347115**, while `mean_5nn` achieved AUC **0.826745**, FAR **0.143750**, FRR **0.277500**. These earlier development observations suggest a conservative nearest-neighbor behavior versus better known acceptance with five neighbors; they are not final holdout results. Both separated known/unknown observations better than the prior SVM-margin/centroid methods. This next experiment asks whether aggregating observations improves those two scores further; improvement is not assumed.
+Membership comes from the fingerprinted protocol; IDs are not guessed from
+numbering. The real KNOWN set is p001/p004/p005/p006/p007/p010/p011/p012/p013/p014;
+the UNKNOWN set is p002/p003/p008/p009/p015/p016/p017/p018. Uniform per-condition
+counts are derived from the frozen catalog and checked against every actual
+person/session/condition group (20 samples in the real catalog). Missing/extra
+participants, sessions, conditions, rows or mismatched payload bytes fail closed.
 
-Keep **ANOVA-448 → StandardScaler → RBF SVM C=4, gamma=0.001, probability=False** fixed. Only `nearest_1` and `mean_5nn` are computed; `mean_3nn` is excluded. All preprocessing, neighbor references and SVM fitting use **known fold-fit samples only**. Euclidean distance uses the existing bounded-batch implementation. Known validation and unknown calibration are transformed/scored only. **`known_test` and `unknown_holdout` biometric payloads remain untouched.**
+Fit ANOVA-448, StandardScaler, RBF SVC C=4/gamma=0.001/probability=False and
+the exact regularized predicted-class Mahalanobis state **once**, on KNOWN
+session_01..03 only. UNKNOWN and session_04 never fit any component. Seal this
+state before generating the two calibration populations. Calibrate one threshold
+on non-overlapping window-7 **median** scores using the existing balanced
+accuracy, lower FAR, lower FRR, higher-threshold rule. Identity voting/ties and
+disabled consistency gate remain frozen. AUC/EER are diagnostic only.
+**Never refit after calibration.** Record
+`threshold_transport="none_same_model_calibration"`.
 
-Use the existing **1/3/5/7-sample non-overlapping windows**, sorted by `sample_index` inside person/session/condition. Never combine groups, pad samples or slide overlapping windows into development metrics. Reject duplicate/gapped indices and record trailing remainders. Identity is chosen by the largest **SVM** vote count; tied counts use summed class decision scores across all frames, then deterministic class order. Neighbors never select identity. Window novelty confidence is the **median of all per-frame novelty scores**, with higher scores meaning more likely KNOWN.
-
-For current **20-sample** condition captures, window 5 yields **four complete windows with no discarded samples**. Window 7 yields two windows, uses 14 samples and discards six. These efficiencies are reported; window 5 gets no ranking bonus. Static, time-spaced capture samples remain an approximation to temporal observations, not a live-video latency measurement.
+Fit-generation and component-identity guards accompany value-based SHA-256
+fingerprints for selected indices, selector, scaler, SVM, Mahalanobis and full
+fitted state. Before/after-calibration fingerprints must match. Canonical array
+content hashing avoids depending on memory aliases/order during joblib
+round-trips. Structural validation checks dimensions, parameters, class mapping
+and learned-state fingerprints without fitting or inference.
 
 ```powershell
-python -m face_recognition.presentation.cli.evaluate_temporal_distance_novelty `
-  --processed-root "..\face-recognition-data\data\processed" `
-  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
-  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
-  --report "..\face-recognition-data\reports\temporal_distance_novelty_v1.json"
+python -m face_recognition.presentation.cli.train_v3_deployable_model `
+  --processed-root "..\face-recognition-data\v3\pose_processed" `
+  --frozen-config "..\face-recognition-data\v3\models\open_set_config_v3.json" `
+  --output-dir "..\face-recognition-data\v3\models\open_set_model_v3"
 ```
 
-Two known-only fold models serve all eight method/window configurations. Each of the **16 fold/method/window analyses** independently calibrates its window threshold with the existing balanced-accuracy, lower FAR, lower FRR, higher-threshold rule; frame thresholds are never reused. Report ROC AUC, EER/threshold, FAR/FRR, correct/misidentified known acceptance, exact open-set accuracy, binary metrics and the existing 20%/10%/5% FAR diagnostics (including impractical points). Every delta compares against the **same method at window size 1**.
+Use a fresh versioned output directory, rather than the existing `models/`
+parent. There is no force option. Staging, artifact round-trip validation and
+completion-manifest-last publication precede atomic directory rename; failed
+construction publishes no partial final bundle. The layout is:
 
-The external atomic, no-overwrite JSON report also includes used/discarded counts, aggregate condition diagnostics at global fold thresholds, vote stability and unweighted fold means/population std. Unknown windows are scored by both fold models, so summed counts represent fold observations. There are no participant-level condition metrics, individual distances, neighbor IDs, confidence arrays, vote sequences, reference vectors or absolute paths.
-
-Rank by higher mean AUC, lower EER, lower FAR, higher correct known identification, higher open-set accuracy, lower FRR, smaller window, then smaller neighbor count. The winner is only the **best temporal distance-novelty development candidate**. Calibration observations are not independent holdout estimates, refitting may shift distance thresholds, no final recognizer or Raspberry rolling buffer is created, and no real temporal-distance results are documented yet.
-
-## Freezing the open-set development configuration
-
-Development/model selection uses **`known_train_pool` + `unknown_calibration`**. The selected architecture is now fixed as **`all_xyz_v1` (1434 coordinates) → SelectKBest(f_classif), k=448 → StandardScaler → RBF SVC C=4, gamma=0.001, probability=False**, with **Euclidean mean_5nn novelty**, negative-distance confidence, **window 7**, median confidence and majority SVM identity voting. Ties use summed class decision scores across every window frame, then deterministic class order. Neighbors decide novelty only.
-
-```powershell
-python -m face_recognition.presentation.cli.freeze_open_set_config `
-  --development-report "..\face-recognition-data\reports\temporal_distance_novelty_v1.json" `
-  --output "..\face-recognition-data\models\open_set_config_v1.json"
+```text
+open_set_model_v3/
+  model.joblib          # selector, scaler, SVM, Mahalanobis, threshold, classes, frozen policy
+  frozen_config.json    # exact source configuration bytes
+  manifest.json         # aggregate provenance/counts/calibration metrics and integrity hashes
 ```
 
-The command reads **only the aggregate development report**, never feature JSONL files. It checks report completeness, exact architecture/scaler and development policies, the selected `mean_5nn__window_7` winner/ranking, opposite-session folds, and agreement between aggregate evidence and fold statistics. It records a SHA-256 digest of the **exact report bytes**, experiment/schema identifiers, and a small aggregate evidence summary. It does not copy paths, participant IDs, fitted parameters or fold thresholds. Output under `models` is configuration/provenance JSON, **not a trained model**. Publication is atomic, external to the repository and refuses every existing destination. There is no edit/unfreeze option; different choices require a new version/file and an explicit new development experiment.
+The joblib contains required fitted statistics/support vectors, but no retained
+training/calibration frame matrix or raw landmarks. These artifacts are
+biometric-derived, local-only and must never be committed. Repository-local
+publication is rejected; `.gitignore` also excludes joblib/NPZ artifacts. The
+loader is for trusted local bundles: hashes establish integrity, not authenticity.
 
-The numeric threshold remains **null / not calibrated**. The frozen future policy is:
+```python
+from face_recognition.infrastructure.persistence.v3_deployable_model import load_v3_deployable_bundle
 
-1. Refit ANOVA-448, StandardScaler and the fixed SVM on **all `known_train_pool`**, and build its full transformed 5-NN reference set.
-2. Score known calibration queries with **their own reference row excluded by `(person_id, session_id, condition, sample_index)`**. At least **five other references** (six total) are required; distinct samples with identical feature values remain eligible.
-3. Score only `unknown_calibration` against that known reference population. Neither unknown nor holdout samples fit preprocessing, SVM or references.
-4. Apply the frozen non-overlapping, person/session/condition **7-sample windows**, median novelty and SVM voting; discard trailing remainders. Search thresholds at **window level** with the existing signed-score observed/midpoint/boundary search. Select higher binary balanced accuracy, then lower FAR, lower FRR, higher threshold.
-5. Freeze that numeric threshold **before loading `known_test` or `unknown_holdout` payloads**. Only then may the next stage perform a one-time final holdout evaluation.
-
-Full refitting changes the ANOVA subset, scaling, SVM and reference population, so the absolute distance scale can shift. Copying the development fold threshold or its midpoint would not implement this calibration policy. Known calibration after refit with neighbor self-exclusion is still **not independent out-of-session validation**; the later holdouts must measure transfer. This commit serializes the procedure only: no final fitting, numerical calibration or holdout evaluation is performed.
-
-Final holdouts must never influence architecture, ANOVA k, SVM parameters, novelty method, temporal window, metric definitions or threshold selection. Their results are **evaluation, not another tuning round**. The manifest freezes metric definitions and the development window policy; a future rolling latest-7 Raspberry buffer remains unimplemented. **`known_test` and `unknown_holdout` remain untouched.**
-
-## Full-development refit and numeric threshold calibration
-
-The configuration must already be frozen. This command reads and validates it exactly; there are **no model/threshold overrides or force option**. It uses the existing authorized loaders for **all `known_train_pool`** (the current `session_01` + `session_02` together) and only the designated **`unknown_calibration`** identities. **`known_test` and `unknown_holdout` payloads remain unopened.** Counts and identity/session assignments come from the split manifests, not hardcoded participant totals.
-
-Refit **SelectKBest(f_classif), k=448 → StandardScaler → RBF SVC C=4, gamma=0.001, probability=False** on all known development samples. The transformed known samples alone form the Euclidean **mean_5nn** reference set; neither unknown calibration nor holdouts fit any component. SVM remains the identity classifier. The reference lookup decides novelty only.
-
-Known calibration frames explicitly exclude their **own exact reference row before selecting five neighbors**, using the validated dataset/reference row alignment. At least six reference samples are required. Distinct samples with identical feature vectors remain eligible, including ties at zero distance. Unknown calibration uses the full known reference population without exclusion. Distance computation stays bounded to query batches; no complete population-by-population distance matrix is retained.
-
-Calibrate on **median frame novelty scores over complete windows of 7**, grouped by person/session/condition in sample-index order, non-overlapping, with trailing remainders discarded. Aggregate identity with the frozen SVM vote/tie policy. Use the existing exact signed-score threshold search: higher binary balanced accuracy, then lower FAR, lower FRR, higher threshold. ROC AUC/EER and 20%/10%/5% FAR points are calibration diagnostics and never replace the selected threshold. These known calibration scores are training resubstitution with neighbor self-exclusion, **not independent generalization accuracy**; no training accuracy is advertised.
-
-```powershell
-python -m face_recognition.presentation.cli.refit_open_set_model `
-  --processed-root "..\face-recognition-data\data\processed" `
-  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
-  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
-  --frozen-config "..\face-recognition-data\models\open_set_config_v1.json" `
-  --output-dir "..\face-recognition-data\models\open_set_v1"
+recognizer = load_v3_deployable_bundle(model_directory)
+result = recognizer.predict_window(pose_features)  # one coherent (7, 1434) pose-feature window
+# result.decision: KNOWN/UNKNOWN; result.identity: registered ID or None
+# result.knownness_score: median Mahalanobis score; result.threshold: persisted threshold
 ```
 
-The external output contains `feature_selector.joblib`, `scaler.joblib`, `identity_svm.joblib`, `novelty_reference.npz`, `threshold.json`, and `manifest.json`. NPZ uses non-pickle arrays: transformed references, integer reference labels, and the sorted pseudonymous class mapping needed for inference. It contains no source sample IDs or unknown calibration features. The manifest contains architecture/policy, frozen-config byte digest, identity-split metadata digest, aggregate calibration metrics/counts, library versions and SHA-256 hashes for the five component artifacts. The original frozen configuration is preserved as a provenance snapshot; its null threshold describes the pre-refit state, while the model's root threshold is calibrated.
-
-**All fitted selectors, scaler state, SVM/support vectors and reference arrays are biometric-derived local-only artifacts. Never commit them.** Output inside the repository or overlapping inputs is refused; existing output directories are never overwritten. Existing Git ignores continue to protect repository-local `data/raw`, `data/processed` and `models`; the command requires external model output.
-
-Artifacts are staged, flushed, hashed and structurally validated before the completed manifest is written **last**, then published by same-filesystem directory rename. Failed/interrupted staging is retained locally as incomplete without a completed manifest and must not be used. `load_open_set_model(path, loaded_frozen_configuration)` verifies hashes/provenance, dimensions, classes and a finite window-7 threshold **without calling predict/transform or loading a dataset**. Load only trusted locally created joblib artifacts: hashes check integrity, not authenticity. The loader currently requires the recorded scikit-learn version; Raspberry deployment/portability is a later stage.
-
-**This stage ends before final evaluation.** Only after the fitted artifacts and numeric threshold are completed and validated may the next stage load `known_test` and `unknown_holdout` for the one-time final evaluation. Do not change this fitted model based on those holdout results. No real refit/calibration results are documented here yet.
-
-## One-time final open-set holdout evaluation
-
-The development configuration and fitted/calibrated model must already be frozen. This command evaluates **`known_test`** (the known identities' held-out session) and **`unknown_holdout`** (identities never used for novelty calibration). It reads only those two feature populations; development/calibration feature payloads are not opened. This is the first intentional holdout evaluation stage. **Final holdout results must not be used to modify this model version.**
-
-```powershell
-python -m face_recognition.presentation.cli.evaluate_final_open_set `
-  --processed-root "..\face-recognition-data\data\processed" `
-  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
-  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
-  --model-dir "..\face-recognition-data\models\open_set_v1" `
-  --frozen-config "..\face-recognition-data\models\open_set_config_v1.json" `
-  --development-report "..\face-recognition-data\reports\temporal_distance_novelty_v1.json" `
-  --report "..\face-recognition-data\reports\final_open_set_evaluation_v1.json"
-```
-
-The extra metadata inputs provide independent provenance checks. `--frozen-config` must match the fitted manifest's recorded byte digest. `--development-report` must match the frozen configuration's original development-report digest; its unknown partition must exactly match the supplied unknown split. This binds the calibration/holdout identity assignment without changing the existing model manifest or needing development features. Keep the original frozen files unchanged.
-
-The loader verifies completion, artifact hashes, frozen configuration, fitted dimensions/classes and the persisted finite threshold. The inference path invokes **transform/predict/score only**: no ANOVA/scaler/SVM/neighbor fitting, no `fit_transform`, no threshold calibration and no model-parameter overrides. Persisted references are restored through validation only. Model files, including the manifest, are hashed before and after evaluation and checked again before report publication. No model file is updated to mark evaluation; the final report is its separate audit record.
-
-Final closed-set identity metrics use **every known-test frame before rejection**: accuracy, macro precision/recall/F1, per-class support and a confusion matrix with pseudonymous technical labels. Temporal metrics retain non-overlapping **window 7** inside person/session/condition, sample-index ordering and trailing discard. Median mean_5nn confidence is compared with the **unchanged persisted threshold**, and SVM votes use the frozen score-sum/class-order tie rules. Used/discarded counts are explicit; frame metrics still include frames discarded from temporal windows.
-
-Frame-level and temporal ROC AUC/EER describe final separability. **EER thresholds are diagnostic only and never replace the operational threshold.** There is no balanced-accuracy or FAR operating-point search for new operational settings on holdout data. FAR/FRR, acceptance/rejection, correct/misidentified known acceptance, exact open-set accuracy and binary metrics all use the persisted threshold.
-
-The external atomic, no-overwrite JSON report includes model/configuration digests, partition counts, final closed-set and open-set results, aggregate condition diagnostics, vote stability and score-distribution summaries. Known per-class confusion information may use pseudonymous IDs; there are no participant-specific condition tables, per-sample predictions/scores/distances, vectors or absolute paths. Development comparison values are read from frozen evidence, not hardcoded historical numbers. Existing reports are refused before any holdout payload is opened; there is no force option. Invoke this once for the frozen model version and retain the report.
-
-**Calibration performance is not final generalization performance.** Known calibration reused the training pool with exact neighbor self-exclusion; high calibration AUC/balanced accuracy describe an easier problem than a new known session. CLI/report labels keep calibration, development selection, final frame identity and final temporal open-set performance separate. A legitimately different model requires a new version and experimental protocol; do not use this holdout to tune `open_set_v1`. No real final results are documented here before manual execution.
-
-## V2 open-set diagnostic study
-
-**V1 is closed.** Its fitted model, numeric threshold, frozen configuration and final report remain immutable. The completed V1 evaluation found a much larger problem in rejection than in closed-set identity recognition. V2 studies cross-session rejection rather than reusing V1's optimistic training-pool calibration. This study reads the aggregate V1 final report as a baseline, with a SHA-256 provenance check; it never loads or updates V1 trained artifacts.
-
-Existing V1 data now have a new, explicit role: **V2 development**. The original `session_03` and the original unknown holdout identities (in the current experiment, `p008/p009/p015`) are no longer independent V2 holdouts. Membership always comes from the original split manifests, never from these example IDs. The completed V1 report binds the original split digest, and an exact catalog check rejects additional sessions or identities before feature loading. Do not extend these original manifests with future data.
-
-```powershell
-python -m face_recognition.presentation.cli.evaluate_v2_open_set_diagnostics `
-  --processed-root "..\face-recognition-data\data\processed" `
-  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
-  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
-  --v1-final-report "..\face-recognition-data\reports\final_open_set_evaluation_v1.json" `
-  --report "..\face-recognition-data\reports\v2_open_set_diagnostics_v1.json"
-```
-
-Three sequential ephemeral models retain **all_xyz_v1 → ANOVA-448 → StandardScaler → RBF SVC C=4, gamma=0.001, probability=False**. Fold A fits original sessions 01+02 and scores 03; B fits 01+03 and scores 02; C fits 02+03 and scores 01. Session names are derived from the original split. Every known frame receives exactly one out-of-session identity prediction. All ANOVA/scaler/SVM fitting, Euclidean 5-NN references and predicted-class centroids use only the two fit sessions. No classifier tuning occurs.
-
-Compare four higher-is-known scalar scores: **SVM top1**, **SVM margin**, **negative mean_5nn distance**, and **negative predicted-class centroid distance**. Each gets a global threshold. Top1 and mean_5nn also get **predicted-identity thresholds**: require at least **10 eligible known and 10 eligible calibration-unknown windows** for that predicted identity; otherwise mark its threshold unavailable and use the deterministic global fallback. Support and fallback usage are reported. This support rule is fixed, not optimized.
-
-For each known-session fold, rotate **one entire existing unknown identity out** of threshold calibration, in lexical identity order. All remaining unknown identities calibrate; the held-out identity evaluates FAR. No unknown frame-random split occurs. Known out-of-session observations both calibrate and describe the threshold, so their rejection metrics are **not independent threshold-validation estimates**. The unknown identity rotations provide an additional development check, not final generalization evidence.
-
-Each of the six rules uses non-overlapping windows **1/3/5/7**, ordered by sample index inside person/session/condition; incomplete tails are counted and discarded. Confidence uses the median. Identity uses plurality vote, then the sum of corresponding SVM decision scores over all frames, then deterministic class order. For windows 3/5/7 additionally test the natural **strict-majority gate** (2/3, 3/5, 4/7); failing it forces UNKNOWN. Calibration includes these forced rejections in its denominators. This yields **42 configurations**, without rolling windows or extra agreement grids.
-
-Threshold selection retains exact balanced accuracy, lower FAR, lower FRR, then higher threshold. Scalar-global rules also report diagnostic FAR caps 20%/10%/5%, flagging acceptance of at most 1% of known observations as impractical. Per-identity rules do not imply a single global operating-point curve. Reported AUC/EER describe the **raw median scalar score**, even for gated/identity-conditioned rules; they do not measure those additional decisions.
-
-The external atomic, no-overwrite JSON report separates **frame OOF closed-set confusion** from **window binary/open-set confusion**, with integer observation counts and row-normalized rates. Known windows repeat across unknown rotations: role-adjusted matrices divide known rows by the rotation count before calculating overall open-set accuracy and binary F1, preventing artificial prevalence inflation. Unknown windows recur under all three known-session models. Unique source/window counts and repeated observation counts are labeled separately. AUC/EER use unweighted means over known-session/held-unknown cells; operating rates pool observations within each role.
-
-Known-person and condition diagnostics expose FRR, correct/incorrect acceptance, source support and closed-set errors. Unknown condition diagnostics are aggregate only; rotations use numeric indices, not per-unknown-person scores. Score distributions distinguish correct known, incorrect known and unknown frames, with population standard deviation, linear percentiles and overlap summaries; empty groups have count zero and null statistics. The report contains no individual scores, vectors, raw records, real names or absolute paths. Optional figures are omitted so plotting adds no dependency.
-
-Ranking is fixed: higher mean raw-score AUC, lower EER, lower FAR, lower FRR, higher correct known identification, higher open-set accuracy, lower accepted misidentification, then simpler rule (global before per-identity, no gate before gate), smaller window, and strategy name for exact ties. No weighted selection score or performance tolerance is introduced. The first row is only the **best V2 development candidate**.
-
-**The diagnostic command leaves V2 unfrozen and persists no production model.** The separate freeze step below established the experimental boundary **before collecting/evaluating** a new known session (`session_04`) and completely new unknown participants. Approximately three new unknown identities preserves comparability with V1; more improves breadth, and three is not a statistical law. Those data remained untouched until the completed one-time final V2 evaluation recorded below.
-
-## Freezing V2 before new final-test collection
-
-V1 remains final and immutable. Its identity classifier generalized strongly to the held-out known session, while its rejection calibration did not transfer nearly as well. Even with exact neighbor self-exclusion, known calibration used the training/reference population and could still exploit very similar adjacent observations. Those calibration results were not independent generalization estimates.
-
-The completed V2 study instead used cross-session known predictions and identity-level UNKNOWN rotations. Its selected **development** candidate is now frozen as **`svm_top1_global__window_7__normal`**: `all_xyz_v1` (1434 features), ANOVA `SelectKBest(f_classif)` k=448, StandardScaler, RBF SVC C=4, gamma=0.001, probability=False. Rejection uses the **maximum OVR class decision score**, with higher scores meaning KNOWN and **one global threshold**. Mean_5nn, margin, centroid and per-identity thresholds remain diagnostic alternatives, not the frozen primary mechanism.
-
-Window size stays **7**. Aggregate rejection scores with the **median**; aggregate SVM identity predictions by majority/plurality vote, then summed corresponding class decision scores over all frames, then deterministic class order. The extra strict-majority consistency rejection gate is **disabled**. Offline windows remain non-overlapping within person/session/condition, ordered by sample index, with incomplete tails discarded. A future rolling Raspberry buffer is not implemented here.
-
-```powershell
-python -m face_recognition.presentation.cli.freeze_v2_open_set_config `
-  --diagnostic-report "..\face-recognition-data\reports\v2_open_set_diagnostics_v1.json" `
-  --output "..\face-recognition-data\models\open_set_config_v2.json"
-```
-
-This command requires **only the aggregate diagnostic JSON**. It validates report completion, fixed architecture/policies, all strategy/rotation coverage, confusion/count/metric consistency and the declared ranking/winner. It copies only whitelisted aggregate evidence and provenance, including the exact report-byte SHA-256, original identity-split digest and V1 final-report digest. It neither fits a model nor opens biometric payloads or future data. The external configuration is published atomically without overwriting any existing destination; no force/unfreeze or parameter overrides are provided. There are no fitted parameters, participant IDs, source paths or numeric production threshold in the manifest.
-
-The frozen **future numeric-threshold procedure** is cross-session OOF calibration, not training-pool resubstitution:
-
-1. Fit ANOVA/scaler/SVC separately on original known sessions 01+02, 01+03 and 02+03; score the respective held-out session 03, 02 and 01. Actual session identifiers are recorded from the report. No known sample is scored by a model fitted on its own session.
-2. Score **all current original UNKNOWN development identities** under each of those same three models. Selection already used UNKNOWN identity rotations; the final pre-test threshold may now use all existing development identities. Future UNKNOWN participants are excluded.
-3. Construct frozen window-7 median top1 scores separately in every fold and role. Pool known OOF windows **once each**; pool UNKNOWN windows **once per model**, giving three model observations per unknown window. These are calibration observations, not independent validation samples. Balanced accuracy gives the two roles equal importance despite their population counts.
-4. Run the existing exact observed-score/midpoint/boundary search. Choose higher binary balanced accuracy, then lower FAR, lower FRR, higher threshold. FAR caps 20%/10%/5% remain diagnostic and do not replace this selection rule. Never copy a fold threshold or recalibrate from the final SVM's own known training predictions.
-5. Refit the identity pipeline on all three original known sessions, without UNKNOWN fitting. **Directly transfer the pooled OOF threshold** to this all-session model. The refit stage must record fold score/threshold stability and assess transfer using development diagnostics only. No automatic score-scale alignment is authorized; if it proves necessary, stop and explicitly declare a new development-only policy/version before new data collection or access.
-
-The final all-session SVM may have a shifted score scale: OOF calibration and full refitting are intentionally distinct. This limitation must be assessed before collecting/accessing future final data, never corrected using their outcomes. The future model and numeric threshold must both be persisted and immutable before final-test collection/evaluation.
-
-**At the configuration-freeze boundary, the final model and numeric threshold had not yet been produced and final evaluation had not occurred.** Independent final data were required to be new: a known session (`session_04`), plus UNKNOWN participants absent from V2 development. Approximately three new UNKNOWN identities preserves V1 comparability; more improves breadth, and three is not an algorithm requirement. The subsequent refit and completed final results are recorded below. Final data must not influence feature selection, SVM settings, rejection method, temporal policy or threshold calibration. Development results are not final generalization results. Different choices after this boundary require a new version and explicit experimental reasoning.
-
-## Frozen V2 refit and cross-session threshold calibration
-
-V2 architecture and calibration policy must already be frozen. The following command validates that exact configuration and the original identity-split digest, then rejects any changed identity/session catalog **before opening feature payloads**. Original V1 known-test/unknown-holdout data are now authorized V2 development data; future `session_04` and new UNKNOWN participants remain prohibited. There are no hyperparameter, threshold, window or force overrides.
-
-```powershell
-python -m face_recognition.presentation.cli.refit_v2_open_set_model `
-  --processed-root "..\face-recognition-data\data\processed" `
-  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
-  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
-  --frozen-config "..\face-recognition-data\models\open_set_config_v2.json" `
-  --output-dir "..\face-recognition-data\models\open_set_v2"
-```
-
-Three sequential fold models fit ANOVA-448 → StandardScaler → fixed RBF SVC **only on their two known fit sessions**. Held-out known sessions supply OOF `svm_top1 = max(decision_function)` scores. Every fold also scores all original UNKNOWN development identities, without UNKNOWN fitting. Scores use median aggregation over complete non-overlapping windows of 7 within person/session/condition, ordered by sample index; trailing samples are counted and discarded. SVM identity voting and its score-sum/class-order tie rules remain unchanged, with no consistency gate.
-
-Pool known OOF windows once each and UNKNOWN windows once per fold model. The manifest distinguishes unique source samples/windows from repeated UNKNOWN model observations and their used/discarded counts. Select one global threshold with the frozen balanced-accuracy → lower FAR → lower FRR → higher-threshold rule. Fold thresholds, score distributions, ROC AUC/EER and FAR 20%/10%/5% operating points are development diagnostics only; they never replace the pooled operational threshold. This avoids V1's overly easy same-training-pool rejection calibration.
-
-Only after pooled OOF threshold selection, fit the final ANOVA/scaler/SVC on **all three current known sessions together**. UNKNOWN data never fit preprocessing or SVM. Directly transfer the unchanged OOF threshold; do not recalibrate it from final-model training predictions. Final-model known/UNKNOWN development score distributions are calculated solely as transfer diagnostics, not generalization performance or another threshold population.
-
-The predeclared **`development_score_scale_guard_v1`** uses a score unit equal to `max(p90-p10 of pooled OOF known + UNKNOWN fold window scores, 0.1)`. The floor is one tenth of an OVR vote unit. A fold-threshold range or absolute final-versus-OOF known/UNKNOWN mean/median shift **above one unit warns; above three units fails**. Exact boundaries pass. Non-finite diagnostics fail. These conservative sanity checks are not statistical confidence bounds and cannot prove transfer; they are fixed before real execution. Gross fold mismatch stops before the final fit, and gross final-model mismatch stops before artifact publication. No automatic threshold alignment, alternate rejection rule or bypass flag is provided. Failure requires explicit new development reasoning/protocol before future data collection/access.
-
-Successful publication creates only `manifest.json`, `feature_selector.joblib`, `scaler.joblib`, `identity_svm.joblib` and `threshold.json`. **There is no 5-NN reference artifact.** All fitted artifacts are biometric-derived, local-only and must never be committed. Staging writes and integrity validation precede the completion manifest; publication refuses any existing output directory. Retained failed staging is marked incomplete and must not be used. Load only trusted locally created joblib files: hashes provide integrity, not authenticity. The loader checks hashes before deserialization, exact frozen provenance, dimensions/classes, hyperparameters and threshold/window policy without fitting, transforming or predicting. The recorded scikit-learn version is required; cross-platform deployment remains later work.
-
-The aggregate manifest/threshold JSON includes three-fold distributions and threshold stability, pooled calibration metrics, transfer checks, class mapping needed for inference, source/frozen-report provenance and artifact hashes. It contains no individual scores, features, source sample IDs or absolute paths. Existing `.gitignore` protections remain sufficient; all outputs must stay external.
-
-**The refit workflow ended before final evaluation.** The fitted model and numeric threshold were persisted and made immutable before independent known-session/UNKNOWN data were evaluated. Those final data must not change this model or its threshold. The completed final evaluation is recorded below; its results are separate from development calibration.
-
-## Independent final V2 holdout evaluation
-
-The V1 final workflow remains unchanged. Its `KNOWN_TEST`/`UNKNOWN_POOL` sample references cannot authorize V2's newly collected sessions and identities. Keep **`identity_split_v1.json` and `unknown_rejection_split_v1.json` unchanged**: they define the development population against which final independence is checked. A separate external `final_holdout_v2.json` declares the final KNOWN/UNKNOWN person/session pairs and complete condition-file catalog. It contains no feature vectors or predictions.
-
-Create that manifest from catalog/aggregate metadata only:
-
-```powershell
-python -m face_recognition.presentation.cli.create_final_v2_holdout `
-  --processed-root "..\face-recognition-data\final_holdout_v2\processed" `
-  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
-  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
-  --model-dir "..\face-recognition-data\models\open_set_v2" `
-  --frozen-config "..\face-recognition-data\models\open_set_config_v2.json" `
-  --development-report "..\face-recognition-data\reports\v2_open_set_diagnostics_v1.json" `
-  --output "..\face-recognition-data\splits\final_holdout_v2.json"
-```
-
-Use the same command with **`--validate-only`** to validate the existing output without modifying it. Creation refuses overwrite. Both modes read only split/config/report/model metadata, model hashes, directory names and the completed `all_xyz_v1/processing_manifest.json`; **no JSONL file is opened and no estimator is deserialized**. KNOWN membership derives from the frozen class mapping, every class must be present, known sessions must be new for that person, and UNKNOWN identities must be absent from *all* development roles. No person/session/condition may be omitted or silently ignored. IDs, session names, cohort sizes and samples per condition are not algorithm constants.
-
-The manifest binds exact config/development-report/model-manifest/processing-manifest digests and development split provenance, with deterministic role/file ordering. Its status is **catalog_validated**, not a claim that record contents were inspected. Features share JSONL records with their metadata, so record width (1434), finite scalars, timestamps, sample indices, image dimensions and provenance are validated by the shared decoders **after catalog authorization and before any inference**. All records must pass; malformed data are never skipped. This two-phase boundary keeps manifest creation metadata-only.
-
-The following command documents the **completed one-time evaluation** of the immutable fitted model. Do not rerun it to select a different model, threshold or operating point:
-
-```powershell
-python -m face_recognition.presentation.cli.evaluate_final_v2_open_set `
-  --processed-root "..\face-recognition-data\final_holdout_v2\processed" `
-  --identity-split "..\face-recognition-data\splits\identity_split_v1.json" `
-  --unknown-split "..\face-recognition-data\splits\unknown_rejection_split_v1.json" `
-  --final-holdout "..\face-recognition-data\splits\final_holdout_v2.json" `
-  --model-dir "..\face-recognition-data\models\open_set_v2" `
-  --frozen-config "..\face-recognition-data\models\open_set_config_v2.json" `
-  --development-report "..\face-recognition-data\reports\v2_open_set_diagnostics_v1.json" `
-  --report "..\face-recognition-data\reports\final_open_set_evaluation_v2.json"
-```
-
-This command cross-checks the development report against the frozen configuration and original split metadata, verifies model artifact hashes and fitted dimensions/classes, and fingerprints every model file immediately before final feature loading and after evaluation. It transforms/predicts with the **persisted selector, scaler and SVM only**. There is no fitting, calibration, operational threshold search, parameter override or force option. The unchanged persisted global threshold applies to median `svm_top1` confidence in non-overlapping windows of 7 within identity/session/condition. Trailing remainders are discarded; plurality voting and score-sum/class-order ties remain fixed, with no consistency gate.
-
-The report separates final KNOWN frame-level closed-set metrics/confusion/per-class support from final temporal open-set FAR/FRR, acceptance/rejection, correct/misidentified known acceptance, exact accuracy and binary metrics. It also includes used/discarded counts, condition aggregates, vote stability, aggregate score distributions and descriptive differences from frozen development evidence. ROC AUC/EER are final separability diagnostics; the EER cutpoint **never replaces the persisted threshold**. Development selection and OOF calibration metrics remain labeled separately from independent final generalization.
-
-Final report publication is atomic, external and refuses every existing destination before any final payload access; model fingerprints are checked again before writing. The report contains digests, aggregate metrics and pseudonymous labels only where needed for known identity confusion, with no feature vectors, sample predictions/scores, unknown-person diagnostics or absolute source paths. No model, source data, split, frozen config or development report is modified. **Final V2 results must not be used to retune this model version.** There is no automatic tuning or model replacement after evaluation. The completed aggregate results follow.
-
-## Completed V2 independent final holdout results
-
-**These are independent final generalization results. V2 is now experimentally closed.** The final KNOWN session and new UNKNOWN identities were not used for training, feature selection, scaling, classifier fitting, rejection selection, threshold calibration or temporal/model selection. The architecture and numeric threshold were frozen before final evaluation.
-
-| Final population | Identities | Sessions | Frames |
-| --- | ---: | ---: | ---: |
-| KNOWN | 10 | 10 | 2600 |
-| UNKNOWN | 3 | 6 | 1560 |
-
-The immutable identity pipeline was **`all_xyz_v1` (1434 input features) → ANOVA `SelectKBest(f_classif)`, k=448 → StandardScaler → RBF SVC**, with **C=4**, **gamma=0.001** and **probability=False**. Rejection used **`svm_top1` with one global frozen threshold of `9.30272696145`**, with higher scores meaning KNOWN. Temporal decisions used **window 7**, **median score aggregation**, **majority/plurality identity voting**, and **no consistency rejection gate**. Voting ties retained the summed corresponding SVM decision-score rule, then deterministic class order. Windows were non-overlapping within identity/session/condition, with incomplete tails discarded.
-
-Closed-set identity metrics use all final KNOWN **frames before rejection**:
-
-| Final closed-set metric | Value |
-| --- | ---: |
-| Accuracy | 0.878462 |
-| Macro precision | 0.885321 |
-| Macro recall | 0.878462 |
-| Macro F1 | 0.876944 |
-
-Temporal open-set operational metrics use the **unchanged persisted threshold**:
-
-| Final temporal open-set metric | Value |
-| --- | ---: |
-| KNOWN windows | 260 |
-| UNKNOWN windows | 156 |
-| ROC AUC (diagnostic) | 0.727761 |
-| EER (diagnostic) | 0.332051 |
-| UNKNOWN false-acceptance rate (FAR) | 0.416667 |
-| KNOWN false-rejection rate (FRR) | 0.280769 |
-| KNOWN acceptance rate | 0.719231 |
-| UNKNOWN rejection rate | 0.583333 |
-| Correct KNOWN identification rate | 0.688462 |
-| Accepted-KNOWN misidentification rate | 0.030769 |
-| Open-set exact accuracy | 0.649038 |
-| Binary balanced accuracy | 0.651282 |
-| Binary macro F1 | 0.649609 |
-
-FAR is the fraction of UNKNOWN windows accepted as KNOWN; FRR is the fraction of KNOWN windows rejected as UNKNOWN. Correct KNOWN identification requires both acceptance and the correct identity. Open-set exact accuracy counts accepted, correctly identified KNOWN windows plus rejected UNKNOWN windows over all windows. ROC AUC and EER describe final separation only; their diagnostic cutpoints must not replace the frozen threshold.
-
-Development selection and OOF calibration remain distinct from these final results:
-
-| Metric | V2 development selection | Independent final | Final minus development |
-| --- | ---: | ---: | ---: |
-| ROC AUC | 0.846953 | 0.727761 | -0.119191 |
-| Open-set accuracy | 0.774231 | 0.649038 | -0.125192 |
-
-The separate **OOF calibration** achieved **ROC AUC=0.846323** and **binary balanced accuracy=0.788462**. These are development threshold-calibration measurements, not independent final generalization performance. Displayed metrics are rounded; deltas are retained from the evaluation output. Comparisons and deltas are descriptive only.
-
-The final data showed a **substantial generalization gap, especially for UNKNOWN rejection**. Compared with V1, V2 reduced KNOWN false rejection (**FRR 0.450000 → 0.280769**) but increased false acceptance on new UNKNOWN identities (**FAR 0.198718 → 0.416667**). This false-acceptance rate is **unacceptably high for the intended attendance application**; useful closed-set identity recognition does not establish adequate open-set rejection.
-
-**Do not retune V2 using these results.** Its model, threshold, configuration and final report remain immutable. Any future change to normalization, features, novelty/rejection detection, threshold policy, classifier or temporal decision policy must be treated as a **new model version with a new experimental protocol**, rather than a correction to V2 based on its final holdout.
-
-## Future work
-
-`LandmarkNormalizer(image_width, image_height).normalize(landmarks)` provides standalone, hardware-free identity normalization. It first corrects MediaPipe's image-normalized coordinates to width-relative units `(x, y * image_height / image_width, z)`, then applies eye-centered translation, roll correction and interocular scaling. Eye centers use corners 33/133 and 362/263; z is centered/scaled only. Tests use synthetic pixel-space geometry encoded for non-square images, including 480×270. It is used by the separate PC experiment, not the production preview or feature extractor; its eye-relative output is distinct from the input image-normalized representation.
-
-`LandmarkFeatureExtractor` flattens already identity-normalized points as `(x0, y0, z0, x1, y1, z1, ...)`, with three finite features per landmark. Capture does not invoke it.
-
-V1 and V2 final reports are now completed experimental records. Later Raspberry live-buffer or deployment benchmarking must not be presented as evidence that V2's UNKNOWN rejection is adequate. Further normalization, feature, novelty-detection, threshold-policy or classifier experiments require a new model version and protocol; the completed V2 holdout must not become a retuning loop for V2.
+The API uses the persisted threshold unchanged and suppresses arbitrary SVM IDs
+on UNKNOWN. There is no single-frame threshold API, camera integration or live
+buffer in this stage. The real calibration captures should produce 260 KNOWN
+and 416 UNKNOWN windows, discarding 780 and 1248 trailing frames respectively;
+all 7800 fit frames are still used for fitting.
+
+**CALIBRATION METRICS are not independent final test or generalization metrics.**
+This constructs a deployable model from frozen V3 development decisions; it does
+not perform a new evaluation. No additional untouched V3 holdout exists, and V2
+remains the last independent external holdout. The cross-validated
+pose-representation study remains the appropriate V3 development evidence.
+Residual yaw sensitivity, unimproved pitch_up, unchanged pitch_down,
+session/context effects, harder UNKNOWN identities and MediaPipe relative-depth
+limitations remain as documented above. No real deployment-calibration values
+are recorded here.
