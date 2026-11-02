@@ -44,7 +44,7 @@ def run_live_recognition(model_dir, *, camera_backend="opencv", camera_index=0, 
     # Integrity/runtime validation happens once and before any camera opens.
     recognizer = load_v3_deployable_bundle(Path(model_dir))
     pipeline = LiveOpenSetRecognition(recognizer, PoseLandmarkNormalizer(*inference_size), LandmarkFeatureExtractor(),
-        absence_timeout=absence_timeout, metrics_interval=settings.metrics_interval_seconds, clock=monotonic)
+        absence_timeout=absence_timeout, metrics_interval=settings.metrics_interval_seconds, clock=monotonic, profile=debug)
     renderer = LiveOpenSetRenderer(debug)
     performance = PerformanceTracker(settings.metrics_interval_seconds, clock=monotonic)
     detector = MediaPipeFaceLandmarker(model_path=settings.landmarker_model_path if landmarker_model is None else Path(landmarker_model),

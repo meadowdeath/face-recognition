@@ -978,6 +978,17 @@ or Picamera2 main preview plus smaller YUV inference stream on Raspberry Pi.
 The deployable bundle is loaded once before opening a camera. Runtime never
 reads datasets or experiment reports, fits a component, or calibrates a threshold.
 
+Startup retains full manifest, artifact SHA-256, frozen configuration/runtime,
+fitted-structure and learned-state fingerprint validation, including consistency
+with the calibrated state. Live observations use lightweight fit-generation,
+component-identity and frozen-contract guards instead of rehashing the selector,
+scaler, SVM and large Mahalanobis matrices before and after every inference.
+This avoids unnecessary Raspberry Pi CPU work without changing the frozen model.
+These runtime guards detect component replacement/refitting through the runner,
+not arbitrary in-place edits to learned arrays. An explicit
+`recognizer.verify_integrity()` performs the expensive value-based check when
+needed outside the live loop. Model bundles and publication checks are unchanged.
+
 The model uses `all_xyz_pose_v2`, not the older roll-only normalization. Its
 threshold is authoritative in the bundle (currently approximately
 **-18.1917360542**), with `score = -Mahalanobis distance`; higher means more
@@ -1003,6 +1014,13 @@ displays its arbitrary SVM candidate as the recognized identity. `--debug` adds
 the current frame candidate/score, final temporal candidate/decision, successful
 V3 completion count, MediaPipe callback count and busy skips. No fake probability
 or percentage is displayed in either mode.
+
+Debug also measures the last successful observation's **Pose+features** and
+**V3 observation** in milliseconds. The latter covers the existing unchanged
+selector/scaler/SVM/Mahalanobis scoring path and observation validation, before
+temporal aggregation. These coarse timings use no per-frame logging or model
+hashing and are disabled in normal mode. They do not change MediaPipe callback
+timing or the end-to-end latency definition below.
 
 **No-face policy:** an observed no-face result or invalid pose geometry clears
 the partial window immediately. After `--absence-timeout` seconds without a

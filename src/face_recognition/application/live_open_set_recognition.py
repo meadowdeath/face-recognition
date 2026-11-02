@@ -30,6 +30,8 @@ class LiveRecognitionMetrics:
     inference_fps: float
     completed_face_inferences: int
     latency_ms: float | None
+    pose_features_ms: float | None = None
+    v3_observation_ms: float | None = None
 
 
 class LiveTemporalRecognition:
@@ -87,7 +89,7 @@ class LiveOpenSetRecognition:
     busy skips, repeated snapshots or empty landmarker callbacks. Latency ends
     after V3/temporal processing and begins at the existing submission timestamp.
     """
-    def __init__(self, recognizer, normalizer, extractor, *, absence_timeout=2.0, metrics_interval=1.0, clock=monotonic):
+    def __init__(self, recognizer, normalizer, extractor, *, absence_timeout=2.0, metrics_interval=1.0, clock=monotonic, profile=False):
         if not isfinite(metrics_interval) or metrics_interval <= 0:
             raise ValueError("Metrics interval must be finite and positive")
         self.recognizer, self.normalizer, self.extractor = recognizer, normalizer, extractor
@@ -98,6 +100,8 @@ class LiveOpenSetRecognition:
         self._sample_time = clock()
         self._fps = 0.
         self._latency = None
+        self._profile = profile
+        self._pose_ms = self._v3_ms = None
 
     def process(self, snapshot):
         now = self.clock()
@@ -111,6 +115,7 @@ class LiveOpenSetRecognition:
             self.state.no_face(now)
             return self.state.view()
         face = result.faces[0]  # Landmarker configured num_faces=1; deterministic fallback.
+        pose_started = self.clock() if self._profile else None
         try:
             pose = self.normalizer.normalize(face)
         except ValueError:
@@ -121,8 +126,12 @@ class LiveOpenSetRecognition:
             values = np.asarray(features.values, dtype=np.float32)  # Same dtype as processed payload loading.
         if values.shape != (1434,) or not np.isfinite(values).all():
             raise RejectionError("Live pose feature contract requires 1434 finite values")
+        pose_finished = self.clock() if self._profile else None
         observation = self.recognizer.infer_observation(values)
         completed = self.clock()
+        if self._profile:
+            self._pose_ms = max(0., (pose_finished - pose_started) * 1000)
+            self._v3_ms = max(0., (completed - pose_finished) * 1000)
         self.state.observe(observation, face, completed)
         finished = self.clock()
         self._latency = max(0., finished * 1000 - result.timestamp_ms)
@@ -135,4 +144,4 @@ class LiveOpenSetRecognition:
         if elapsed >= self.interval:
             self._fps = (self._count - self._sample_count) / elapsed
             self._sample_time, self._sample_count = now, self._count
-        return LiveRecognitionMetrics(self._fps, self._count, self._latency)
+        return LiveRecognitionMetrics(self._fps, self._count, self._latency, self._pose_ms, self._v3_ms)

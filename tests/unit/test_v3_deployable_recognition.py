@@ -62,7 +62,7 @@ class V3DeployableRecognitionTests(unittest.TestCase):
         for values in (np.zeros((1, 1434)), np.zeros((7, 448)), np.full((7, 1434), np.nan), [["invalid"] * 1434] * 7):
             with self.assertRaises(RejectionError): self.service().predict_window(values)
 
-    def test_refit_generation_or_changed_state_detected(self):
+    def test_refit_generation_detected_live_and_in_place_changes_detected_by_explicit_diagnostic(self):
         runner = RecordingDeployableRunner()
         service = self.service(runner=runner)
         runner.fit_count += 1
@@ -72,5 +72,5 @@ class V3DeployableRecognitionTests(unittest.TestCase):
         before = model.offset
         try:
             model.offset += 1.
-            with self.assertRaises(RejectionError): service.predict_window(self.data.X[:7])
+            with self.assertRaises(RejectionError): service.verify_integrity()
         finally: model.offset = before

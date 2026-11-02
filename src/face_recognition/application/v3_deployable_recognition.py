@@ -21,16 +21,41 @@ class V3DeployableRecognizer:
     """
     def __init__(self, model, runner, expected_fingerprints):
         self._model, self._runner = model, runner
+        self._loaded_model, self._loaded_runner = model, runner
+        self._fitted = model.fitted
+        self._configuration = model.frozen_configuration
+        self._pipeline_config, self._temporal_config = self._configuration.pipeline, self._configuration.temporal
+        self._classes = model.class_order
         self._expected = expected_fingerprints
         self._generation = runner.fit_count
         self._identity = runner.model_identity(model.fitted)
+        self._contract = (model.threshold, model.fitted.identity_count, self.representation,
+                          self.input_width, self.window_size, self._pipeline_config.novelty_method)
         if len(model.class_order) != model.fitted.identity_count or not isfinite(model.threshold):
             raise RejectionError("Invalid loaded V3 class order/threshold")
-        self._verify()
+        self.verify_integrity()  # Startup only; loader also validates files and full fitted state.
 
     def _verify(self):
-        if (self._runner.fit_count != self._generation or self._runner.model_identity(self._model.fitted) != self._identity
-                or self._runner.fingerprints(self._model.fitted) != self._expected):
+        """Constant-size runtime guards, never serialize/hash learned arrays."""
+        if (self._model is not self._loaded_model or self._runner is not self._loaded_runner
+                or self._model.fitted is not self._fitted or self._model.frozen_configuration is not self._configuration
+                or self._configuration.pipeline is not self._pipeline_config or self._configuration.temporal is not self._temporal_config
+                or self._model.class_order is not self._classes or self._runner.fit_count != self._generation
+                or self._runner.model_identity(self._model.fitted) != self._identity
+                or (self._model.threshold, self._fitted.identity_count, self.representation,
+                    self.input_width, self.window_size, self._pipeline_config.novelty_method) != self._contract
+                or not isfinite(self._model.threshold)):
+            raise RejectionError("Loaded recognizer fitted state changed")
+
+    def verify_integrity(self):
+        """Explicit expensive diagnostic; never called by normal inference.
+
+        Startup/load checks detect altered learned values. Runtime identity and
+        generation guards detect replacement/refitting, not arbitrary in-place
+        array edits; callers can request this full check outside the hot loop.
+        """
+        self._verify()
+        if self._runner.fingerprints(self._model.fitted) != self._expected:
             raise RejectionError("Loaded recognizer fitted state changed")
 
     @property

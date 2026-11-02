@@ -46,6 +46,9 @@ class LiveOpenSetRenderer(FrameRenderer):
                       f"Temporal candidate: {view.temporal_candidate or 'pending'}",
                       f"Temporal decision: {view.temporal_decision or 'pending'}",
                       f"V3 face completions: {live.completed_face_inferences} / MP callbacks: {metrics.completed_inference_frames} / busy skips: {metrics.skipped_busy_frames}")
+            pose = "pending" if live.pose_features_ms is None else f"{live.pose_features_ms:.1f} ms"
+            v3 = "pending" if live.v3_observation_ms is None else f"{live.v3_observation_ms:.1f} ms"
+            lines += (f"Pose+features: {pose} / V3 observation: {v3}",)
         return lines
 
     def _draw(self, output, faces, metrics, display):

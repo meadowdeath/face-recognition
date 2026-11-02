@@ -52,6 +52,18 @@ class LiveOverlayTests(unittest.TestCase):
         self.assertIn("MP callbacks: 20", text)
         self.assertIn("Last score (completed window): -30.00", text)
 
+    def test_coarse_profile_timings_are_debug_only(self):
+        live = replace(self.live, pose_features_ms=1.25, v3_observation_ms=8.5)
+        for debug in (False, True):
+            renderer = LiveOpenSetRenderer(debug=debug)
+            renderer.update(self.state.view(), live)
+            text = "\n".join(renderer.metric_lines(self.metrics, "drm"))
+            if debug:
+                self.assertIn("Pose+features: 1.2 ms / V3 observation: 8.5 ms", text)
+            else:
+                self.assertNotIn("Pose+features:", text)
+                self.assertNotIn("V3 observation:", text)
+
     def test_box_is_padded_and_clamped_and_nonfinite_geometry_is_ignored(self):
         bounds = FaceLandmarks((Landmark(-.2, -.3, 0.), Landmark(1.2, 1.3, 0.)))
         self.assertEqual(face_box(bounds, 100, 50), (0, 0, 99, 49))
