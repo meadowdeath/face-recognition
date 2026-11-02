@@ -810,5 +810,68 @@ mean outer FRR, lower mean outer FAR, higher mean closed-set macro F1, then
 Reports are aggregate-only, atomic and no-overwrite; prior reports/protocols
 remain unchanged. This is an **iterative V3 study motivated by inspected
 diagnostics**, not an untouched final holdout or independent final generalization
-claim. V2 remains the last independent external holdout. No real pose-experiment
-results have been recorded here.
+claim. V2 remains the last independent external holdout.
+
+## Frozen V3 open-set development configuration
+
+The completed iterative comparison selected **all_xyz_pose_v2** under the
+predeclared highest-mean-outer-balanced-accuracy rule. These are development
+cross-validation results, **not independent final generalization**:
+
+| Metric | all_xyz_v1 | all_xyz_pose_v2 |
+| --- | ---: | ---: |
+| Closed-set accuracy | 0.897500 | 0.948173 |
+| Closed-set macro F1 | 0.897409 | 0.948020 |
+| ROC AUC | 0.835956 | 0.890893 |
+| EER | 0.229808 | 0.179567 |
+| FAR | 0.120192 | 0.098558 |
+| FRR | 0.302885 | 0.261538 |
+| Open-set exact accuracy | 0.745879 | 0.782280 |
+| Binary balanced accuracy | 0.788462 | 0.819952 |
+
+Global improvement does not resolve pose sensitivity. KNOWN yaw-left FRR fell
+from 0.725000 to 0.662500, and yaw-right from 0.862500 to 0.762500; both remain
+difficult. Pitch-up did not improve (0.500000 to 0.512500); pitch-down remained
+0.412500. Session/context variation and harder-to-reject UNKNOWN identities
+(including p009 in prior diagnostics) remain limitations. MediaPipe relative
+depth is not metric 3D geometry. These limitations motivate no tuning in the
+freeze workflow.
+
+Freeze the existing pose-transform definition and implementation fingerprint,
+1434 inputs, ANOVA f_classif k=448, StandardScaler and RBF SVC
+C=4/gamma=0.001/probability=False. Mahalanobis remains the only operational
+novelty score, using the current per-class LedoitWolf/shrinkage, ridge and
+Cholesky implementation and the SVM-predicted class; knownness is negative
+distance. Preserve non-overlapping window 7, median score, existing
+plurality/decision-sum/class-order identity ties, and disabled consistency gate.
+
+**Same-model calibration is mandatory:** the fitted selector, scaler, SVM and
+Mahalanobis references/covariances that produce calibration scores must also
+use the resulting threshold. Record
+`threshold_transport="none_same_model_calibration"`; no post-calibration refit
+is allowed. Maximize binary balanced accuracy, then lower UNKNOWN FAR, lower
+KNOWN FRR, then higher numeric threshold, using the existing enumeration.
+AUC/EER remain diagnostic only. The freeze leaves the numeric threshold
+uncalibrated and the deployable fit/calibration population allocation undefined;
+the next stage must declare that allocation while preserving this principle.
+
+```powershell
+python -m face_recognition.presentation.cli.freeze_v3_open_set_config `
+  --protocol "..\face-recognition-data\v3\splits\cv_protocol_v1.json" `
+  --novelty-report "..\face-recognition-data\v3\reports\novelty_comparison_v1.json" `
+  --calibration-report "..\face-recognition-data\v3\reports\mahalanobis_calibration_v1.json" `
+  --diagnostics-report "..\face-recognition-data\v3\reports\mahalanobis_diagnostics_v1.json" `
+  --pose-report "..\face-recognition-data\v3\reports\pose_representation_v1.json" `
+  --output "..\face-recognition-data\v3\models\open_set_config_v3.json"
+```
+
+This metadata-only command validates the completed evidence chain and published
+winner, hashes the exact bytes of all five artifacts, and fingerprints the local
+normalization/Mahalanobis implementations. It never opens processed payloads,
+fits an estimator, recalibrates, or reruns an experiment. The immutable,
+deterministic configuration contains curated aggregate evidence, technical
+filenames/digests, methodological status and limitations; no biometric vectors,
+trained state or absolute paths. Publication is atomic and refuses overwrite,
+with no force/unfreeze option. Changed decisions require a new version and
+explicit development reasoning. **V3 has no additional untouched independent
+holdout; V2 remains the last independently evaluated external holdout.**
