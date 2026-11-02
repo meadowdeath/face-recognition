@@ -965,5 +965,110 @@ remains the last independent external holdout. The cross-validated
 pose-representation study remains the appropriate V3 development evidence.
 Residual yaw sensitivity, unimproved pitch_up, unchanged pitch_down,
 session/context effects, harder UNKNOWN identities and MediaPipe relative-depth
-limitations remain as documented above. No real deployment-calibration values
-are recorded here.
+limitations remain as documented above. Calibration rates are not reported here;
+the current live bundle's persisted threshold is described below.
+
+## Live frozen V3 open-set recognition
+
+Both platforms share the same path:
+`Camera → asynchronous Face Landmarker → PoseLandmarkNormalizer → 1434 XYZ
+features → loaded V3 selector/scaler/SVM/Mahalanobis → seven-observation decision
+→ overlay`. Only acquisition differs: the existing OpenCV adapter on laptop,
+or Picamera2 main preview plus smaller YUV inference stream on Raspberry Pi.
+The deployable bundle is loaded once before opening a camera. Runtime never
+reads datasets or experiment reports, fits a component, or calibrates a threshold.
+
+The model uses `all_xyz_pose_v2`, not the older roll-only normalization. Its
+threshold is authoritative in the bundle (currently approximately
+**-18.1917360542**), with `score = -Mahalanobis distance`; higher means more
+likely KNOWN. Accept when the **window median >= persisted threshold**. These
+values are distances/scores, not probabilities or confidence percentages.
+There are no model/threshold/window overrides.
+
+Accumulate **seven successful face inferences**, not seven camera frames.
+Each landmark completion is consumed at most once. Preserve one active
+MediaPipe inference, a latest-result slot, and busy-frame discard before pixel
+conversion; no inference queue or sliding window is introduced. Each valid face
+is scored once, retaining only candidate/decision-score evidence for plurality,
+all-frame corresponding-score sums for ties, then deterministic class ordering.
+Use median knownness, no consistency gate, then clear all seven observations.
+No identity is emitted from an individual frame. The last completed label and
+median remain visible as the next non-overlapping window fills.
+
+Normal overlay: one padded/clamped face box, stable ID or `UNKNOWN`, **Last score
+(completed window)**, threshold, inference FPS, last submission-to-V3 latency,
+`Window: x/7`, and camera-read FPS. Before the first decision it shows
+`COLLECTING` for a valid face or `NO FACE` otherwise. An UNKNOWN decision never
+displays its arbitrary SVM candidate as the recognized identity. `--debug` adds
+the current frame candidate/score, final temporal candidate/decision, successful
+V3 completion count, MediaPipe callback count and busy skips. No fake probability
+or percentage is displayed in either mode.
+
+**No-face policy:** an observed no-face result or invalid pose geometry clears
+the partial window immediately. After `--absence-timeout` seconds without a
+successful face observation (default **2 seconds**), clear the last decision,
+score, debug candidate and box to `NO FACE`. A long gap before a new valid result
+also clears any partial window; unseen callbacks already older than the timeout
+are discarded. Busy/repeated snapshots never advance a window. Retain a completed
+decision during a short absence grace period. This is not identity tracking:
+undetected rapid person swaps cannot be associated. The landmarker requests
+`num_faces=1`; if an adapter unexpectedly returns more faces, only its first is
+processed deterministically. No multi-face association is performed.
+
+Metrics have distinct meanings:
+
+- **Camera FPS (reads):** frames acquired by the main loop; not the native sensor
+  or DRM preview refresh rate, which may be higher.
+- **Inference FPS:** successfully consumed pose+V3 face results per elapsed
+  second; excludes no-face callbacks, dropped/busy frames and reused snapshots.
+- **Latency:** from the existing monotonic MediaPipe submission timestamp through
+  callback delivery, main-loop consumption, pose features, V3 and temporal work.
+  It is the last successful path's latency, not camera exposure time.
+
+Laptop (PowerShell, repository root):
+
+```powershell
+conda activate face-recognition
+$env:PYTHONPATH="src"
+python -m face_recognition.presentation.cli.live_open_set_recognition `
+  --camera-backend opencv `
+  --camera-index 0 `
+  --model-dir "..\face-recognition-data\v3\models\open_set_model_v3"
+```
+
+Laptop capture keeps the device's native size/rate unless both
+`--preview-width` and `--preview-height` are supplied. Shared MediaPipe inference
+defaults to 480×270 and can use explicit `--inference-width/--inference-height`.
+Reuse the capture protocol's camera orientation via `--orientation` when needed.
+OpenCV windows exit with **q, ESC or Ctrl+C**.
+
+Raspberry Pi (activated project environment, repository root):
+
+```bash
+PYTHONPATH=src python -m face_recognition.presentation.cli.live_open_set_recognition \
+  --camera-backend picamera2 \
+  --model-dir "../face-recognition-data/v3/models/open_set_model_v3"
+```
+
+Picamera2 defaults to native DRM main preview at 848×480 with 480×270 inference,
+preserving the existing shared-crop strategy. DRM needs a suitable local display
+session and exits with **Ctrl+C**. Explicit `--display opencv` supports a desktop
+window instead. Add `--debug` to either command. Cameras, MediaPipe and GUI/native
+preview resources are closed on exit and failures. Picamera2/libcamera imports
+are isolated and are not required on Windows/OpenCV.
+
+Copy the **entire three-file model bundle** (`model.joblib`, `frozen_config.json`,
+`manifest.json`) and the MediaPipe `face_landmarker.task` asset to the Pi; the
+asset defaults to `assets/face_landmarker.task` or an explicit
+`--landmarker-model` path. Deploy the same source package/branch. No processed/raw
+dataset, protocol or development report is required for live inference.
+Use the project's pinned runtime requirements and Raspberry system
+Picamera2/libcamera packages. The bundle loader requires exact **Python (including
+patch), NumPy, SciPy and scikit-learn** versions from `manifest.json`'s creation
+metadata. Install matching builds for each platform's architecture. Frozen pose
+normalizer/Mahalanobis source fingerprints must also match, including line
+endings. Startup reports version/source mismatches and provides no bypass or
+automatic reconstruction/retraining. Preserve the trusted local bundle unchanged.
+
+This integration changes no experimental decision or calibration. Attendance,
+names, databases, history, rosters and recognition reports remain out of scope.

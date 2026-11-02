@@ -31,12 +31,13 @@ class OverlayTarget(Protocol):
 
 
 class OpenCVDisplay:
-    def __init__(self, renderer: FrameRenderer) -> None:
+    def __init__(self, renderer: FrameRenderer, *, window_title="Face Landmarks", exit_keys=(ord("q"),)) -> None:
         self.renderer = renderer
+        self.window_title, self.exit_keys = window_title, exit_keys
 
     def show(self, frame: LandmarkFrame, metrics: PerformanceMetrics) -> bool:
-        cv2.imshow("Face Landmarks", self.renderer.render(frame.frame, frame.faces, metrics))
-        return cv2.waitKey(1) & 0xFF != ord("q")
+        cv2.imshow(self.window_title, self.renderer.render(frame.frame, frame.faces, metrics))
+        return cv2.waitKey(1) & 0xFF not in self.exit_keys
 
     def close(self) -> None:
         cv2.destroyAllWindows()
@@ -57,6 +58,7 @@ class DRMDisplay:
         self._clock = clock
         self._last_metrics_refresh = clock()
         self._last_result_timestamp: int | None = None
+        self._last_renderer_revision = None
         self._has_overlay = False
         self.overlay_updated = False
         self._closed = False
@@ -71,8 +73,10 @@ class DRMDisplay:
             self.renderer.mode != "none" and timestamp is not None
             and timestamp != self._last_result_timestamp
         )
+        revision = getattr(self.renderer, "revision", None)
+        state_changed = revision is not None and revision != self._last_renderer_revision
         metrics_due = now - self._last_metrics_refresh >= self._interval
-        if self._has_overlay and not new_landmarks and not metrics_due:
+        if self._has_overlay and not new_landmarks and not state_changed and not metrics_due:
             return True
         # Allocate/draw only when submitting an overlay. frame.faces contains
         # the latest completed landmarks, also used for metric-only refreshes.
@@ -83,6 +87,7 @@ class DRMDisplay:
             self._last_metrics_refresh = now
         self._has_overlay = True
         self._last_result_timestamp = timestamp
+        self._last_renderer_revision = revision
         return True
 
     def close(self) -> None:

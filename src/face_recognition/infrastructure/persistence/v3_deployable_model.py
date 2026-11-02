@@ -26,12 +26,29 @@ from face_recognition.infrastructure.persistence.aggregate_report import validat
 from face_recognition.infrastructure.persistence.artifact_integrity import artifact_fingerprints, file_sha256
 from face_recognition.infrastructure.persistence.v3_cv_protocol_repository import _object, _read_json
 from face_recognition.infrastructure.persistence.v3_mahalanobis_diagnostics_report import _counts, _separation
-from face_recognition.infrastructure.persistence.v3_open_set_config import read_frozen_v3_configuration
+from face_recognition.infrastructure.persistence.v3_open_set_config import current_implementation_fingerprints, read_frozen_v3_configuration
 
 MODEL_FILE = "model.joblib"
 CONFIG_FILE = "frozen_config.json"
 MANIFEST_FILE = "manifest.json"
 FILES = (MODEL_FILE, CONFIG_FILE, MANIFEST_FILE)
+
+
+class V3RuntimeCompatibilityError(RejectionError):
+    """A validated bundle needs matching runtime/source versions; never bypass it."""
+
+
+def _check_runtime_versions(expected, actual):
+    import re
+    differences = []
+    for f in fields(expected):
+        wanted, installed = getattr(expected, f.name), getattr(actual, f.name)
+        if any(not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9.+_-]{1,80}", v) for v in (wanted, installed)):
+            raise RejectionError("Invalid package version metadata")
+        if wanted != installed:
+            differences.append(f"{f.name}: bundle={wanted}, runtime={installed}")
+    if differences:
+        raise V3RuntimeCompatibilityError("V3 runtime mismatch; exact versions are required: " + "; ".join(differences))
 
 
 def _digest(value):
@@ -195,17 +212,23 @@ def load_v3_deployable_bundle(model_dir):
         hashes = artifact_fingerprints(root, (MODEL_FILE, CONFIG_FILE))
         if manifest["artifacts"] != [dict(filename=n, sha256=s) for n, s in hashes]:
             raise ValueError
+        config_metadata = _read_json(root / CONFIG_FILE)
+        if config_metadata["implementations"] != [asdict(v) for v in current_implementation_fingerprints()]:
+            raise V3RuntimeCompatibilityError("V3 frozen implementation fingerprints differ. Use identical pose-normalizer and Mahalanobis sources, including line endings.")
         config = read_frozen_v3_configuration(root / CONFIG_FILE)
         if dict(hashes)[CONFIG_FILE] != manifest["frozen_configuration"]["source_file_sha256"]:
             raise ValueError
         summary = _summary_from_json(manifest["calibration"])
+        runner = SklearnV3DeployableRunner(config)
+        _check_runtime_versions(summary.versions, runner.versions)
         model = joblib.load(root / MODEL_FILE)
         _validate_model_and_summary(model, summary, config)
-        runner = SklearnV3DeployableRunner(config)
-        if summary.versions != runner.versions or metadata_sha256(manifest) != metadata_sha256(_manifest(model, summary, hashes)):
+        if metadata_sha256(manifest) != metadata_sha256(_manifest(model, summary, hashes)):
             raise ValueError
         if artifact_fingerprints(root, FILES) != before:
             raise ValueError
         return V3DeployableRecognizer(model, runner, summary.fingerprints_after_calibration)
+    except V3RuntimeCompatibilityError:
+        raise
     except Exception:
         raise RejectionError("Invalid/incomplete/tampered or incompatible deployable V3 bundle") from None

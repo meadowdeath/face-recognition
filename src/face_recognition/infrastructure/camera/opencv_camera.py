@@ -7,7 +7,7 @@ from face_recognition.domain.models.frame import Frame, PixelFormat
 
 
 class OpenCVCamera:
-    def __init__(self, index: int, width: int, height: int, fps: int = 30, *, orientation: str = "normal") -> None:
+    def __init__(self, index: int, width: int | None, height: int | None, fps: int | None = 30, *, orientation: str = "normal") -> None:
         if orientation not in CAMERA_ORIENTATIONS:
             raise ValueError(f"Unsupported camera orientation: {orientation}")
         self._flip_code = {"normal": None, "rotate180": -1, "mirror-horizontal": 1, "mirror-vertical": 0}[orientation]
@@ -16,10 +16,13 @@ class OpenCVCamera:
         if not self._capture.isOpened():
             self._capture.release()
             raise RuntimeError(f"Could not open camera index {index}")
-        self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        if width is not None:
+            self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        if height is not None:
+            self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         # This is a request; the device/backend may choose a different rate.
-        self._capture.set(cv2.CAP_PROP_FPS, fps)
+        if fps is not None:
+            self._capture.set(cv2.CAP_PROP_FPS, fps)
 
     def read(self) -> Frame | None:
         ok, frame = self._capture.read()
