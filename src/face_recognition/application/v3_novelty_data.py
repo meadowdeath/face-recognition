@@ -8,10 +8,28 @@ import numpy as np
 from face_recognition.application.create_v3_cv_protocol import validate_v3_cv_protocol
 from face_recognition.application.temporal_windows import aggregate_windows, build_windows
 from face_recognition.domain.models.processed_sample import SampleProvenance
+from face_recognition.domain.models.processed_sample import BASELINE_REPRESENTATION, POSE_REPRESENTATION
 from face_recognition.domain.models.dataset import CONDITIONS
 from face_recognition.domain.models.rejection import RejectionError
 from face_recognition.domain.models.temporal import WindowCounts
 from face_recognition.domain.models.v3_cv_protocol import V3CVProtocol
+
+
+def validate_representation_catalog(protocol, catalog):
+    """Bind candidate population keys to the unchanged baseline protocol.
+
+    Candidate values/file sizes/manifest hashes differ intentionally. Identity,
+    session, condition ordering and declared populations must still agree.
+    """
+    if catalog.representation == BASELINE_REPRESENTATION:
+        if catalog != protocol.catalog:
+            raise RejectionError("Baseline catalog does not match protocol")
+    elif (catalog.representation != POSE_REPRESENTATION
+          or catalog.observed_sessions != protocol.catalog.observed_sessions
+          or catalog.declared_source_samples != protocol.catalog.declared_source_samples
+          or tuple((r.person_id, r.session_id, r.condition) for r in catalog.condition_files)
+          != tuple((r.person_id, r.session_id, r.condition) for r in protocol.catalog.condition_files)):
+        raise RejectionError("Candidate population does not match protocol")
 
 
 @dataclass(frozen=True, eq=False)
@@ -28,6 +46,7 @@ class V3PayloadData:
     samples: tuple[SampleProvenance, ...] = field(repr=False)
     payload_sha256: str
     source_stamps: tuple = field(default=(), repr=False)
+    representation: str = BASELINE_REPRESENTATION
 
     def __post_init__(self):
         self.validate()
@@ -36,7 +55,8 @@ class V3PayloadData:
 
     def validate(self):
         validate_v3_cv_protocol(self.protocol)
-        if (self.X.dtype != np.float32 or self.X.shape != (len(self.samples), 1434)
+        if (self.representation not in (BASELINE_REPRESENTATION, POSE_REPRESENTATION)
+                or self.X.dtype != np.float32 or self.X.shape != (len(self.samples), 1434)
                 or not np.isfinite(self.X).all() or self.y.dtype != np.int32 or self.y.shape != (len(self.samples),)
                 or len(self.samples) != self.protocol.catalog.declared_source_samples
                 or not isinstance(self.payload_sha256, str) or not re.fullmatch(r"[a-f0-9]{64}", self.payload_sha256)):

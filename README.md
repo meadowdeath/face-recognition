@@ -725,3 +725,90 @@ filenames rather than absolute local paths. Inputs remain read-only. The new
 external report is aggregate-only, atomic and no-overwrite, with no feature
 vectors, individual scores/predictions or fitted parameters. No real diagnostic
 conclusions are recorded here.
+
+## V3 controlled pose-representation experiment
+
+Inspected Mahalanobis diagnostics identified strong KNOWN rejection in yaw and
+pitch conditions. This experiment varies **only the representation**:
+`all_xyz_v1` remains the baseline; `all_xyz_pose_v2` is a deterministic face-local
+coordinate candidate. Both retain all 478 XYZ landmarks (1434 values), in
+landmark order. Yaw left/right, pitch up/**pitch down**, and roll left/right are
+addressed by one geometric transform, without condition branches, identity
+labels, fitted statistics or learned frontalization.
+
+For each raw face, first correct aspect ratio as in the existing normalizer:
+`p = (x, y * height/width, z)`. Use the same eye-corner groups
+`E0=mean(33,133)` and `E1=mean(362,263)`. Let
+`U=mean(10,109,338)` (forehead contour) and
+`D=mean(152,148,377)` (chin contour). Averaging reduces reliance on one point;
+these references still carry detector noise and may vary with expression.
+
+```text
+origin = (E0 + E1) / 2
+scale = ||E1 - E0||_2                  # 3D interocular distance
+x_hat = (E1 - E0) / scale
+v = D - U
+y_temp = v - dot(v, x_hat) * x_hat
+y_hat = y_temp / ||y_temp||_2
+z_hat = cross(x_hat, y_hat) / ||cross(x_hat, y_hat)||_2
+y_hat = cross(z_hat, x_hat)            # reconstruct orthogonal vertical
+q = (p - origin) / scale
+pose_xyz = (dot(q, x_hat), dot(q, y_hat), dot(q, z_hat))
+```
+
+The frame is right-handed: +x runs from the first eye group to the second,
++y is superior-to-inferior, and +z is their cross product (approximately away
+from the camera for a frontal image). There is no view-dependent sign flip.
+Reject non-finite geometry/results, eye/vertical lengths <= `1e-8` in corrected
+width-relative units, vertical residual <= `max(1e-8, 1e-6*||v||)`, or cross-product
+norm <= `1e-6`. Check basis orthonormality and determinant +1 within `1e-12`.
+
+This canonicalizes ideal rigid rotations of the supplied geometry.
+**MediaPipe z is relative depth, not metric reconstruction.** This is
+face-relative pose reduction, not true metric 3D frontalization or a guarantee
+of pose invariance on real detections, occlusions or non-rigid expressions.
+
+Process raw capture into a **fresh, separate pose-only root**. The command
+preserves source provenance, timestamps, conditions and sample ordering/indices;
+it publishes only `all_xyz_pose_v2` plus manifests, with the transform definition
+recorded. Existing normalized/baseline datasets are never overwritten. Processing
+fails on invalid geometry, retaining failed staging rather than a completed run.
+
+```powershell
+python -m face_recognition.presentation.cli.process_pose_dataset `
+  --raw-root "..\face-recognition-data\data\raw" `
+  --output-root "..\face-recognition-data\v3\pose_processed"
+
+python -m face_recognition.presentation.cli.evaluate_v3_pose_representation `
+  --baseline-root "..\face-recognition-data\v3\processed" `
+  --candidate-root "..\face-recognition-data\v3\pose_processed" `
+  --protocol "..\face-recognition-data\v3\splits\cv_protocol_v1.json" `
+  --report "..\face-recognition-data\v3\reports\pose_representation_v1.json"
+```
+
+The existing protocol and cyclic two-fit/one-calibration/one-test session roles
+are unchanged. Candidate catalog membership and every sample's provenance must
+match the baseline; candidate manifests/bytes have separate fingerprints.
+Strict width/finite-value/order/count checks remain in force. Both representations
+use ANOVA-448, StandardScaler, RBF SVC C=4/gamma=0.001/probability=False and the
+same regularized Mahalanobis implementation. Each representation/fold calibrates
+its own numeric threshold on the same allowed populations using the existing
+balanced-accuracy/FAR/FRR/higher-threshold rule. **No refit follows calibration**.
+Windows remain non-overlapping size 7, median score, existing plurality/tie
+rules, and no consistency gate. No classifier or novelty search occurs.
+
+Report overall outer-fold means/population standard deviations, condition-level
+KNOWN FRR/correct ID and score summaries, UNKNOWN FAR by condition/identity, and
+KNOWN session FRR. All 13 conditions, including **pitch_down**, appear in fold
+results and the CLI comparison table. Descriptive candidate-minus-baseline FRR
+deltas explicitly cover yaw, pitch, roll, near and far. Condition decision counts
+pool disjoint outer tests; raw score distributions are not pooled across models.
+
+The predeclared ranking is higher mean outer binary balanced accuracy, lower
+mean outer FRR, lower mean outer FAR, higher mean closed-set macro F1, then
+`all_xyz_v1` on an exact tie. Improved yaw alone cannot select the candidate.
+Reports are aggregate-only, atomic and no-overwrite; prior reports/protocols
+remain unchanged. This is an **iterative V3 study motivated by inspected
+diagnostics**, not an untouched final holdout or independent final generalization
+claim. V2 remains the last independent external holdout. No real pose-experiment
+results have been recorded here.

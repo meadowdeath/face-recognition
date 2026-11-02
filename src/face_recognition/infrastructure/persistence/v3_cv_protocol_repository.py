@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from face_recognition.application.create_v3_cv_protocol import metadata_sha256, validate_v3_cv_protocol
-from face_recognition.domain.models.processed_sample import BASELINE_REPRESENTATION
+from face_recognition.domain.models.processed_sample import BASELINE_REPRESENTATION, POSE_REPRESENTATION
 from face_recognition.domain.models.v3_cv_protocol import (
     V3CVProtocol, V3Catalog, V3CatalogFile, V3ExperimentSpecification, V3InnerSplit,
     V3ObservedSessions, V3OuterFold, V3ProtocolError, V3ProtocolGeneration,
@@ -57,18 +57,21 @@ def read_v3_experiment_specification(path: Path) -> V3ExperimentSpecification:
         raise V3ProtocolError("Invalid V3 experiment specification or explicit assignments") from None
 
 
-def read_v3_catalog(processed_root: Path) -> V3Catalog:
-    """Inspect all_xyz_v1 directories, file sizes and completed processing metadata.
+def read_v3_catalog(processed_root: Path, *, representation: str = BASELINE_REPRESENTATION) -> V3Catalog:
+    """Inspect one XYZ representation; all_xyz_v1 remains the protocol default.
 
     Never opens/hashes JSONL payloads. Catalog validity is not record validity:
     source row counts, feature width/values and indices must be checked by a
     future payload loader before model execution. Other representations are not
-    inputs to this protocol and are not inspected.
+    inputs to this catalog and are not inspected. Pose comparison explicitly
+    requests its candidate catalog without regenerating the baseline protocol.
     """
     try:
+        if representation not in (BASELINE_REPRESENTATION, POSE_REPRESENTATION):
+            raise ValueError
         if Path(processed_root).is_symlink():
             raise ValueError
-        source = ProcessedDatasetCatalog(processed_root, BASELINE_REPRESENTATION)
+        source = ProcessedDatasetCatalog(processed_root, representation)
         manifest_path = source.root / "processing_manifest.json"
         before = file_sha256(manifest_path)
         metadata = _read_json(manifest_path)
@@ -90,9 +93,9 @@ def read_v3_catalog(processed_root: Path) -> V3Catalog:
         if (file_sha256(manifest_path) != before or source.discover_conditions() != keys
                 or any((source.processed_root / row.source_relative_path).stat().st_size != row.size_bytes for row in records)):
             raise ValueError
-        return V3Catalog(BASELINE_REPRESENTATION, before, metadata["total_samples_processed"], tuple(observed), tuple(records))
+        return V3Catalog(representation, before, metadata["total_samples_processed"], tuple(observed), tuple(records))
     except Exception:
-        raise V3ProtocolError("Invalid/incomplete or changing all_xyz_v1 processed catalog") from None
+        raise V3ProtocolError(f"Invalid/incomplete or changing {representation} processed catalog") from None
 
 
 def v3_protocol_to_json(protocol: V3CVProtocol) -> str:
