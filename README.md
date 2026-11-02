@@ -668,4 +668,60 @@ There are no feature vectors, per-sample scores/predictions, covariance matrices
 support vectors, real names or absolute source paths in the report. There is no
 overwrite/force option or production-model persistence.
 
-No real same-model calibration performance results have been recorded yet.
+The same-model study has completed. Its external
+`mahalanobis_calibration_v1.json` is immutable evidence, alongside the initial
+novelty comparison and protocol.
+
+## V3 post-hoc Mahalanobis diagnostics
+
+The diagnostic workflow localizes errors in the completed same-model study;
+it changes no model-selection or calibration decisions and makes no new final
+performance claim. V3 remains a cross-validation-based calibration refinement.
+V2 remains the last independent external holdout experiment.
+
+The study retained aggregate metrics and learned-state digests, not fitted
+models or individual observations. Diagnostics therefore **reconstruct each
+original two-session fit in memory** using the unchanged pipeline. Before any
+outer scoring, the reconstructed learned-state SHA-256 must equal the saved
+digest. Apply the **saved threshold**, without calibration, threshold search,
+ROC/EER threshold enumeration or strategy selection. Verify the model state
+after inference and require the saved outer counts, closed-set/operational
+metrics and score-distribution summaries to reproduce exactly. A mismatch in
+data, software versions, learned state or saved summaries fails explicitly;
+there is no fallback that changes the experiment. Grouped attributions are
+reconstructed, not extracted from previously retained individual predictions.
+
+Each fold reports KNOWN and UNKNOWN counts, acceptance/rejection rates and
+mean/median window knownness by all 13 conditions and by pose, distance,
+translation and center groups. KNOWN summaries also include correct accepted
+identification and accepted misidentification. Additional tables cover KNOWN
+test sessions, UNKNOWN identities and KNOWN condition-by-session effects.
+Severity tables sort by FRR/FAR, then error count and label. Contribution tables
+sort by error-window count and label, retaining all largest-count ties. Empty
+groups have zero counts and null rates/statistics.
+
+Pool decision counts only across disjoint outer tests. Do not pool raw scores
+across fitted models: aggregate condition/group score summaries explicitly
+report unweighted means/population standard deviations of fold means and
+medians. Session/identity score summaries remain within their single test fold.
+
+Sessions proxy time/place/environment context; conditions proxy
+pose/distance/translation. **There are no lighting labels**, so these summaries
+cannot identify lighting as a cause. Session, fold model and threshold effects
+are confounded. The report's neutral interpretation describes observed
+contributions and rates without causal or statistical-significance claims.
+
+```powershell
+python -m face_recognition.presentation.cli.analyze_v3_mahalanobis_diagnostics `
+  --processed-root "..\face-recognition-data\v3\processed" `
+  --protocol "..\face-recognition-data\v3\splits\cv_protocol_v1.json" `
+  --evaluation-report "..\face-recognition-data\v3\reports\mahalanobis_calibration_v1.json" `
+  --report "..\face-recognition-data\v3\reports\mahalanobis_diagnostics_v1.json"
+```
+
+The strict V3 loader and input integrity checks are reused. Source protocol,
+evaluation and payload digests establish provenance; report references contain
+filenames rather than absolute local paths. Inputs remain read-only. The new
+external report is aggregate-only, atomic and no-overwrite, with no feature
+vectors, individual scores/predictions or fitted parameters. No real diagnostic
+conclusions are recorded here.
