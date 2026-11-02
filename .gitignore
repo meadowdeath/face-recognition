@@ -14,6 +14,9 @@ dist/
 data/raw/*
 data/processed/*
 models/*
+# Biometric-derived deployable artifacts must never enter source control.
+*.joblib
+*.npz
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !models/.gitkeep

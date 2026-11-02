@@ -875,3 +875,95 @@ trained state or absolute paths. Publication is atomic and refuses overwrite,
 with no force/unfreeze option. Changed decisions require a new version and
 explicit development reasoning. **V3 has no additional untouched independent
 holdout; V2 remains the last independently evaluated external holdout.**
+
+## Deployable V3 construction and calibration
+
+Construct the operational model from `open_set_config_v3.json`; do not repeat
+selection, comparisons or cross-validation. Existing `all_xyz_pose_v2` payloads
+are loaded directly, without regenerating normalization. Frozen protocol and
+pose-report hashes authorize membership/catalog/payload provenance. By default,
+the command locates their recorded filenames under the sibling `splits/` and
+`reports/` directories; `--protocol`/`--pose-report` can locate relocated copies
+only when the frozen hashes still match.
+
+The fixed chronological allocation is:
+
+| Role | Population | Sessions | Expected real frames |
+| --- | --- | --- | ---: |
+| Fit | All 10 registered KNOWN identities | session_01, session_02, session_03 | 7800 |
+| KNOWN calibration | Same 10 registered identities | session_04 | 2600 |
+| UNKNOWN calibration | All 8 development UNKNOWN identities | session_01, session_02 | 4160 |
+
+Membership comes from the fingerprinted protocol; IDs are not guessed from
+numbering. The real KNOWN set is p001/p004/p005/p006/p007/p010/p011/p012/p013/p014;
+the UNKNOWN set is p002/p003/p008/p009/p015/p016/p017/p018. Uniform per-condition
+counts are derived from the frozen catalog and checked against every actual
+person/session/condition group (20 samples in the real catalog). Missing/extra
+participants, sessions, conditions, rows or mismatched payload bytes fail closed.
+
+Fit ANOVA-448, StandardScaler, RBF SVC C=4/gamma=0.001/probability=False and
+the exact regularized predicted-class Mahalanobis state **once**, on KNOWN
+session_01..03 only. UNKNOWN and session_04 never fit any component. Seal this
+state before generating the two calibration populations. Calibrate one threshold
+on non-overlapping window-7 **median** scores using the existing balanced
+accuracy, lower FAR, lower FRR, higher-threshold rule. Identity voting/ties and
+disabled consistency gate remain frozen. AUC/EER are diagnostic only.
+**Never refit after calibration.** Record
+`threshold_transport="none_same_model_calibration"`.
+
+Fit-generation and component-identity guards accompany value-based SHA-256
+fingerprints for selected indices, selector, scaler, SVM, Mahalanobis and full
+fitted state. Before/after-calibration fingerprints must match. Canonical array
+content hashing avoids depending on memory aliases/order during joblib
+round-trips. Structural validation checks dimensions, parameters, class mapping
+and learned-state fingerprints without fitting or inference.
+
+```powershell
+python -m face_recognition.presentation.cli.train_v3_deployable_model `
+  --processed-root "..\face-recognition-data\v3\pose_processed" `
+  --frozen-config "..\face-recognition-data\v3\models\open_set_config_v3.json" `
+  --output-dir "..\face-recognition-data\v3\models\open_set_model_v3"
+```
+
+Use a fresh versioned output directory, rather than the existing `models/`
+parent. There is no force option. Staging, artifact round-trip validation and
+completion-manifest-last publication precede atomic directory rename; failed
+construction publishes no partial final bundle. The layout is:
+
+```text
+open_set_model_v3/
+  model.joblib          # selector, scaler, SVM, Mahalanobis, threshold, classes, frozen policy
+  frozen_config.json    # exact source configuration bytes
+  manifest.json         # aggregate provenance/counts/calibration metrics and integrity hashes
+```
+
+The joblib contains required fitted statistics/support vectors, but no retained
+training/calibration frame matrix or raw landmarks. These artifacts are
+biometric-derived, local-only and must never be committed. Repository-local
+publication is rejected; `.gitignore` also excludes joblib/NPZ artifacts. The
+loader is for trusted local bundles: hashes establish integrity, not authenticity.
+
+```python
+from face_recognition.infrastructure.persistence.v3_deployable_model import load_v3_deployable_bundle
+
+recognizer = load_v3_deployable_bundle(model_directory)
+result = recognizer.predict_window(pose_features)  # one coherent (7, 1434) pose-feature window
+# result.decision: KNOWN/UNKNOWN; result.identity: registered ID or None
+# result.knownness_score: median Mahalanobis score; result.threshold: persisted threshold
+```
+
+The API uses the persisted threshold unchanged and suppresses arbitrary SVM IDs
+on UNKNOWN. There is no single-frame threshold API, camera integration or live
+buffer in this stage. The real calibration captures should produce 260 KNOWN
+and 416 UNKNOWN windows, discarding 780 and 1248 trailing frames respectively;
+all 7800 fit frames are still used for fitting.
+
+**CALIBRATION METRICS are not independent final test or generalization metrics.**
+This constructs a deployable model from frozen V3 development decisions; it does
+not perform a new evaluation. No additional untouched V3 holdout exists, and V2
+remains the last independent external holdout. The cross-validated
+pose-representation study remains the appropriate V3 development evidence.
+Residual yaw sensitivity, unimproved pitch_up, unchanged pitch_down,
+session/context effects, harder UNKNOWN identities and MediaPipe relative-depth
+limitations remain as documented above. No real deployment-calibration values
+are recorded here.
