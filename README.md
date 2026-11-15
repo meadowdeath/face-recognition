@@ -1,6 +1,6 @@
 # Face Recognition
 
-## Attendance kiosk interface — Phase 1
+## Attendance kiosk interface and lifecycle
 
 The optional PyQt5 Widgets interface runs independently of camera, model and
 dataset assets. It provides nine persistent screens: standby, attendance,
@@ -28,9 +28,32 @@ QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui
 EGLFS launches fullscreen; the application does not set the platform backend.
 Escape closes the development application. Dark Amethyst is the default theme;
 Settings → Appearance (`Ajustes → Apariencia`) switches all existing widgets to
-Light Lavender immediately. The choice lives only in memory. One timer updates
-the date/time once per second. No inactivity timer, hardware polling or worker
-is started.
+Light Lavender immediately. Appearance and standby timeout live only in memory.
+One recurring timer updates the date/time; one single-shot timer handles
+Attendance inactivity. There is no hardware polling, worker or recognition load.
+
+The window distinguishes `LifecycleState.STANDBY`, `ATTENDANCE`, `ADMIN_LOGIN`,
+`ADMIN` and terminal `SHUTDOWN` from its nine visible pages. All administrative
+subviews belong to `ADMIN`. Main-content activation or sidebar Asistencia starts
+a fresh Attendance countdown and clears the demo result. Deliberate clicks,
+taps, keys and wheel interaction inside Attendance restart the countdown;
+mouse movement does not. `Ajustes → Espera` selects 30 (default), 60 or 120 seconds.
+
+The explicit `Simular rostro presente` checkbox is independent of the attendance
+result selector: an unrecognized face is still presence. Presence stops the
+timer, absence starts a new countdown, and expiry enters Standby. Leaving
+Attendance clears presence/results and stops its timer. No attendance timer runs
+in Standby, PIN entry or Admin. State/deadline checks reject obsolete timeouts.
+Returning to Attendance or Standby clears demo authentication/PIN. Exit retains
+the themed confirmation; cancellation keeps Admin active, and closing stops both
+timers and announces shutdown. Standby never suspends the OS or display.
+
+Future integration can read `window.lifecycle_state` for the initial state and
+connect `window.lifecycle_changed` (enum) and `window.attendance_active_changed`
+(boolean). These report Attendance entry/exit, Standby and beginning shutdown.
+Feed presence through `window.set_face_present(bool)` on the GUI thread. Lifecycle
+activity is not permission to start recognition: the next phase must also require
+an open attendance session. This phase creates no hardware controller.
 
 Attendance's visual-state selector and export's USB selector demonstrate the
 required states. Session, export, PIN-change, brightness, clock and power

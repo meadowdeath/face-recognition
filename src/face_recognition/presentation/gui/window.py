@@ -1,9 +1,13 @@
-"""Nine persistent demonstration screens using Qt layouts and one clock timer."""
+"""Persistent kiosk screens and lightweight, hardware-independent lifecycle."""
 
-from PyQt5.QtCore import QDate, QDateTime, QLocale, Qt, QTimer, pyqtSignal
+from enum import Enum, auto
+from math import ceil
+from time import monotonic
+
+from PyQt5.QtCore import QDate, QDateTime, QEvent, QLocale, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
-    QAbstractItemView, QComboBox, QDateEdit, QDialog, QFrame, QGridLayout, QHBoxLayout,
+    QApplication, QAbstractItemView, QCheckBox, QComboBox, QDateEdit, QDialog, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QPushButton, QScrollArea,
     QShortcut, QSizePolicy, QSlider, QStackedWidget, QStyle, QTableWidget, QTableWidgetItem,
     QTimeEdit, QVBoxLayout, QWidget,
@@ -12,6 +16,16 @@ from PyQt5.QtWidgets import (
 from .themes import THEMES, stylesheet
 
 DEMO_PIN = "123456"
+
+
+class LifecycleState(Enum):
+    STANDBY = auto()
+    ATTENDANCE = auto()
+    ADMIN_LOGIN = auto()
+    ADMIN = auto()
+    SHUTDOWN = auto()
+
+
 ATTENDANCE_STATES = (
     ("Esperando un rostro", "El reconocimiento está desconectado en esta demostración.", "information"),
     ("Reconocimiento en curso", "Mantén el rostro dentro de la guía.", "information"),
@@ -47,8 +61,19 @@ class Standby(QWidget):
 
 
 class KioskWindow(QMainWindow):
+    lifecycle_changed = pyqtSignal(object)
+    attendance_active_changed = pyqtSignal(bool)
+
     def __init__(self):
         super().__init__()
+        self.lifecycle_state = None
+        self.standby_timeout_seconds = 30
+        self.face_present = False
+        self._inactivity_deadline = None
+        self.inactivity_timer = QTimer(self)
+        self.inactivity_timer.setSingleShot(True)
+        self.inactivity_timer.setTimerType(Qt.PreciseTimer)
+        self.inactivity_timer.timeout.connect(self._inactivity_expired)
         self.setWindowTitle("Face ID — Sistema de asistencia")
         self.setFixedSize(800, 480)
         self.setLocale(QLocale(QLocale.Spanish, QLocale.Mexico))
@@ -106,6 +131,7 @@ class KioskWindow(QMainWindow):
         self.exit_shortcut.activated.connect(self.close)
         self.apply_theme("dark")
         self.navigate("standby")
+        QApplication.instance().installEventFilter(self)
 
     def page(self, name, title, back=False):
         page = QWidget()
@@ -160,6 +186,10 @@ class KioskWindow(QMainWindow):
         self.state_selector.setAccessibleName("Estado visual de demostración")
         self.state_selector.currentIndexChanged.connect(self.set_attendance_state)
         col.addWidget(self.state_selector)
+        self.presence_selector = QCheckBox("Simular rostro presente · Demostración")
+        self.presence_selector.setMinimumHeight(32)
+        self.presence_selector.toggled.connect(self.set_face_present)
+        col.addWidget(self.presence_selector)
         self.set_attendance_state(0)
 
         col = self.page("pin", "Acceso administrativo")
@@ -251,16 +281,19 @@ class KioskWindow(QMainWindow):
         contents = QWidget(); options = QVBoxLayout(contents)
         self.appearance = QComboBox(); self.appearance.addItems(["Oscuro", "Claro"])
         self.appearance.currentIndexChanged.connect(lambda i: self.apply_theme("light" if i else "dark"))
-        timeout = QComboBox(); timeout.addItems(["30 segundos", "60 segundos", "120 segundos"])
+        self.timeout_selector = QComboBox()
+        for seconds in (30, 60, 120):
+            self.timeout_selector.addItem(f"{seconds} segundos", seconds)
+        self.timeout_selector.currentIndexChanged.connect(self._timeout_setting_changed)
         brightness = QSlider(Qt.Horizontal); brightness.setRange(0, 100); brightness.setValue(70); brightness.setMinimumHeight(44)
         time_control = QTimeEdit()
         time_control.setDisplayFormat("HH:mm")
-        for title, control in (("Apariencia", self.appearance), ("Espera · Solo visual", timeout), ("Brillo · Solo visual", brightness),
+        for title, control in (("Apariencia", self.appearance), ("Espera", self.timeout_selector), ("Brillo · Solo visual", brightness),
                 ("Fecha · Solo visual", self.date_control()), ("Hora · Solo visual", time_control)):
             row = QHBoxLayout(); row.addWidget(label(title), 1); row.addWidget(control, 1); options.addLayout(row)
         for title in ("Cambiar PIN", "Reiniciar dispositivo", "Apagar dispositivo"):
             options.addWidget(button(title))
-        options.addWidget(label("Solo Apariencia aplica cambios. Los demás controles son visuales.", "muted"))
+        options.addWidget(label("Apariencia y Espera aplican cambios. Los demás controles son visuales.", "muted"))
         scroll.setWidget(contents); col.addWidget(scroll)
 
     def date_control(self):
@@ -270,7 +303,9 @@ class KioskWindow(QMainWindow):
         return control
 
     def navigate(self, name):
-        if name == "attendance":
+        if self.lifecycle_state is LifecycleState.SHUTDOWN:
+            return
+        if name in ("attendance", "standby"):
             self.authenticated = False
             self.pin = ""; self.update_pin()
         if name not in ("standby", "attendance", "pin") and not self.authenticated:
@@ -281,6 +316,75 @@ class KioskWindow(QMainWindow):
         self.stack.setCurrentWidget(self.screens[name])
         self.attendance_nav.setChecked(name in ("standby", "attendance"))
         self.admin_nav.setChecked(name not in ("standby", "attendance"))
+        state = {"standby": LifecycleState.STANDBY, "attendance": LifecycleState.ATTENDANCE,
+                 "pin": LifecycleState.ADMIN_LOGIN}.get(name, LifecycleState.ADMIN)
+        if name == "attendance":
+            self._clear_attendance()
+        self._transition_state(state)
+        if state is LifecycleState.ATTENDANCE:
+            self.record_attendance_activity()
+
+    def _transition_state(self, state):
+        previous = self.lifecycle_state
+        if previous is state:
+            return
+        self.inactivity_timer.stop()
+        self._inactivity_deadline = None
+        if previous is LifecycleState.ATTENDANCE:
+            self._clear_attendance()
+        self.lifecycle_state = state
+        self.lifecycle_changed.emit(state)
+        if (previous is LifecycleState.ATTENDANCE) != (state is LifecycleState.ATTENDANCE):
+            self.attendance_active_changed.emit(state is LifecycleState.ATTENDANCE)
+
+    def _clear_attendance(self):
+        self.face_present = False
+        previous = self.presence_selector.blockSignals(True)
+        self.presence_selector.setChecked(False)
+        self.presence_selector.blockSignals(previous)
+        self.state_selector.setCurrentIndex(0)
+        self.set_attendance_state(0)
+
+    def record_attendance_activity(self):
+        if self.lifecycle_state is LifecycleState.ATTENDANCE and not self.face_present:
+            self._inactivity_deadline = monotonic() + self.standby_timeout_seconds
+            self.inactivity_timer.start(self.standby_timeout_seconds * 1000)
+
+    def set_face_present(self, present):
+        """Explicit presence input for simulation and future recognition events."""
+        if self.lifecycle_state is not LifecycleState.ATTENDANCE:
+            return
+        self.face_present = bool(present)
+        previous = self.presence_selector.blockSignals(True)
+        self.presence_selector.setChecked(self.face_present)
+        self.presence_selector.blockSignals(previous)
+        if self.face_present:
+            self.inactivity_timer.stop()
+            self._inactivity_deadline = None
+        else:
+            self.record_attendance_activity()
+
+    def _timeout_setting_changed(self):
+        self.standby_timeout_seconds = self.timeout_selector.currentData()
+        self.record_attendance_activity()
+
+    def _inactivity_expired(self):
+        if (self.lifecycle_state is not LifecycleState.ATTENDANCE or self.face_present
+                or self._inactivity_deadline is None):
+            return
+        remaining = self._inactivity_deadline - monotonic()
+        if remaining > 0:
+            # A queued timeout from an earlier activation cannot expire a fresh countdown.
+            self.inactivity_timer.start(max(1, ceil(remaining * 1000)))
+        else:
+            self.navigate("standby")
+
+    def eventFilter(self, watched, event):
+        if (self.lifecycle_state is LifecycleState.ATTENDANCE and isinstance(watched, QWidget)
+                and (watched is self.screens["attendance"] or self.screens["attendance"].isAncestorOf(watched))
+                and event.type() in (QEvent.MouseButtonPress, QEvent.TouchBegin, QEvent.KeyPress, QEvent.Wheel)):
+            self.record_attendance_activity()
+        return super().eventFilter(watched, event)
 
     def open_admin(self):
         self.authenticated = False
@@ -371,4 +475,8 @@ class KioskWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.clock.stop()
+        self._transition_state(LifecycleState.SHUTDOWN)
+        self.authenticated = False
+        self.pin = ""; self.update_pin()
+        QApplication.instance().removeEventFilter(self)
         super().closeEvent(event)
