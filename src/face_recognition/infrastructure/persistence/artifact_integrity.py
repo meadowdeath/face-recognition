@@ -2,6 +2,11 @@
 
 from pathlib import Path
 from hashlib import sha256
+from dataclasses import fields
+import json
+
+from face_recognition.config.settings import PROJECT_ROOT
+from face_recognition.domain.models.rejection import RejectionError
 
 def file_sha256(path: Path) -> str:
     digest = sha256()
@@ -27,3 +32,41 @@ def artifact_fingerprints(root: Path, filenames: tuple[str, ...]) -> tuple[tuple
         if path.is_symlink() or not path.is_file():
             raise ValueError("Artifact must be an existing regular file")
     return tuple((name, file_sha256(root / name)) for name in sorted(filenames))
+
+
+class ArtifactPublicationError(ValueError):
+    pass
+
+
+def validate_output_target(path: Path, input_roots: tuple[Path, ...]) -> Path:
+    if Path(path).is_symlink():
+        raise ArtifactPublicationError("Artifact target must not be a symlink")
+    target = Path(path).resolve()
+    if target.is_relative_to(PROJECT_ROOT.resolve()):
+        raise ArtifactPublicationError("Artifacts must remain outside the Git repository")
+    for root in input_roots:
+        source = Path(root).resolve()
+        if target.is_relative_to(source) or source.is_relative_to(target):
+            raise ArtifactPublicationError("Artifact target must not overlap its inputs")
+    if target.exists():
+        raise ArtifactPublicationError("Artifact target already exists; choose a new output path")
+    return target
+
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result: raise RejectionError("Duplicate JSON metadata key")
+        result[key] = value
+    return result
+
+
+def _read_json(path):
+    if Path(path).is_symlink(): raise RejectionError("Metadata source must not be a symlink")
+    def reject(value): raise RejectionError("Non-finite JSON metadata")
+    return json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=_unique_object, parse_constant=reject)
+
+
+def _object(value, model):
+    if not isinstance(value, dict) or set(value) != {f.name for f in fields(model)}:
+        raise RejectionError("Incomplete or unexpected metadata fields")
+    return dict(value)

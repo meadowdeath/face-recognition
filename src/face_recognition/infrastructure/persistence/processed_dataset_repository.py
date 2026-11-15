@@ -1,4 +1,4 @@
-"""Separate derived JSONL representations, atomically published as one fresh run."""
+"""Selected pose-feature JSONL, atomically published as one fresh run."""
 
 from dataclasses import asdict
 import json
@@ -8,9 +8,10 @@ import tempfile
 from typing import TextIO
 
 from face_recognition.config.settings import PROJECT_ROOT
+from face_recognition.infrastructure.features.pose_landmark_normalizer import POSE_NORMALIZATION
 from face_recognition.domain.models.processed_sample import (
-    BASELINE_REPRESENTATION, NORMALIZED_REPRESENTATION, POSE_REPRESENTATION, PROCESSED_SCHEMA_VERSION,
-    BaselineFeatureSample, NormalizedLandmarkSample, ProcessingIssue, ProcessingSummary, SampleProvenance,
+    POSE_REPRESENTATION, PROCESSED_SCHEMA_VERSION,
+    FeatureSample, NormalizedLandmarkSample, ProcessingIssue, ProcessingSummary, SampleProvenance,
 )
 
 
@@ -24,15 +25,8 @@ def _record_metadata(provenance: SampleProvenance, representation: str, landmark
             "landmark_count": landmark_count}
 
 
-def normalized_to_json(sample: NormalizedLandmarkSample) -> str:
-    return json.dumps({
-        **_record_metadata(sample.provenance, NORMALIZED_REPRESENTATION, len(sample.landmarks.points)),
-        "normalized_landmarks": [[point.x, point.y, point.z] for point in sample.landmarks.points],
-    }, allow_nan=False, separators=(",", ":"))
-
-
-def baseline_to_json(sample: BaselineFeatureSample, representation: str = BASELINE_REPRESENTATION) -> str:
-    if representation not in (BASELINE_REPRESENTATION, POSE_REPRESENTATION):
+def features_to_json(sample: FeatureSample, representation: str = POSE_REPRESENTATION) -> str:
+    if representation != POSE_REPRESENTATION:
         raise ProcessedDatasetPersistenceError("Unsupported feature representation")
     return json.dumps({
         **_record_metadata(sample.provenance, representation, sample.landmark_count),
@@ -50,17 +44,11 @@ class FilesystemProcessedDatasetRepository:
     Source files and directory timestamps are never intentionally changed.
     """
 
-    def __init__(self, output_root: Path, source_root: Path, *, feature_representation=BASELINE_REPRESENTATION,
-                 normalized_representation=NORMALIZED_REPRESENTATION, normalization_name="LandmarkNormalizer",
-                 normalization_metadata=None) -> None:
-        if (feature_representation not in (BASELINE_REPRESENTATION, POSE_REPRESENTATION)
-                or normalized_representation not in (None, NORMALIZED_REPRESENTATION)
-                or (feature_representation == POSE_REPRESENTATION and normalized_representation is not None)):
-            raise ProcessedDatasetPersistenceError("Invalid representation output profile")
-        self.feature_representation = feature_representation
-        self.normalized_representation = normalized_representation
-        self.representations = ((normalized_representation,) if normalized_representation else ()) + (feature_representation,)
-        self.normalization_name, self.normalization_metadata = normalization_name, normalization_metadata
+    def __init__(self, output_root: Path, source_root: Path) -> None:
+        self.feature_representation = POSE_REPRESENTATION
+        self.representations = (POSE_REPRESENTATION,)
+        self.normalization_name = "PoseLandmarkNormalizer"
+        self.normalization_metadata = POSE_NORMALIZATION
         if Path(output_root).is_symlink():
             raise ProcessedDatasetPersistenceError("Output root must not be a symlink")
         self.output_root = Path(output_root).resolve()
@@ -133,7 +121,7 @@ class FilesystemProcessedDatasetRepository:
         if failure is not None:
             raise failure
 
-    def write_sample(self, normalized: NormalizedLandmarkSample, baseline: BaselineFeatureSample) -> None:
+    def write_sample(self, normalized: NormalizedLandmarkSample, baseline: FeatureSample) -> None:
         stage = self._require_active()
         provenance = normalized.provenance
         if provenance != baseline.provenance or len(normalized.landmarks.points) != baseline.landmark_count:
@@ -143,8 +131,8 @@ class FilesystemProcessedDatasetRepository:
         expected_index = previous.sample_index + 1 if same_condition else 0
         if provenance.sample_index != expected_index or (previous is not None and provenance.condition_key < previous.condition_key):
             raise ProcessedDatasetPersistenceError("Samples must follow deterministic session/condition/index order")
-        # Encode/validate both representations before writing either record.
-        lines = ((normalized_to_json(normalized),) if self.normalized_representation else ()) + (baseline_to_json(baseline, self.feature_representation),)
+        # Encode/validate the complete feature record before writing it.
+        lines = (features_to_json(baseline, self.feature_representation),)
         if not same_condition:
             self._close_streams()
             opened: list[TextIO] = []

@@ -7,10 +7,10 @@ import unittest
 
 from face_recognition.application.process_dataset import DatasetProcessor, DatasetProcessingError
 from face_recognition.domain.models.processed_sample import (
-    BASELINE_REPRESENTATION, NORMALIZED_REPRESENTATION, REPRESENTATIONS, ProcessingIssue, ProcessingSummary,
+    POSE_REPRESENTATION, REPRESENTATIONS, ProcessingIssue, ProcessingSummary,
 )
 from face_recognition.infrastructure.features.landmark_feature_extractor import LandmarkFeatureExtractor
-from face_recognition.infrastructure.features.landmark_normalizer import LandmarkNormalizer
+from face_recognition.infrastructure.features.pose_landmark_normalizer import PoseLandmarkNormalizer
 from face_recognition.infrastructure.persistence import processed_dataset_repository as persistence
 from face_recognition.infrastructure.persistence.processed_dataset_repository import (
     FilesystemProcessedDatasetRepository, ProcessedDatasetPersistenceError,
@@ -28,7 +28,7 @@ class ProcessedDatasetRepositoryTests(unittest.TestCase):
         self.raw.mkdir()
         write_synthetic_session(self.raw)
         self.output = self.directory / "processed"
-        self.processor = DatasetProcessor(LandmarkNormalizer, LandmarkFeatureExtractor())
+        self.processor = DatasetProcessor(PoseLandmarkNormalizer, LandmarkFeatureExtractor())
 
     def run_processing(self, output: Path | None = None):
         repository = FilesystemProcessedDatasetRepository(output or self.output, self.raw)
@@ -46,32 +46,21 @@ class ProcessedDatasetRepositoryTests(unittest.TestCase):
         return {path.relative_to(directory).as_posix(): path.read_bytes()
                 for path in directory.rglob("*") if path.is_file()}
 
-    def test_representations_are_separate_and_preserve_values_order_and_provenance(self) -> None:
+    def test_pose_features_preserve_values_order_and_provenance(self):
         self.run_processing()
         relative = Path("subject_test/visit_test/center.jsonl")
-        normalized_path = self.output / NORMALIZED_REPRESENTATION / relative
-        features_path = self.output / BASELINE_REPRESENTATION / relative
-        normalized_records = [json.loads(line) for line in normalized_path.read_text(encoding="utf-8").splitlines()]
-        feature_records = [json.loads(line) for line in features_path.read_text(encoding="utf-8").splitlines()]
-        self.assertEqual(len(normalized_records), 2)
-        self.assertEqual(len(feature_records), 2)
-        for index, (normalized_data, feature_data) in enumerate(zip(normalized_records, feature_records)):
-            expected_normalized, expected_features = self.processor.process_sample(synthetic_sample(index=index))
-            expected_points = [[p.x, p.y, p.z] for p in expected_normalized.landmarks.points]
-            self.assertTrue(normalized_data["normalized_landmarks"] == expected_points,
-                            "Normalized output must preserve all coordinates in original index order")
-            self.assertTrue(tuple(feature_data["features"]) == expected_features.features.values,
-                            "Baseline output must preserve extractor values and XYZ order")
-            self.assertNotIn("features", normalized_data)
-            self.assertNotIn("normalized_landmarks", feature_data)
-            self.assertEqual(normalized_data["representation"], NORMALIZED_REPRESENTATION)
-            self.assertEqual(feature_data["representation"], BASELINE_REPRESENTATION)
-            self.assertEqual(feature_data["feature_count"], feature_data["landmark_count"] * 3)
-            for record in (normalized_data, feature_data):
-                self.assertEqual(record["schema_version"], 1)
-                self.assertEqual(record["source_relative_path"], relative.as_posix())
-                for name, value in asdict(expected_normalized.provenance).items():
-                    self.assertEqual(record[name], value)
+        records = [json.loads(line) for line in (self.output / POSE_REPRESENTATION / relative).read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(records), 2)
+        for index, record in enumerate(records):
+            normalized, features = self.processor.process_sample(synthetic_sample(index=index))
+            self.assertEqual(tuple(record["features"]), features.features.values)
+            self.assertNotIn("normalized_landmarks", record)
+            self.assertEqual(record["representation"], POSE_REPRESENTATION)
+            self.assertEqual(record["feature_count"], 1434)
+            self.assertEqual(record["landmark_count"], 478)
+            self.assertEqual(record["schema_version"], 1)
+            self.assertEqual(record["source_relative_path"], relative.as_posix())
+            for name, value in asdict(normalized.provenance).items(): self.assertEqual(record[name], value)
 
     def test_processing_manifests_have_correct_counts_and_completed_state(self) -> None:
         write_synthetic_session(self.raw, "another_test", "visit_a")
@@ -81,7 +70,7 @@ class ProcessedDatasetRepositoryTests(unittest.TestCase):
         root = json.loads((self.output / "processing_manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(root["completion_state"], "completed")
         self.assertEqual(root["representations"], list(REPRESENTATIONS))
-        self.assertEqual(root["total_condition_files"], 12)
+        self.assertEqual(root["total_condition_files"], 6)
         for representation in REPRESENTATIONS:
             directory = self.output / representation
             data = json.loads((directory / "processing_manifest.json").read_text(encoding="utf-8"))

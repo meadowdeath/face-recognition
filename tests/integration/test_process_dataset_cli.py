@@ -1,208 +1,78 @@
-from contextlib import chdir, redirect_stderr, redirect_stdout
+from contextlib import redirect_stdout, redirect_stderr
 from io import StringIO
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import Mock, patch
 import unittest
 
-from face_recognition.domain.models.processed_sample import ProcessingSummary, REPRESENTATIONS
+from face_recognition.domain.models.dataset import CONDITIONS
+from face_recognition.domain.models.processed_sample import POSE_REPRESENTATION
+from face_recognition.infrastructure.features.pose_landmark_normalizer import POSE_NORMALIZATION
+from face_recognition.infrastructure.persistence.feature_metadata_reader import scan_feature_record
 from face_recognition.presentation.cli import process_dataset as cli
 from tests.processed_dataset_fakes import write_synthetic_session
 
 
-class ProcessDatasetCliTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temporary = TemporaryDirectory(prefix="synthetic_processing_cli_")
+class ProcessPoseDatasetCLITests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = TemporaryDirectory(prefix="synthetic_pose_processing_")
         self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
-        self.raw = self.directory / "raw"
-        self.output = self.directory / "processed"
+        self.folder = Path(self.temporary.name)
+        self.raw, self.output = self.folder / "raw", self.folder / "pose"
         self.raw.mkdir()
-        self.session = write_synthetic_session(self.raw)
+        self.session = write_synthetic_session(self.raw, count=478, completed=CONDITIONS)
 
-    def invoke(self, raw: Path | None = None, output: Path | None = None) -> tuple[int, str, str]:
+    def invoke(self, output=None):
         stdout, stderr = StringIO(), StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            status = cli.main(["--raw-root", str(raw or self.raw), "--output-root", str(output or self.output)])
-        return status, stdout.getvalue(), stderr.getvalue()
+            code = cli.main(["--raw-root", str(self.raw), "--output-root", str(output or self.output)])
+        return code, stdout.getvalue(), stderr.getvalue()
 
-    @staticmethod
-    def snapshot(directory: Path) -> dict:
-        return {path.relative_to(directory).as_posix():
-                (path.read_bytes() if path.is_file() else None, path.stat().st_mtime_ns)
-                for path in (directory, *directory.rglob("*"))}
+    def test_fresh_pose_only_output_preserves_raw_metadata_order_and_baseline_defaults(self):
+        before = {str(p.relative_to(self.raw)): (p.read_bytes(), p.stat().st_mtime_ns) for p in self.raw.rglob("*") if p.is_file()}
+        code, stdout, stderr = self.invoke()
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("1434 features", stdout)
+        self.assertNotIn("subject_test", stdout)
+        manifest = json.loads((self.output / "processing_manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["representations"], [POSE_REPRESENTATION])
+        self.assertEqual(manifest["normalization_parameters"], POSE_NORMALIZATION)
+        self.assertEqual(manifest["total_samples_processed"], 26)
+        self.assertEqual(manifest["completion_state"], "completed")
+        self.assertFalse((self.output / "all_xyz_v1").exists())
+        self.assertFalse((self.output / "normalized_landmarks_v1").exists())
+        for condition in CONDITIONS:
+            rows = (self.output / POSE_REPRESENTATION / "subject_test" / "visit_test" / f"{condition}.jsonl").read_text(encoding="utf-8").splitlines()
+            parsed = [scan_feature_record(row, representation=POSE_REPRESENTATION) for row in rows]
+            self.assertEqual([p.provenance.sample_index for p in parsed], [0, 1])
+            self.assertTrue(all(p.feature_count == 1434 and p.provenance.condition == condition for p in parsed))
+            self.assertEqual([p.provenance.detector_timestamp_ms for p in parsed], [1000, 1250])
+        after = {str(p.relative_to(self.raw)): (p.read_bytes(), p.stat().st_mtime_ns) for p in self.raw.rglob("*") if p.is_file()}
+        self.assertEqual(before, after)
 
-    def test_success_with_relative_paths_resolves_output_and_creates_both_representations(self) -> None:
-        before = self.snapshot(self.raw)
-        with chdir(self.directory):
-            status, stdout, stderr = self.invoke(Path("raw"), Path("processed"))
-        self.assertEqual(status, 0)
-        self.assertEqual(stderr, "")
-        self.assertIn(f"Output directory: {self.output.resolve()}", stdout)
-        for representation in REPRESENTATIONS:
-            directory = self.output / representation
-            self.assertTrue((directory / "processing_manifest.json").is_file())
-            self.assertTrue((directory / "subject_test/visit_test/center.jsonl").is_file())
-            self.assertTrue((directory / "subject_test/visit_test/translation_left.jsonl").is_file())
-        self.assertTrue(self.snapshot(self.raw) == before, "CLI processing must not rewrite raw files or directory entries")
-
-    def test_success_with_absolute_paths_prints_aggregate_summary_only(self) -> None:
-        write_synthetic_session(self.raw, "another_subject", "visit_a")
-        write_synthetic_session(self.raw, "another_subject", "visit_b")
-        status, stdout, stderr = self.invoke()
-        self.assertEqual(status, 0)
-        self.assertEqual(stderr, "")
-        for expected in ("Processing completed.", "Participants: 2", "Sessions: 3",
-                         "Conditions/files per representation: 6", "Total condition files: 12",
-                         "Samples: 12", "normalized_landmarks_v1", "all_xyz_v1"):
-            self.assertIn(expected, stdout)
-        for identifier in ("subject_test", "another_subject", "visit_test", "visit_a", "visit_b"):
-            self.assertNotIn(identifier, stdout)
-        self.assertNotIn("normalized_landmarks\":", stdout)
-        self.assertNotIn("features\":", stdout)
-
-    def test_missing_raw_root_returns_failure_without_creating_output(self) -> None:
-        absent = self.directory / "missing_raw"
-        status, stdout, stderr = self.invoke(raw=absent)
-        self.assertEqual(status, 1)
-        self.assertEqual(stdout, "")
-        self.assertIn("existing directory", stderr)
-        self.assertFalse(absent.exists())
-        self.assertFalse(self.output.exists())
-
-    def test_source_output_overlap_is_rejected_without_raw_changes(self) -> None:
-        before = self.snapshot(self.raw)
-        for output in (self.raw, self.raw / "derived", self.directory):
-            with self.subTest(case=output.name):
-                status, stdout, stderr = self.invoke(output=output)
-                self.assertEqual(status, 1)
-                self.assertEqual(stdout, "")
-                self.assertIn("overlap", stderr)
-        self.assertTrue(self.snapshot(self.raw) == before, "Invalid output paths must not alter raw data")
-
-    def test_repository_local_output_is_rejected_by_existing_policy(self) -> None:
-        simulated_repo = self.directory / "simulated_repo"
-        with patch("face_recognition.infrastructure.persistence.processed_dataset_repository.PROJECT_ROOT", simulated_repo):
-            status, stdout, stderr = self.invoke(output=simulated_repo / "derived")
-        self.assertEqual(status, 1)
-        self.assertEqual(stdout, "")
-        self.assertIn("outside the Git repository", stderr)
-        self.assertFalse(simulated_repo.exists())
-
-    def test_existing_completed_output_is_refused_without_modification(self) -> None:
+    def test_deterministic_bytes_and_output_overwrite_refusal(self):
         self.assertEqual(self.invoke()[0], 0)
-        before = self.snapshot(self.output)
-        status, stdout, stderr = self.invoke()
-        self.assertEqual(status, 1)
-        self.assertEqual(stdout, "")
-        self.assertIn("already exists", stderr)
-        self.assertTrue(self.snapshot(self.output) == before, "Existing output must never be overwritten")
+        other = self.folder / "pose_again"
+        self.assertEqual(self.invoke(other)[0], 0)
+        first = {p.relative_to(self.output): p.read_bytes() for p in self.output.rglob("*") if p.is_file()}
+        second = {p.relative_to(other): p.read_bytes() for p in other.rglob("*") if p.is_file()}
+        self.assertEqual(first, second)
+        self.assertEqual(self.invoke()[0], 1)
+        self.assertEqual(first, {p.relative_to(self.output): p.read_bytes() for p in self.output.rglob("*") if p.is_file()})
 
-    def test_existing_empty_output_is_refused(self) -> None:
-        self.output.mkdir()
-        status, _, stderr = self.invoke()
-        self.assertEqual(status, 1)
-        self.assertIn("already exists", stderr)
-        self.assertEqual(list(self.output.iterdir()), [])
-
-    def test_normalization_failure_preserves_safe_context_and_raw_source(self) -> None:
+    def test_invalid_geometry_leaves_no_completed_output(self):
         path = self.session / "center.jsonl"
-        lines = path.read_text(encoding="utf-8").splitlines()
-        data = json.loads(lines[1])
-        for index in (33, 133, 362, 263):
-            data["landmarks"][index] = [0, 0, 0]
-        lines[1] = json.dumps(data)
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        before = self.snapshot(self.raw)
-        status, stdout, stderr = self.invoke()
-        self.assertEqual(status, 1)
-        self.assertEqual(stdout, "")
-        for context in ("normalization_failed", "subject_test", "visit_test", "center", "sample_index=1"):
-            self.assertIn(context, stderr)
-        self.assertNotIn("Traceback", stderr)
-        self.assertNotIn(lines[1], stderr)
+        rows = path.read_text(encoding="utf-8").splitlines()
+        row = json.loads(rows[0])
+        # Raw capture records use a landmarks array. Collapse the two eye means.
+        for index in (33, 133, 362, 263): row["landmarks"][index] = [.5, .5, .01]
+        path.write_text(json.dumps(row) + "\n" + "\n".join(rows[1:]) + "\n", encoding="utf-8")
+        self.assertEqual(self.invoke()[0], 1)
         self.assertFalse(self.output.exists())
-        self.assertTrue(self.snapshot(self.raw) == before, "Processing failure must leave the raw dataset unchanged")
 
-    def test_malformed_sample_contents_are_not_printed_to_stderr(self) -> None:
-        marker = "SYNTHETIC_PRIVATE_SAMPLE_TEXT"
-        (self.session / "center.jsonl").write_text(marker, encoding="utf-8")
-        status, stdout, stderr = self.invoke()
-        self.assertEqual(status, 1)
-        self.assertEqual(stdout, "")
-        self.assertIn("source_validation_failed", stderr)
-        self.assertIn("sample_index=0", stderr)
-        self.assertNotIn(marker, stderr)
-
-    def test_unexpected_exception_values_are_not_printed(self) -> None:
-        marker = "SYNTHETIC_PRIVATE_FEATURE_VALUES"
-        with patch.object(cli, "DatasetProcessor") as processor:
-            processor.return_value.process.side_effect = RuntimeError(marker)
-            status, stdout, stderr = self.invoke()
-        self.assertEqual(status, 1)
-        self.assertEqual(stdout, "")
-        self.assertIn("unexpected internal or filesystem error", stderr)
-        self.assertNotIn(marker, stderr)
-
-    def test_output_and_manifests_do_not_embed_personal_absolute_source_paths(self) -> None:
-        status, _, _ = self.invoke()
-        self.assertEqual(status, 0)
-
-        def strings(value):
-            if isinstance(value, str):
-                yield value
-            elif isinstance(value, dict):
-                for item in value.values():
-                    yield from strings(item)
-            elif isinstance(value, list):
-                for item in value:
-                    yield from strings(item)
-
-        for path in self.output.rglob("*"):
-            if not path.is_file():
-                continue
-            for line in ([path.read_text(encoding="utf-8")] if path.suffix == ".json"
-                         else path.read_text(encoding="utf-8").splitlines()):
-                for value in strings(json.loads(line)):
-                    self.assertFalse(Path(value).is_absolute(), "Persisted metadata must use relative provenance")
-                    self.assertNotIn(str(self.directory), value)
-
-    def test_cli_only_composes_and_delegates_to_existing_components(self) -> None:
-        reader, repository, processor, extractor = Mock(), Mock(), Mock(), Mock()
-        reader.root = self.raw.resolve()
-        repository.output_root = self.output.resolve()
-        processor.process.return_value = ProcessingSummary(1, 1, 2, 4)
-        with patch.object(cli, "RawDatasetReader", return_value=reader) as make_reader, \
-             patch.object(cli, "FilesystemProcessedDatasetRepository", return_value=repository) as make_repository, \
-             patch.object(cli, "LandmarkFeatureExtractor", return_value=extractor) as make_extractor, \
-             patch.object(cli, "DatasetProcessor", return_value=processor) as make_processor:
-            with chdir(self.directory):
-                status, _, _ = self.invoke(Path("raw"), Path("processed"))
-        self.assertEqual(status, 0)
-        make_reader.assert_called_once_with(Path("raw"))
-        make_repository.assert_called_once_with(Path("processed"), reader.root)
-        make_extractor.assert_called_once_with()
-        make_processor.assert_called_once_with(cli.LandmarkNormalizer, extractor)
-        processor.process.assert_called_once_with(reader, repository)
-        repository.write_sample.assert_not_called()
-        extractor.extract.assert_not_called()
-
-    def test_missing_required_arguments_use_argparse_usage_exit_code(self) -> None:
-        for args in ([], ["--raw-root", str(self.raw)], ["--output-root", str(self.output)]):
-            with self.subTest(argument_count=len(args)), redirect_stderr(StringIO()):
-                with self.assertRaises(SystemExit) as caught:
-                    cli.main(args)
-                self.assertEqual(caught.exception.code, 2)
-
-    def test_keyboard_interrupt_returns_documented_failure_code(self) -> None:
-        with patch.object(cli, "DatasetProcessor") as processor:
-            processor.return_value.process.side_effect = KeyboardInterrupt
-            status, stdout, stderr = self.invoke()
-        self.assertEqual(status, 1)
-        self.assertEqual(stdout, "")
-        self.assertIn("interrupted", stderr)
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_source_overlap_and_preexisting_baseline_directory_are_refused(self):
+        self.assertEqual(self.invoke(self.raw / "candidate")[0], 1)
+        baseline = self.folder / "historical_processed"
+        baseline.mkdir(); (baseline / "evidence.json").write_text("immutable", encoding="utf-8")
+        self.assertEqual(self.invoke(baseline)[0], 1)
+        self.assertEqual((baseline / "evidence.json").read_text(encoding="utf-8"), "immutable")

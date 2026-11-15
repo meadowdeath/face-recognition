@@ -8,20 +8,20 @@ import unittest
 from face_recognition.application.process_dataset import DatasetProcessor, DatasetProcessingError
 from face_recognition.domain.models.face_landmarks import FaceLandmarks, Landmark
 from face_recognition.infrastructure.features.landmark_feature_extractor import LandmarkFeatureExtractor
-from face_recognition.infrastructure.features.landmark_normalizer import LandmarkNormalizer
+from face_recognition.infrastructure.features.pose_landmark_normalizer import PoseLandmarkNormalizer
 from face_recognition.infrastructure.persistence.raw_dataset_reader import RawDatasetReader
 from tests.processed_dataset_fakes import MemoryProcessedRepository, synthetic_sample, write_synthetic_session
 
 
 class DatasetProcessorTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.processor = DatasetProcessor(LandmarkNormalizer, LandmarkFeatureExtractor())
+        self.processor = DatasetProcessor(PoseLandmarkNormalizer, LandmarkFeatureExtractor())
 
     def test_single_sample_reuses_normalizer_extractor_and_preserves_provenance(self) -> None:
         sample = synthetic_sample()
         original = sample.landmarks.points
         normalized, baseline = self.processor.process_sample(sample)
-        expected = LandmarkNormalizer(sample.inference_width, sample.inference_height).normalize(sample.landmarks)
+        expected = PoseLandmarkNormalizer(sample.inference_width, sample.inference_height).normalize(sample.landmarks)
         expected_features = LandmarkFeatureExtractor().extract(expected)
         self.assertTrue(normalized.landmarks == expected, "Normalization must exactly reuse the existing algorithm")
         self.assertTrue(baseline.features == expected_features, "Feature flattening must exactly reuse the existing extractor")
@@ -33,17 +33,17 @@ class DatasetProcessorTests(unittest.TestCase):
         self.assertIs(sample.landmarks.points, original)
 
     def test_each_sample_uses_its_own_dimensions(self) -> None:
-        factory = Mock(side_effect=LandmarkNormalizer)
+        factory = Mock(side_effect=PoseLandmarkNormalizer)
         processor = DatasetProcessor(factory, LandmarkFeatureExtractor())
         for width, height in ((480, 270), (270, 480), (640, 480)):
             sample = synthetic_sample(width=width, height=height)
             actual, _ = processor.process_sample(sample)
-            expected = LandmarkNormalizer(width, height).normalize(sample.landmarks)
+            expected = PoseLandmarkNormalizer(width, height).normalize(sample.landmarks)
             self.assertTrue(actual.landmarks == expected, "Use source dimensions, not current camera settings")
         self.assertEqual([call.args for call in factory.call_args_list], [(480, 270), (270, 480), (640, 480)])
 
     def test_counts_and_coordinate_order_are_preserved_for_arbitrary_counts(self) -> None:
-        for count in (363, 400, 478, 500):
+        for count in (478,):
             with self.subTest(count=count):
                 normalized, baseline = self.processor.process_sample(synthetic_sample(count=count))
                 self.assertEqual(len(normalized.landmarks.points), count)
@@ -83,7 +83,7 @@ class DatasetProcessorTests(unittest.TestCase):
         extractor = Mock()
         extractor.extract.side_effect = ValueError(marker)
         with self.assertRaises(DatasetProcessingError) as caught:
-            DatasetProcessor(LandmarkNormalizer, extractor).process_sample(synthetic_sample())
+            DatasetProcessor(PoseLandmarkNormalizer, extractor).process_sample(synthetic_sample())
         self.assertEqual(caught.exception.issue.category, "feature_extraction_failed")
         self.assertNotIn(marker, str(caught.exception))
 
@@ -94,7 +94,7 @@ class DatasetProcessorReaderTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name) / "raw"
         self.root.mkdir()
-        self.processor = DatasetProcessor(LandmarkNormalizer, LandmarkFeatureExtractor())
+        self.processor = DatasetProcessor(PoseLandmarkNormalizer, LandmarkFeatureExtractor())
 
     def test_reader_integration_is_deterministic_with_correct_counts(self) -> None:
         for person, session in (("zeta_test", "visit_b"), ("alpha_test", "visit_z"), ("alpha_test", "visit_a")):

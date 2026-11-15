@@ -6,7 +6,7 @@ from typing import Protocol, TypeVar
 
 from face_recognition.domain.models.dataset import RawLandmarkSample, SessionManifest
 from face_recognition.domain.models.processed_sample import (
-    BaselineFeatureSample, NormalizedLandmarkSample, ProcessingIssue, ProcessingSummary,
+    FeatureSample, NormalizedLandmarkSample, ProcessingIssue, ProcessingSummary,
 )
 
 
@@ -30,7 +30,7 @@ class RawDatasetSource(Protocol[SessionT]):
 class ProcessedDatasetRepository(Protocol):
     def begin(self, source_root: Path) -> None: ...
 
-    def write_sample(self, normalized: NormalizedLandmarkSample, baseline: BaselineFeatureSample) -> None: ...
+    def write_sample(self, normalized: NormalizedLandmarkSample, baseline: FeatureSample) -> None: ...
 
     def complete(self, summary: ProcessingSummary) -> None: ...
 

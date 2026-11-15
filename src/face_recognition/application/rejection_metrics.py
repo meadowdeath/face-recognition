@@ -10,23 +10,6 @@ from face_recognition.domain.models.rejection import RejectionError
 from face_recognition.domain.models.rejection import RejectionMetrics, ThresholdCalibration
 
 
-def validated_decision_scores(scores: np.ndarray) -> np.ndarray:
-    scores = np.asarray(scores, dtype=np.float64)
-    if scores.ndim != 2 or not len(scores) or scores.shape[1] < 2 or not np.isfinite(scores).all():
-        raise RejectionError("Decision scores must be finite with at least two class columns")
-    return scores
-
-
-def decision_margin(scores: np.ndarray) -> np.ndarray:
-    scores = validated_decision_scores(scores)
-    top = np.partition(scores, -2, axis=1)[:, -2:]
-    with np.errstate(over="ignore"):
-        margin = top[:, 1] - top[:, 0]
-    if not np.isfinite(margin).all():
-        raise RejectionError("Decision margins must be finite")
-    return margin
-
-
 def _samples(known: np.ndarray, correct: np.ndarray, unknown: np.ndarray, *, allow_negative: bool = False):
     known, unknown, correct = np.asarray(known), np.asarray(unknown), np.asarray(correct)
     if (known.ndim != 1 or unknown.ndim != 1 or not len(known) or not len(unknown)

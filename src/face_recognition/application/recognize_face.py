@@ -1,4 +1,4 @@
-"""Current frame orchestration. Identity recognition is future work."""
+"""Shared asynchronous landmark-preview frame orchestration."""
 
 from dataclasses import dataclass
 

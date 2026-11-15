@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from face_recognition.application.live_open_set_recognition import LiveRecognitionMetrics, LiveTemporalRecognition
+from face_recognition.application.live_recognition import LiveRecognitionMetrics, LiveTemporalRecognition
 from face_recognition.application.performance import PerformanceTracker
 from face_recognition.domain.models.face_landmarks import FaceLandmarks, Landmark
 from face_recognition.domain.models.landmark_result import DetectorSnapshot

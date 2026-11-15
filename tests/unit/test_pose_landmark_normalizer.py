@@ -6,9 +6,8 @@ import unittest
 import numpy as np
 
 from face_recognition.infrastructure.features.landmark_feature_extractor import LandmarkFeatureExtractor
-from face_recognition.infrastructure.features.landmark_normalizer import LandmarkNormalizer
 from face_recognition.infrastructure.features import pose_landmark_normalizer as geometry
-from tests.pose_representation_fakes import encoded_face, face_geometry, rotation
+from tests.pose_geometry import encoded_face, face_geometry, rotation
 
 
 class PoseLandmarkNormalizerTests(unittest.TestCase):
@@ -51,28 +50,13 @@ class PoseLandmarkNormalizerTests(unittest.TestCase):
         for angle in (-.7, .7):
             with self.subTest(angle=angle): self.assert_robust(self.points @ rotation("z", angle).T)
 
-    def compare_pose_with_baseline(self, axis, angle):
-        baseline = LandmarkNormalizer(640, 360)
-        changed = self.points @ rotation(axis, angle).T
-        before = self.array(baseline.normalize(self.face))
-        after = self.array(baseline.normalize(encoded_face(changed)))
-        baseline_shift = np.linalg.norm(after - before)
-        candidate_shift = np.linalg.norm(self.canonical(changed) - self.expected)
-        self.assertGreater(baseline_shift, .01)
-        self.assertLess(candidate_shift, baseline_shift * .01)
-        self.assert_robust(changed)
+    def test_yaw_left_and_right_robustness(self):
+        for angle in (-.5, .5):
+            with self.subTest(angle=angle): self.assert_robust(self.points @ rotation("y", angle).T)
 
-    def test_yaw_left_has_smaller_displacement_than_baseline(self):
-        self.compare_pose_with_baseline("y", -.5)
-
-    def test_yaw_right_has_smaller_displacement_than_baseline(self):
-        self.compare_pose_with_baseline("y", .5)
-
-    def test_pitch_up_has_smaller_displacement_than_baseline(self):
-        self.compare_pose_with_baseline("x", -.4)
-
-    def test_pitch_down_has_smaller_displacement_than_baseline(self):
-        self.compare_pose_with_baseline("x", .4)
+    def test_pitch_up_and_pitch_down_robustness(self):
+        for angle in (-.4, .4):
+            with self.subTest(angle=angle): self.assert_robust(self.points @ rotation("x", angle).T)
 
     def test_combined_rigid_transform_and_aspect_ratios(self):
         matrix = rotation("z", .3) @ rotation("y", -.5) @ rotation("x", .2)
@@ -124,11 +108,3 @@ class PoseLandmarkNormalizerTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.normalizer.normalize(encoded_face(self.points[:-1]))
         for width, height in ((0, 360), (640, -1), (True, 360), (640., 360)):
             with self.assertRaises(ValueError): geometry.PoseLandmarkNormalizer(width, height)
-
-    def test_baseline_still_has_2d_interocular_scale_and_unrotated_depth(self):
-        # Explicit old equations on this unrolled face. Baseline source is not
-        # modified and retains projected 2D scale, unlike the pose candidate.
-        baseline = self.array(LandmarkNormalizer(640, 360).normalize(self.face))
-        origin = (self.points[[33, 133]].mean(axis=0) + self.points[[362, 263]].mean(axis=0)) / 2
-        scale = np.linalg.norm((self.points[[362, 263]].mean(axis=0) - self.points[[33, 133]].mean(axis=0))[:2])
-        np.testing.assert_allclose(baseline, (self.points - origin) / scale, atol=1e-12)

@@ -1,14 +1,13 @@
-"""Offline normalization and baseline orchestration; no JSON, paths or vendor APIs."""
+"""Offline pose normalization and feature processing; no JSON, paths or vendor APIs."""
 
 from collections.abc import Callable
 from dataclasses import replace
 
-from face_recognition.application.normalization_experiment import LandmarkNormalization
 from face_recognition.domain.interfaces.dataset_processing import ProcessedDatasetRepository, RawDatasetSource, SessionT
 from face_recognition.domain.interfaces.feature_extractor import FeatureExtractor
 from face_recognition.domain.models.dataset import RawLandmarkSample, validate_raw_landmarks
 from face_recognition.domain.models.processed_sample import (
-    BaselineFeatureSample, NormalizedLandmarkSample, ProcessingIssue, ProcessingSummary, SampleProvenance,
+    FeatureSample, NormalizedLandmarkSample, ProcessingIssue, ProcessingSummary, SampleProvenance,
 )
 
 
@@ -22,12 +21,12 @@ class DatasetProcessingError(ValueError):
 
 
 class DatasetProcessor:
-    def __init__(self, normalizer_factory: Callable[[int, int], LandmarkNormalization],
+    def __init__(self, normalizer_factory: Callable[[int, int], object],
                  feature_extractor: FeatureExtractor) -> None:
         self.normalizer_factory = normalizer_factory
         self.feature_extractor = feature_extractor
 
-    def process_sample(self, sample: RawLandmarkSample) -> tuple[NormalizedLandmarkSample, BaselineFeatureSample]:
+    def process_sample(self, sample: RawLandmarkSample) -> tuple[NormalizedLandmarkSample, FeatureSample]:
         context = dict(person_id=sample.person_id, session_id=sample.session_id,
                        condition=sample.condition, sample_index=sample.sample_index)
         try:
@@ -44,7 +43,7 @@ class DatasetProcessor:
         except Exception:
             raise DatasetProcessingError(ProcessingIssue("normalization_failed", **context)) from None
         try:
-            baseline = BaselineFeatureSample(provenance, self.feature_extractor.extract(landmarks), len(landmarks.points))
+            baseline = FeatureSample(provenance, self.feature_extractor.extract(landmarks), len(landmarks.points))
         except Exception:
             raise DatasetProcessingError(ProcessingIssue("feature_extraction_failed", **context)) from None
         return normalized, baseline

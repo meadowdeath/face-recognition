@@ -8,12 +8,11 @@ from face_recognition.domain.models.face_features import FaceFeatures
 from face_recognition.domain.models.face_landmarks import FaceLandmarks
 
 PROCESSED_SCHEMA_VERSION = 1
-NORMALIZED_REPRESENTATION = "normalized_landmarks_v1"
 BASELINE_REPRESENTATION = "all_xyz_v1"
 POSE_REPRESENTATION = "all_xyz_pose_v2"
-REPRESENTATIONS = (NORMALIZED_REPRESENTATION, BASELINE_REPRESENTATION)
-# The historical processing command continues to emit REPRESENTATIONS only.
-SUPPORTED_REPRESENTATIONS = (*REPRESENTATIONS, POSE_REPRESENTATION)
+REPRESENTATIONS = (POSE_REPRESENTATION,)
+# The baseline identifier is retained only for frozen population provenance.
+SUPPORTED_REPRESENTATIONS = (POSE_REPRESENTATION,)
 
 
 @dataclass(frozen=True)
@@ -62,7 +61,7 @@ class NormalizedLandmarkSample:
 
 
 @dataclass(frozen=True)
-class BaselineFeatureSample:
+class FeatureSample:
     provenance: SampleProvenance
     features: FaceFeatures
     landmark_count: int
@@ -80,7 +79,7 @@ class BaselineFeatureSample:
 class ProcessingSummary:
     """Counts of written provenance groups; conditions are session/condition files.
 
-    total_samples_processed counts successful representation pairs. File-level
+    total_samples_processed counts successfully processed source samples. File-level
     failures increment error_count; rejected_samples counts a known failing
     record (including a decoder's expected line index), never guessed records.
     """
@@ -109,3 +108,15 @@ class ProcessingIssue:
         return (f"{self.category}: person_id={self.person_id or 'unknown'}, "
                 f"session_id={self.session_id or 'unknown'}, condition={self.condition or 'unknown'}, "
                 f"sample_index={self.sample_index if self.sample_index is not None else 'unknown'}")
+
+
+@dataclass(frozen=True)
+class FeatureSampleMetadata:
+    provenance: SampleProvenance
+    landmark_count: int
+    feature_count: int
+
+    def __post_init__(self) -> None:
+        if (type(self.landmark_count) is not int or self.landmark_count < 1
+                or type(self.feature_count) is not int or self.feature_count != 3 * self.landmark_count):
+            raise ValueError("Invalid feature dimensions")

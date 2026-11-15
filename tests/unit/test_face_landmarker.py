@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from threading import Event, Thread
 import unittest
+import cv2
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -51,11 +52,11 @@ class FaceLandmarkerTests(unittest.TestCase):
     def test_accepted_bgr_frame_performs_one_conversion(self) -> None:
         pixels = np.full((4, 4, 3), (10, 20, 30), dtype=np.uint8)
         frame = Frame(pixels, 4, 4, PixelFormat.BGR)
-        with patch.object(module.cv2, "cvtColor", wraps=module.cv2.cvtColor) as convert:
+        with patch.object(cv2, "cvtColor", wraps=cv2.cvtColor) as convert:
             self.adapter.submit(frame)
         convert.assert_called_once()
         self.assertIs(convert.call_args.args[0], pixels)
-        self.assertEqual(convert.call_args.args[1], module.cv2.COLOR_BGR2RGB)
+        self.assertEqual(convert.call_args.args[1], cv2.COLOR_BGR2RGB)
         image = self.native.detect_async.call_args.args[0]
         np.testing.assert_array_equal(image.numpy_view(), pixels[:, :, ::-1])
 
@@ -64,8 +65,8 @@ class FaceLandmarkerTests(unittest.TestCase):
         # Distinct colors at both edges catch bad U/V plane or padding cropping.
         source = np.full((height, width, 3), (200, 20, 10), dtype=np.uint8)
         source[:, :width // 2] = (10, 200, 30)
-        packed = module.cv2.cvtColor(source, module.cv2.COLOR_RGB2YUV_I420)
-        expected = module.cv2.cvtColor(packed, module.cv2.COLOR_YUV2RGB_I420)
+        packed = cv2.cvtColor(source, cv2.COLOR_RGB2YUV_I420)
+        expected = cv2.cvtColor(packed, cv2.COLOR_YUV2RGB_I420)
         flat = packed.reshape(-1)
         luma_end = width * height
         chroma_size = luma_end // 4
@@ -79,12 +80,12 @@ class FaceLandmarkerTests(unittest.TestCase):
             padded[start:start + height * stride // 4].reshape(height // 2, stride // 2)[:, :width // 2] = plane.reshape(height // 2, width // 2)
         frame = Frame(yuv, width, height, PixelFormat.YUV420_I420)
         self.adapter._inference_size = (width, height)
-        with patch.object(module.cv2, "cvtColor", wraps=module.cv2.cvtColor) as convert, \
-             patch.object(module.cv2, "resize") as resize:
+        with patch.object(cv2, "cvtColor", wraps=cv2.cvtColor) as convert, \
+             patch.object(cv2, "resize") as resize:
             self.adapter.submit(frame)
         convert.assert_called_once()
         self.assertIs(convert.call_args.args[0], yuv)
-        self.assertEqual(convert.call_args.args[1], module.cv2.COLOR_YUV2RGB_I420)
+        self.assertEqual(convert.call_args.args[1], cv2.COLOR_YUV2RGB_I420)
         resize.assert_not_called()
         image = self.native.detect_async.call_args.args[0]
         self.assertEqual(image.numpy_view().shape, (270, 480, 3))
@@ -96,8 +97,8 @@ class FaceLandmarkerTests(unittest.TestCase):
         # Opaque data would fail preprocessing if the gate did not return first.
         frames = (Frame(object(), 848, 480, PixelFormat.BGR),
                   Frame(object(), 480, 270, PixelFormat.YUV420_I420))
-        with patch.object(module.cv2, "cvtColor") as convert, \
-             patch.object(module.cv2, "resize") as resize, \
+        with patch.object(cv2, "cvtColor") as convert, \
+             patch.object(cv2, "resize") as resize, \
              patch.object(module.mp, "Image") as image:
             for frame in frames:
                 self.adapter.submit(frame)
@@ -170,7 +171,7 @@ class FaceLandmarkerTests(unittest.TestCase):
         adapter = module.MediaPipeFaceLandmarker(self.model, 1, 0.5, 0.5, inference_size=(480, 270))
         try:
             frame = np.zeros((480, 848, 3), dtype=np.uint8)
-            with patch.object(module.cv2, "resize", wraps=module.cv2.resize) as resize:
+            with patch.object(cv2, "resize", wraps=cv2.resize) as resize:
                 adapter.submit(frame)
                 image = self.native.detect_async.call_args.args[0]
                 self.assertEqual(image.numpy_view().shape, (270, 480, 3))
@@ -178,7 +179,7 @@ class FaceLandmarkerTests(unittest.TestCase):
                 self.assertEqual(frame.shape, (480, 848, 3))
             timestamp = self.native.detect_async.call_args.args[1]
             adapter._on_result(SimpleNamespace(face_landmarks=[]), None, timestamp)
-            with patch.object(module.cv2, "resize") as resize:
+            with patch.object(cv2, "resize") as resize:
                 adapter.submit(np.zeros((270, 480, 3), dtype=np.uint8))
                 resize.assert_not_called()
         finally:
@@ -207,8 +208,8 @@ class FaceLandmarkerTests(unittest.TestCase):
         self.adapter._inference_size = (2, 2)
         with patch.object(module, "monotonic_ns", return_value=100_000_000):
             self.adapter.submit(self.frame)
-        with patch.object(module.cv2, "resize") as resize, \
-             patch.object(module.cv2, "cvtColor") as convert, \
+        with patch.object(cv2, "resize") as resize, \
+             patch.object(cv2, "cvtColor") as convert, \
              patch.object(module.mp, "Image") as image:
             for _ in range(3):
                 self.adapter.submit(object())  # Even shape must not be accessed.
@@ -228,7 +229,7 @@ class FaceLandmarkerTests(unittest.TestCase):
 
     def test_each_preprocessing_exception_releases_slot(self) -> None:
         self.adapter._inference_size = (2, 2)
-        for target in ((module.cv2, "resize"), (module.cv2, "cvtColor"), (module.mp, "Image")):
+        for target in ((cv2, "resize"), (cv2, "cvtColor"), (module.mp, "Image")):
             with self.subTest(operation=target[1]):
                 before = self.adapter.snapshot().submitted_frames
                 with patch.object(*target, side_effect=RuntimeError("preprocessing failed")):
