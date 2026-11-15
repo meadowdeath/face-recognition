@@ -8,9 +8,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 AVAILABLE = importlib.util.find_spec("PyQt5") is not None
 if AVAILABLE:
     from PyQt5.QtCore import Qt, QTimer
-    from PyQt5.QtTest import QTest
+    from PyQt5.QtTest import QSignalSpy, QTest
     from PyQt5.QtWidgets import QApplication, QPushButton
-    from face_recognition.presentation.gui.window import KioskWindow, DEMO_PIN, ATTENDANCE_STATES
+    from face_recognition.presentation.gui.window import KioskWindow, LifecycleState, DEMO_PIN, ATTENDANCE_STATES
 
 
 @unittest.skipUnless(AVAILABLE, "Optional PyQt5 GUI dependency is not installed")
@@ -47,9 +47,13 @@ class KioskGuiTests(unittest.TestCase):
 
     def test_startup_standby_click_and_sidebar_navigation(self):
         self.assertEqual(self.current(), "standby")
+        self.assertIs(self.window.lifecycle_state, LifecycleState.STANDBY)
+        self.assertFalse(self.window.inactivity_timer.isActive())
         self.assertEqual(self.window.stack.count(), 9)
         QTest.mouseClick(self.window.screens["standby"], Qt.LeftButton)
         self.assertEqual(self.current(), "attendance")
+        self.assertIs(self.window.lifecycle_state, LifecycleState.ATTENDANCE)
+        self.assertTrue(self.window.inactivity_timer.isActive())
         self.window.admin_nav.click()
         self.assertEqual(self.current(), "pin")
         self.click("Cancelar")
@@ -117,6 +121,7 @@ class KioskGuiTests(unittest.TestCase):
             self.click("Salir de la aplicación")
             self.assertEqual(self.current(), "dashboard")
             self.assertTrue(self.window.authenticated)
+            self.assertIs(self.window.lifecycle_state, LifecycleState.ADMIN)
             self.assertTrue(self.window.isVisible())
             self.assertTrue(self.window.clock.isActive())
 
@@ -136,6 +141,115 @@ class KioskGuiTests(unittest.TestCase):
         self.assertFalse(expired, "Confirmed exit did not terminate the Qt event loop")
         self.assertFalse(self.window.isVisible())
         self.assertFalse(self.window.clock.isActive())
+
+    def expire_attendance(self):
+        self.window._inactivity_deadline = 0
+        self.window._inactivity_expired()
+
+    def test_inactivity_timeout_and_fresh_standby_activation(self):
+        self.window.navigate("attendance")
+        self.window.state_selector.setCurrentIndex(3)
+        self.expire_attendance()
+        self.assertIs(self.window.lifecycle_state, LifecycleState.STANDBY)
+        self.assertFalse(self.window.inactivity_timer.isActive())
+        QTest.mouseClick(self.window.screens["standby"], Qt.LeftButton)
+        self.assertEqual(self.window.state_selector.currentIndex(), 0)
+        self.assertTrue(self.window.inactivity_timer.isActive())
+        self.assertEqual(self.window.inactivity_timer.interval(), 30000)
+
+    def test_presence_is_explicit_and_unknown_face_prevents_standby(self):
+        self.window.navigate("attendance")
+        self.window.state_selector.setCurrentIndex(3)
+        self.assertFalse(self.window.face_present)
+        self.window.presence_selector.setChecked(True)
+        self.assertTrue(self.window.face_present)
+        self.assertFalse(self.window.inactivity_timer.isActive())
+        self.expire_attendance()
+        self.assertIs(self.window.lifecycle_state, LifecycleState.ATTENDANCE)
+        self.window.presence_selector.setChecked(False)
+        self.assertTrue(self.window.inactivity_timer.isActive())
+        self.window.set_face_present(True)
+        self.assertFalse(self.window.inactivity_timer.isActive())
+        self.window.set_face_present(False)
+        self.expire_attendance()
+        self.assertIs(self.window.lifecycle_state, LifecycleState.STANDBY)
+
+    def test_timeout_preferences_and_deliberate_activity_ignore_mouse_movement(self):
+        for index, seconds in enumerate((30, 60, 120)):
+            self.window.timeout_selector.setCurrentIndex(index)
+            self.window.navigate("attendance")
+            self.assertEqual(self.window.standby_timeout_seconds, seconds)
+            self.assertEqual(self.window.inactivity_timer.interval(), seconds * 1000)
+            deadline = self.window._inactivity_deadline
+            QTest.mouseMove(self.window.screens["attendance"])
+            self.assertEqual(self.window._inactivity_deadline, deadline)
+            QTest.mouseClick(self.window.screens["attendance"], Qt.LeftButton)
+            self.assertGreaterEqual(self.window._inactivity_deadline, deadline)
+        self.window.set_face_present(True)
+        self.window.timeout_selector.setCurrentIndex(0)
+        self.assertFalse(self.window.inactivity_timer.isActive())
+
+    def test_admin_stops_timer_clears_presence_and_never_times_out(self):
+        self.window.navigate("attendance")
+        self.window.presence_selector.setChecked(True)
+        self.window.state_selector.setCurrentIndex(2)
+        self.window.open_admin()
+        self.assertIs(self.window.lifecycle_state, LifecycleState.ADMIN_LOGIN)
+        self.assertFalse(self.window.inactivity_timer.isActive())
+        self.assertFalse(self.window.face_present)
+        self.assertFalse(self.window.presence_selector.isChecked())
+        self.assertEqual(self.window.state_selector.currentIndex(), 0)
+        self.login()
+        for screen in ("dashboard", "settings", "records", "sessions", "export", "system"):
+            self.window.navigate(screen)
+            self.assertIs(self.window.lifecycle_state, LifecycleState.ADMIN)
+            self.expire_attendance()
+            self.assertEqual(self.current(), screen)
+            self.assertFalse(self.window.inactivity_timer.isActive())
+        self.window.apply_theme("light")
+        self.window.enter_digit("1")
+        self.window.navigate("standby")
+        self.assertFalse(self.window.authenticated)
+        self.assertEqual(self.window.pin, "")
+        self.assertEqual(self.window.theme, "light")
+
+    def test_stale_timeouts_repeated_transitions_and_lifecycle_notifications(self):
+        active = QSignalSpy(self.window.attendance_active_changed)
+        states = QSignalSpy(self.window.lifecycle_changed)
+        timers = set(self.window.findChildren(QTimer))
+        for _ in range(3):
+            self.window.navigate("attendance")
+            self.window.navigate("attendance")
+            self.window._inactivity_expired()  # Obsolete signal during a fresh countdown.
+            self.assertEqual(self.current(), "attendance")
+            self.window.open_admin()
+            self.window._inactivity_expired()
+            self.assertEqual(self.current(), "pin")
+        self.assertEqual([r[0] for r in active], [True, False] * 3)
+        self.assertEqual(len(states), 6)
+        self.assertEqual(set(self.window.findChildren(QTimer)), timers)
+        self.window.close()
+        self.assertIs(self.window.lifecycle_state, LifecycleState.SHUTDOWN)
+        self.window.navigate("attendance")
+        self.expire_attendance()
+        self.assertIs(self.window.lifecycle_state, LifecycleState.SHUTDOWN)
+        self.assertFalse(self.window.clock.isActive())
+        self.assertFalse(self.window.inactivity_timer.isActive())
+
+    def test_actual_single_shot_dispatch_and_shutdown_from_attendance(self):
+        self.window.navigate("attendance")
+        self.window._inactivity_deadline = 0
+        self.window.inactivity_timer.start(1)
+        QTest.qWait(20)
+        self.assertIs(self.window.lifecycle_state, LifecycleState.STANDBY)
+        self.window.navigate("attendance")
+        self.window.set_face_present(True)
+        events = QSignalSpy(self.window.lifecycle_changed)
+        active = QSignalSpy(self.window.attendance_active_changed)
+        self.window.close()
+        self.assertEqual(events[0][0], LifecycleState.SHUTDOWN)
+        self.assertEqual(active[0][0], False)
+        self.assertFalse(self.window.face_present)
 
     def test_theme_changes_all_existing_screens_without_recreation(self):
         pages = dict(self.window.screens)
