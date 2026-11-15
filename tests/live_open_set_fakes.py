@@ -4,11 +4,11 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from face_recognition.application.v3_deployable_recognition import V3DeployableRecognizer
-from face_recognition.application.v3_novelty_data import FrameScores
+from face_recognition.application.face_recognizer import FaceRecognizer
+from face_recognition.application.training_data import FrameScores
 from face_recognition.domain.models.landmark_result import DetectorSnapshot, LandmarkResult
 from face_recognition.domain.models.v3_deployable_model import DeployableV3Model, V3FrameObservation
-from tests.pose_representation_fakes import encoded_face, face_geometry
+from tests.pose_geometry import encoded_face, face_geometry
 
 CLASSES = ("known_a", "known_b", "known_c")
 
@@ -50,7 +50,7 @@ def loaded_recognizer(observations=(), threshold=-18., clock=None, delay=0.):
     config = SimpleNamespace(pipeline=SimpleNamespace(representation="all_xyz_pose_v2", input_features=1434,
         novelty_method="mahalanobis_distance"), temporal=SimpleNamespace(window_size=7))
     model = DeployableV3Model(SimpleNamespace(identity_count=3, version=1), config, CLASSES, threshold)
-    return V3DeployableRecognizer(model, runner, 1), runner
+    return FaceRecognizer(model, runner, 1), runner
 
 
 def face(): return encoded_face(face_geometry())

@@ -3,7 +3,6 @@
 import json
 from pathlib import Path
 
-from face_recognition.domain.interfaces.normalization_evaluation import ConditionKey
 from face_recognition.domain.models.dataset import CONDITIONS, validate_identifier
 from face_recognition.domain.models.processed_sample import PROCESSED_SCHEMA_VERSION, SUPPORTED_REPRESENTATIONS
 
@@ -70,7 +69,7 @@ class ProcessedDatasetCatalog:
         except OSError:
             raise self.error_type(f"Cannot list processed directory: {directory}") from None
 
-    def discover_conditions(self) -> tuple[ConditionKey, ...]:
+    def discover_conditions(self) -> tuple[tuple[str, str, str], ...]:
         keys = []
         for person in self._entries(self.root):
             self._checked(person)

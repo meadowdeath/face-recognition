@@ -4,22 +4,11 @@ import unittest
 
 import numpy as np
 
-from face_recognition.application.rejection_metrics import calibrate_threshold, decision_margin, evaluate_threshold, threshold_candidates
+from face_recognition.application.rejection_metrics import calibrate_threshold, evaluate_threshold, threshold_candidates
 from face_recognition.domain.models.rejection import RejectionError
 
 
 class RejectionMetricsTests(unittest.TestCase):
-    def test_top_two_margin_and_class_column_order_invariance(self):
-        scores = np.array([[1, 4, 2], [3, 3, 1], [-5, -2, -4]], dtype=float)
-        self.assertTrue(np.array_equal(decision_margin(scores), np.array([2, 0, 2])))
-        self.assertTrue(np.array_equal(decision_margin(scores[:, [2, 0, 1]]), np.array([2, 0, 2])))
-        self.assertTrue(np.array_equal(decision_margin(np.array([[-2, 2], [1, -1]])), np.array([4, 2])))
-
-    def test_invalid_or_nonfinite_scores_rejected(self):
-        for scores in (np.ones((2, 1)), np.ones(2), np.ones((0, 3)), np.array([[0, np.nan]]), np.array([[0, np.inf]])):
-            with self.assertRaises(RejectionError):
-                decision_margin(scores)
-
     def test_exact_open_set_cases_rates_and_binary_metrics(self):
         # Known: accepted correct, rejected correct, accepted wrong.
         # Unknown: rejected, falsely accepted. Equality at the threshold accepts.

@@ -10,7 +10,6 @@ from threading import Condition, Lock
 from time import monotonic_ns
 from typing import Any
 
-import cv2
 import mediapipe as mp
 import numpy as np
 

@@ -29,10 +29,17 @@ class TerminalControls:
 
     def poll(self) -> str | None:
         if os.name == "nt":
-            # Reuse the validation experiment's console controls, including Ctrl+C.
-            from face_recognition.presentation.cli.validate_normalization import terminal_key
-
-            return terminal_key()
+            import msvcrt
+            if not msvcrt.kbhit():
+                return None
+            key = msvcrt.getwch()
+            if key in ("\x00", "\xe0"):
+                if msvcrt.kbhit():
+                    msvcrt.getwch()
+                return None
+            if key == "\x03":
+                raise KeyboardInterrupt
+            return key.lower()
         if self._fd is None or not select.select([self._fd], [], [], 0)[0]:
             return None
         key = os.read(self._fd, 1).decode("ascii", errors="ignore").lower()

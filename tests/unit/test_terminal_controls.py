@@ -2,7 +2,6 @@ from unittest.mock import Mock, patch
 import unittest
 
 from face_recognition.presentation.cli import terminal_controls as controls
-from face_recognition.presentation.cli import validate_normalization
 
 
 class TerminalControlsTests(unittest.TestCase):
@@ -12,13 +11,21 @@ class TerminalControlsTests(unittest.TestCase):
                 with controls.TerminalControls():
                     pass
 
-    def test_windows_reuses_existing_nonblocking_poll(self) -> None:
+    def test_windows_nonblocking_poll_preserves_space_extended_keys_and_interrupt(self) -> None:
+        msvcrt = Mock()
+        msvcrt.kbhit.return_value = True
+        msvcrt.getwch.return_value = " "
         with patch.object(controls.sys.stdin, "isatty", return_value=True), \
              patch.object(controls.os, "name", "nt"), \
-             patch.object(validate_normalization, "terminal_key", return_value=" ") as poll:
+             patch.dict("sys.modules", {"msvcrt": msvcrt}):
             with controls.TerminalControls() as terminal:
                 self.assertEqual(terminal.poll(), " ")
-        poll.assert_called_once()
+                msvcrt.kbhit.return_value = False
+                self.assertIsNone(terminal.poll())
+                msvcrt.kbhit.return_value = True
+                msvcrt.getwch.side_effect = ["\xe0", "H", "\x03"]
+                self.assertIsNone(terminal.poll())
+                with self.assertRaises(KeyboardInterrupt): terminal.poll()
 
     def test_linux_reads_without_enter_and_restores_terminal_on_failure(self) -> None:
         termios = Mock(TCSANOW=0)

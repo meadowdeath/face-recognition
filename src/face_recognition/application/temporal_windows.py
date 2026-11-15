@@ -7,7 +7,7 @@ import numpy as np
 
 from face_recognition.domain.models.rejection import RejectionError
 from face_recognition.domain.models.dataset import CONDITIONS
-from face_recognition.domain.models.identity_split import SplitSampleReference
+from face_recognition.domain.models.processed_sample import SampleProvenance
 from face_recognition.domain.models.temporal import WINDOW_SIZES, VoteRates, VoteStability, WindowCounts
 
 
@@ -27,7 +27,7 @@ class WindowPlan:
     windows: tuple[SourceWindow, ...] = field(repr=False)
 
 
-def build_windows(samples: tuple[SplitSampleReference, ...], size: int) -> WindowPlan:
+def build_windows(samples: tuple[SampleProvenance, ...], size: int) -> WindowPlan:
     if type(size) is not int or size not in WINDOW_SIZES:
         raise RejectionError("Temporal window size must be one of 1,3,5,7")
     groups = defaultdict(list)

@@ -7,7 +7,7 @@ from face_recognition.domain.models.face_landmarks import FaceLandmarks
 class LandmarkFeatureExtractor:
     """Flatten identity-normalized landmarks in index order, with x/y/z per point.
 
-    Callers must supply landmarks already processed by LandmarkNormalizer.
+    Callers must supply landmarks already processed by PoseLandmarkNormalizer.
     This extractor neither verifies normalization nor transforms coordinates.
     """
 

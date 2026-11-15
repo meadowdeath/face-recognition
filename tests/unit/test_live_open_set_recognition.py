@@ -1,14 +1,12 @@
-from dataclasses import replace
 import unittest
 from unittest.mock import patch
 
 import numpy as np
 
-from face_recognition.application.live_open_set_recognition import LiveOpenSetRecognition, LiveTemporalRecognition
+from face_recognition.application.live_recognition import LiveOpenSetRecognition, LiveTemporalRecognition
 from face_recognition.domain.models.landmark_result import DetectorSnapshot
 from face_recognition.domain.models.rejection import RejectionError
 from face_recognition.infrastructure.features.landmark_feature_extractor import LandmarkFeatureExtractor
-from face_recognition.infrastructure.features.landmark_normalizer import LandmarkNormalizer
 from face_recognition.infrastructure.features.pose_landmark_normalizer import PoseLandmarkNormalizer
 from tests.live_open_set_fakes import CLASSES, Clock, face, loaded_recognizer, observation, snapshot
 
@@ -93,11 +91,9 @@ class LiveRecognitionPipelineTests(unittest.TestCase):
         clock, pipeline, runner = self.make_pipeline()
         pipeline.process(snapshot(clock))
         expected = np.array(LandmarkFeatureExtractor().extract(PoseLandmarkNormalizer(640, 360).normalize(face())).values, dtype=np.float32)
-        baseline = np.array(LandmarkFeatureExtractor().extract(LandmarkNormalizer(640, 360).normalize(face())).values, dtype=np.float32)
         np.testing.assert_array_equal(runner.inputs[0][0], expected)
         self.assertEqual(runner.inputs[0].shape, (1, 1434))
         self.assertEqual(runner.inputs[0].dtype, np.float32)
-        self.assertFalse(np.allclose(expected, baseline))
 
     def test_repeated_busy_camera_snapshots_empty_results_and_no_face_never_advance(self):
         clock, pipeline, runner = self.make_pipeline()

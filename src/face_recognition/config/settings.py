@@ -20,6 +20,4 @@ class Settings:
     renderer_mode: str = "all"
     renderer_landmark_indices: tuple[int, ...] = ()
     metrics_interval_seconds: float = 1.0
-    selected_classifier: str = "knn"
     landmarker_model_path: Path = PROJECT_ROOT / "assets" / "face_landmarker.task"
-    trained_model_path: Path = PROJECT_ROOT / "models" / "classifier.joblib"

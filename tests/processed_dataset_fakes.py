@@ -10,7 +10,7 @@ from tests.dataset_fakes import session_config
 
 
 def synthetic_sample(person: str = "subject_test", session: str = "visit_test", condition: str = "center",
-                     index: int = 0, width: int = 480, height: int = 270, count: int = 400) -> RawLandmarkSample:
+                     index: int = 0, width: int = 480, height: int = 270, count: int = 478) -> RawLandmarkSample:
     # Isotropic geometry is encoded using MediaPipe's different X/Z and Y scales.
     geometry = [Landmark(0.3 + (i % 13) * 0.01, 0.25 + (i % 17) * 0.01, (i % 7) * 0.01)
                 for i in range(count)]
@@ -22,7 +22,7 @@ def synthetic_sample(person: str = "subject_test", session: str = "visit_test", 
 
 def write_synthetic_session(root: Path, person: str = "subject_test", session: str = "visit_test",
                             completed: tuple[str, ...] = CONDITIONS[:2], width: int = 480,
-                            height: int = 270, count: int = 400) -> Path:
+                            height: int = 270, count: int = 478) -> Path:
     config = session_config(person_id=person, session_id=session, inference_width=width, inference_height=height,
                             protocol=CaptureProtocol(5, 2, 250))
     manifest = SessionManifest(config, "2026-10-24T12:00:00+00:00", count, completed)

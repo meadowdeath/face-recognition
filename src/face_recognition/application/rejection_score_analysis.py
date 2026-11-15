@@ -2,10 +2,10 @@
 
 import numpy as np
 
-from face_recognition.application.rejection_metrics import calibrate_threshold, threshold_points
+from face_recognition.application.rejection_metrics import threshold_points
 from face_recognition.domain.models.rejection import RejectionError
 from face_recognition.domain.models.score_analysis import (
-    FAR_TARGETS, EqualErrorPoint, FarOperatingPoint, ScoreAnalysis, ScoreDistribution, ScoreSeparation,
+    EqualErrorPoint, ScoreDistribution, ScoreSeparation,
 )
 
 
@@ -45,38 +45,3 @@ def score_separation(known: np.ndarray, unknown: np.ndarray) -> ScoreSeparation:
     eer = EqualErrorPoint((m.unknown_false_acceptance_rate + m.known_rejection_rate) / 2, point.threshold,
                           m.unknown_false_acceptance_rate, m.known_rejection_rate)
     return ScoreSeparation(roc_auc_known_positive(known, unknown), eer, score_distribution(known), score_distribution(unknown))
-
-
-def analyze_scores(known: np.ndarray, correct: np.ndarray, unknown: np.ndarray) -> ScoreAnalysis:
-    calibration = calibrate_threshold(known, correct, unknown, allow_negative=True)
-    nk, nu = len(known), len(unknown)
-    eer_key, eer = None, None
-    far_best = {target: None for target in FAR_TARGETS}
-    far_keys = {target: None for target in FAR_TARGETS}
-    for point in threshold_points(known, correct, unknown, allow_negative=True):
-        ua = nu - point.unknown_rejected
-        ka = nk - point.known_rejected
-        # Common denominator nk*nu makes exact closest-error comparisons possible.
-        key = _eer_key(point, nk, nu)
-        if eer_key is None or key < eer_key:
-            eer_key = key
-            metrics = point.metrics
-            eer = EqualErrorPoint((metrics.unknown_false_acceptance_rate + metrics.known_rejection_rate) / 2,
-                                  point.threshold, metrics.unknown_false_acceptance_rate, metrics.known_rejection_rate)
-        for target in FAR_TARGETS:
-            if ua * 100 <= int(round(target * 100)) * nu:
-                far_key = (ka, -ua, point.threshold)
-                if far_keys[target] is None or far_key > far_keys[target]:
-                    far_keys[target], far_best[target] = far_key, point
-    operating_points = []
-    for target in FAR_TARGETS:
-        point = far_best[target]
-        if point is None:
-            operating_points.append(FarOperatingPoint(target, "unavailable", None, None, "No finite candidate satisfies FAR"))
-        else:
-            impractical = 100 * (nk - point.known_rejected) <= nk
-            operating_points.append(FarOperatingPoint(target, "impractical" if impractical else "available",
-                                                      point.threshold, point.metrics,
-                                                      "At most 1% of known samples accepted" if impractical else None))
-    return ScoreAnalysis(roc_auc_known_positive(known, unknown), eer, calibration, tuple(operating_points),
-                          score_distribution(known), score_distribution(unknown))

@@ -6,8 +6,17 @@ from enum import Enum
 from face_recognition.domain.models.classification import EvaluationVersions
 from face_recognition.domain.models.score_analysis import ScoreSeparation
 from face_recognition.domain.models.temporal import WindowCounts
-from face_recognition.domain.models.v3_novelty_evaluation import BinaryCalibrationMetrics
 from face_recognition.domain.models.v3_open_set_config import FrozenV3OpenSetConfiguration
+
+
+@dataclass(frozen=True)
+class BinaryCalibrationMetrics:
+    known_acceptance_rate: float
+    known_rejection_rate: float
+    unknown_rejection_rate: float
+    unknown_false_acceptance_rate: float
+    binary_balanced_accuracy: float
+    binary_macro_f1: float
 
 
 class IdentityDecision(str, Enum):

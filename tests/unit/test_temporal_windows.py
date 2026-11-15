@@ -5,12 +5,13 @@ import numpy as np
 
 from face_recognition.application.temporal_windows import aggregate_windows, build_windows, vote_identity
 from face_recognition.domain.models.rejection import RejectionError
-from face_recognition.domain.models.identity_split import IdentityPartition, SplitSampleReference
+from dataclasses import make_dataclass
+
+Reference = make_dataclass("Reference", ["person_id", "session_id", "condition", "sample_index"], frozen=True)
 
 
 def references(count, *, person="synthetic_a", session="visit_a", condition="center", start=0):
-    return tuple(SplitSampleReference(person, session, condition, index, IdentityPartition.KNOWN_TRAIN_POOL,
-                                      f"all_xyz_v1/{person}/{session}/{condition}.jsonl")
+    return tuple(Reference(person, session, condition, index)
                  for index in range(start, start + count))
 
 
