@@ -1,5 +1,55 @@
 # Face Recognition
 
+## Attendance kiosk interface — Phase 1
+
+The optional PyQt5 Widgets interface runs independently of camera, model and
+dataset assets. It provides nine persistent screens: standby, attendance,
+demonstration PIN access, administrator dashboard, sessions, records, export,
+system status and settings. All displayed records and diagnostics are fictional.
+The demonstration PIN is **123456**; this is navigation scaffolding, not security.
+
+Windows development (native Qt backend, 800 × 480 window):
+
+```powershell
+python -m pip install -e ".[gui]"
+$env:PYTHONPATH="src"
+python -m face_recognition.presentation.gui --windowed
+```
+
+The GUI extra pins the PyQt5 binding to 5.15.11 for desktop development; it is
+not a recognition-core dependency. On Raspberry Pi use the already installed
+system PyQt5 / Qt 5.15.8 through a `--system-site-packages` environment. Do not
+replace the working system Qt/EGLFS installation with desktop wheels.
+
+```bash
+QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui
+```
+
+EGLFS launches fullscreen; the application does not set the platform backend.
+Escape closes the development application. Dark Amethyst is the default theme;
+Settings → Appearance (`Ajustes → Apariencia`) switches all existing widgets to
+Light Lavender immediately. The choice lives only in memory. One timer updates
+the date/time once per second. No inactivity timer, hardware polling or worker
+is started.
+
+Attendance's visual-state selector and export's USB selector demonstrate the
+required states. Session, export, PIN-change, brightness, clock and power
+controls are visual placeholders with no operational actions. There is no real
+authentication, persistence, export, camera preview or recognition integration.
+Touchscreen/stylus deployment and integrated Raspberry performance remain
+future work; static offscreen rendering does not validate integrated throughput.
+
+Optional offscreen checks (skip automatically if PyQt5 is absent):
+
+```powershell
+$env:QT_QPA_PLATFORM="offscreen"
+python -m unittest tests.unit.test_kiosk_gui
+```
+
+GUI code is contained in `presentation/gui`: `window.py` owns screens and
+navigation, `themes.py` owns shared palette/style definitions, and `__main__.py`
+starts the application. It imports no recognition or camera components.
+
 Operational facial dataset capture, pose-feature processing, selected-model
 construction and single-face open-set recognition on Windows/OpenCV and
 Raspberry Pi/Picamera2. Attendance registration and storage are not implemented.

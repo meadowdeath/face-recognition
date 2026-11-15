@@ -19,6 +19,9 @@ dependencies = [
 [project.scripts]
 face-landmarks = "face_recognition.presentation.cli.recognize:main"
 
+[project.optional-dependencies]
+gui = ["PyQt5==5.15.11"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
