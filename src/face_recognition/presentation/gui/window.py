@@ -3,7 +3,7 @@
 from PyQt5.QtCore import QDate, QDateTime, QLocale, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
-    QAbstractItemView, QComboBox, QDateEdit, QFrame, QGridLayout, QHBoxLayout,
+    QAbstractItemView, QComboBox, QDateEdit, QDialog, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QPushButton, QScrollArea,
     QShortcut, QSizePolicy, QSlider, QStackedWidget, QStyle, QTableWidget, QTableWidgetItem,
     QTimeEdit, QVBoxLayout, QWidget,
@@ -189,8 +189,8 @@ class KioskWindow(QMainWindow):
         col.addWidget(label("Panel de demostración", "muted"))
         grid = QGridLayout()
         for i, (text, target) in enumerate((("▦\nSesiones", "sessions"), ("≡\nRegistros", "records"),
-                ("⇩\nExportar registros", "export"), ("◉\nEstado", "system"), ("⚙\nAjustes", "settings"), ("↪\nCerrar sesión", "logout"))):
-            tile = button(text, lambda checked=False, t=target: self.logout() if t == "logout" else self.navigate(t))
+                ("⇩\nExportar registros", "export"), ("◉\nEstado", "system"), ("⚙\nAjustes", "settings"), ("↪\nSalir de la aplicación", "exit"))):
+            tile = button(text, lambda checked=False, t=target: self.confirm_exit() if t == "exit" else self.navigate(t))
             tile.setText(text.split("\n")[-1])
             tile.setIcon(self.style().standardIcon((QStyle.SP_DirIcon, QStyle.SP_FileDialogListView,
                 QStyle.SP_DialogSaveButton, QStyle.SP_ComputerIcon, QStyle.SP_FileDialogContentsView,
@@ -270,6 +270,9 @@ class KioskWindow(QMainWindow):
         return control
 
     def navigate(self, name):
+        if name == "attendance":
+            self.authenticated = False
+            self.pin = ""; self.update_pin()
         if name not in ("standby", "attendance", "pin") and not self.authenticated:
             name = "pin"
         if name == "pin":
@@ -301,9 +304,27 @@ class KioskWindow(QMainWindow):
             self.pin_message.setText("PIN de demostración incorrecto. Usa 123456.")
             self.pin = ""; self.update_pin()
 
-    def logout(self):
-        self.authenticated = False
-        self.pin = ""; self.update_pin(); self.navigate("attendance")
+    def confirm_exit(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Salir de la aplicación")
+        dialog.setStyleSheet(self.styleSheet())
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+        layout.addWidget(label("Salir de la aplicación", "title"))
+        layout.addWidget(label("¿Deseas cerrar la aplicación?"))
+        actions = QHBoxLayout()
+        cancel = button("Cancelar", dialog.reject)
+        cancel.setDefault(True)
+        actions.addWidget(cancel)
+        actions.addWidget(button("Salir", dialog.accept, True))
+        layout.addLayout(actions)
+        try:
+            if dialog.exec_() == QDialog.Accepted:
+                # Closing the last main window lets Qt end its application loop.
+                self.close()
+        finally:
+            dialog.deleteLater()
 
     def set_attendance_state(self, index):
         title, message, role = ATTENDANCE_STATES[index]
