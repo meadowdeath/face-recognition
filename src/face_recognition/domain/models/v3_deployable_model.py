@@ -24,6 +24,21 @@ class V3RecognitionDecision:
 
 
 @dataclass(frozen=True)
+class V3FrameObservation:
+    """Internal candidate evidence, not an operational recognized identity."""
+    candidate_index: int
+    candidate_identity: str
+    knownness_score: float
+    decision_scores: tuple[float, ...] = field(repr=False)
+
+
+@dataclass(frozen=True)
+class V3TemporalOutcome:
+    decision: V3RecognitionDecision
+    candidate_identity: str  # Debug only when the operational decision is UNKNOWN.
+
+
+@dataclass(frozen=True)
 class V3DeployableAllocation:
     known_identities: tuple[str, ...]
     known_fit_sessions: tuple[str, ...]
