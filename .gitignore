@@ -22,3 +22,13 @@ models/*
 !models/.gitkeep
 assets/*.task
 assets/*.tmp
+# Local attendance databases, SQLite sidecars, and database backup filenames.
+*.sqlite
+*.sqlite-*
+*.sqlite.*
+*.sqlite3
+*.sqlite3-*
+*.sqlite3.*
+*.db
+*.db-*
+*.db.*
