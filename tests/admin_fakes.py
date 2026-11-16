@@ -31,3 +31,32 @@ def configured_admin(database, clock=None):
 
 def grant(administrator, preview):
     return administrator.authorize(preview.fingerprint, TEST_PIN)[1]
+
+
+def dispose_window(window):
+    """Test-only teardown, not an application shutdown authorization bypass.
+
+    Finish owned workers, stop timers, remove the filter and dispose the widget
+    directly. Tests of intentional shutdown must use the real authentication path.
+    """
+    from PyQt5 import sip
+    from PyQt5.QtWidgets import QApplication
+    if sip.isdeleted(window): return
+    for name in ('exports', 'administration', 'recognition'):
+        integration = getattr(window, name, None)
+        if integration is not None: integration.finalize()
+    window.clock.stop(); window.inactivity_timer.stop()
+    QApplication.instance().removeEventFilter(window)
+    window.hide()
+    QApplication.instance().processEvents()
+    window.deleteLater()
+
+
+def demo_exit(window):
+    """Use actual demonstration PIN authentication, then confirm ordinary exit."""
+    from face_recognition.presentation.gui.window import DEMO_PIN
+    window.open_admin()
+    for digit in DEMO_PIN: window.enter_digit(digit)
+    window.confirm_pin()
+    with patch.object(window, '_confirm_exit_dialog', return_value=True):
+        window.confirm_exit()

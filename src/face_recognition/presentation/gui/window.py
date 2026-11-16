@@ -5,11 +5,11 @@ from math import ceil
 from time import monotonic
 
 from PyQt5.QtCore import QDate, QDateTime, QEvent, QLocale, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen, QPixmap
+from PyQt5.QtGui import QColor, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QAbstractItemView, QCheckBox, QComboBox, QDateEdit, QDialog, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QPushButton, QScrollArea,
-    QShortcut, QSizePolicy, QStackedWidget, QStyle, QTableWidget, QTableWidgetItem,
+    QSizePolicy, QStackedWidget, QStyle, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget, QTabWidget,
 )
 
@@ -77,11 +77,14 @@ class KioskWindow(QMainWindow):
         self.attendance = None
         self.administration = None
         self._admin_shutdown_finished = True
+        self._export_shutdown_finished = True
+        self.exports = None
         self.attendance_session_id = None
         self.attendance_activation_revision = None
         self.session_open = False
         self._shutdown_finished = True
         self.lifecycle_state = None
+        self._shutdown_authorization = None
         self.standby_timeout_seconds = 30
         self.face_present = False
         self._inactivity_deadline = None
@@ -146,8 +149,6 @@ class KioskWindow(QMainWindow):
         self.clock.timeout.connect(self.update_clock)
         self.clock.start(1000)
         self.update_clock()
-        self.exit_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
-        self.exit_shortcut.activated.connect(self.close)
         self.apply_theme(initial_theme)
         self.navigate("standby")
         QApplication.instance().installEventFilter(self)
@@ -165,13 +166,6 @@ class KioskWindow(QMainWindow):
         self.screens[name] = page
         self.stack.addWidget(page)
         return column
-
-    def card(self, title, value):
-        card = QFrame(objectName="card")
-        layout = QVBoxLayout(card)
-        layout.addWidget(label(title, "muted"))
-        layout.addWidget(label(value))
-        return card
 
     def build_screens(self):
         standby = Standby()
@@ -266,8 +260,6 @@ class KioskWindow(QMainWindow):
         col.addLayout(auth_body, 1)
         auth_actions = QHBoxLayout()
         auth_actions.addWidget(button("Cancelar", lambda: self.navigate("attendance")))
-        if self.persistent_attendance:
-            auth_actions.addWidget(button("Salir de la aplicación", self.confirm_exit))
         col.addLayout(auth_actions)
         self.update_pin()
 
@@ -275,7 +267,7 @@ class KioskWindow(QMainWindow):
         col.addWidget(label("Administración local" if self.persistent_attendance else "Panel de demostración", "muted"))
         grid = QGridLayout()
         for i, (text, target) in enumerate((("▦\nSesiones", "sessions"), ("≡\nRegistros", "records"),
-                ("⇩\nExportar registros", "export"), ("◉\nEstado", "system"), ("⚙\nAjustes", "settings"), ("↪\nSalir de la aplicación", "exit"))):
+                ("⇩\nExportar a USB", "export"), ("◉\nEstado", "system"), ("⚙\nAjustes", "settings"), ("↪\nSalir de la aplicación", "exit"))):
             tile = button(text, lambda checked=False, t=target: self.confirm_exit() if t == "exit" else self.navigate(t))
             tile.setText(text.split("\n")[-1])
             tile.setIcon(self.style().standardIcon((QStyle.SP_DirIcon, QStyle.SP_FileDialogListView,
@@ -388,19 +380,10 @@ class KioskWindow(QMainWindow):
                 table.setItem(row, column, QTableWidgetItem(value))
         col.addWidget(table, 1)
 
-        col = self.page("export", "Exportar registros", True)
-        self.usb = QComboBox()
-        self.usb.addItems(["USB desconectado · Simulado", "USB conectado · Simulado"])
-        col.addWidget(self.card("Dispositivo USB", "Sin detección real de dispositivos"))
-        col.addWidget(self.usb)
-        dates = QHBoxLayout()
-        for title in ("Desde", "Hasta"):
-            dates.addWidget(label(title)); dates.addWidget(self.date_control())
-        col.addLayout(dates)
-        formats = QComboBox(); formats.addItems(["CSV", "XLSX"])
-        col.addWidget(formats)
-        col.addWidget(button("Exportar a USB", primary=True))
-        col.addWidget(label("Acción visual: no se crean ni transfieren archivos.", "muted"))
+        col = self.page("export", "Exportar a USB", True)
+        from .export import ExportPanel
+        self.export_panel = ExportPanel(self)
+        col.addWidget(self.export_panel)
 
         col = self.page("system", "Estado del sistema", True)
         diagnostic_scroll = QScrollArea()
@@ -466,6 +449,8 @@ class KioskWindow(QMainWindow):
 
     def navigate(self, name):
         if self.lifecycle_state is LifecycleState.SHUTDOWN:
+            return
+        if self.exports is not None and not self.exports.allow_navigation(name):
             return
         if self.administration is not None:
             self.administration.before_navigation(name)
@@ -596,6 +581,30 @@ class KioskWindow(QMainWindow):
             self.pin = ""; self.update_pin()
 
     def confirm_exit(self):
+        """Every ordinary close mechanism goes through the close-event boundary."""
+        if not self._exit_allowed():
+            return False
+        return self.close()
+
+    def _exit_allowed(self):
+        if self.lifecycle_state is not LifecycleState.ADMIN:
+            return False
+        if self.persistent_attendance:
+            return self.administration is not None and self.administration.allowed()
+        return self.authenticated
+
+    def _authorize_shutdown(self, reason):
+        """Internal commit after exit confirmation or a consumed power grant.
+
+        The authorization survives logout only to finish this terminal lifecycle;
+        worker completion callbacks cannot authorize an initial shutdown.
+        """
+        if reason not in ('administrator_exit', 'reboot', 'poweroff') or not self._exit_allowed():
+            return False
+        self._shutdown_authorization = reason
+        return True
+
+    def _confirm_exit_dialog(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("Salir de la aplicación")
         dialog.setStyleSheet(self.styleSheet())
@@ -611,9 +620,7 @@ class KioskWindow(QMainWindow):
         actions.addWidget(button("Salir", dialog.accept, True))
         layout.addLayout(actions)
         try:
-            if dialog.exec_() == QDialog.Accepted:
-                # Closing the last main window lets Qt end its application loop.
-                self.close()
+            return dialog.exec_() == QDialog.Accepted
         finally:
             dialog.deleteLater()
 
@@ -688,13 +695,23 @@ class KioskWindow(QMainWindow):
         self.system_time.setText('Hora del sistema: ' + now.toString('HH:mm:ss'))
 
     def closeEvent(self, event):
+        if self._shutdown_authorization is None:
+            # Reject before changing timers, lifecycle, authentication or resources.
+            if not self._exit_allowed() or not self._confirm_exit_dialog():
+                event.ignore()
+                return
+            if not self._authorize_shutdown('administrator_exit'):
+                event.ignore()
+                return
         self.clock.stop()
         self._transition_state(LifecycleState.SHUTDOWN)
         self.authenticated = False
         self.pin = ""; self.update_pin()
         if self.administration is not None:
             self.administration.shutdown()
-        if not self._shutdown_finished or not self._admin_shutdown_finished:
+        if self.exports is not None:
+            self.exports.shutdown()
+        if not self._shutdown_finished or not self._admin_shutdown_finished or not self._export_shutdown_finished:
             event.ignore()
             self.centralWidget().setEnabled(False)
             self.system_status.setText("Finalizando reconocimiento…")

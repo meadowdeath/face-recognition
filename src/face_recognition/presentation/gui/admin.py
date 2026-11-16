@@ -347,6 +347,9 @@ class AdminIntegration:
         finally: dialog.deleteLater()
 
     def action(self, key):
+        if self.window.exports is not None and self.window.exports.busy:
+            self.window.settings_message.setText('Espera a que termine la exportación.')
+            return
         if not self.allowed(): return
         try:
             if key == 'pin':
@@ -402,6 +405,8 @@ class AdminIntegration:
         current = attendance.service.active_session() if attendance and attendance.service else None
         actual = f'power:{key}:{None if current is None else (current.id, current.activation_revision)}'
         permit.require(actual)
+        if not self.window._authorize_shutdown(key):
+            raise PermissionError('Administrator authorization expired before shutdown')
         self.pending_power = key
         self.window.close()  # Existing lifecycle joins recognition before the event loop ends.
 

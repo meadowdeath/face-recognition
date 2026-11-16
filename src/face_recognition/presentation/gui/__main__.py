@@ -44,6 +44,7 @@ def main(argv=None):
         parser.exit(1, "PyQt5 is required for the GUI. Install the optional [gui] dependencies.\n")
     app = QApplication(sys.argv[:1])
     administration = None
+    exports = None
     initial_settings = None
     if args.attendance_db is not None:
         from face_recognition.application.attendance_service import AttendanceService
@@ -93,6 +94,16 @@ def main(argv=None):
             settings if service else None, DeviceDiagnostics(args.attendance_db.parent),
             power=SystemPowerController(enabled=args.enable_system_power_actions and service is not None),
             initial_settings=initial_settings)
+    if args.attendance_db is not None and service is not None:
+        from face_recognition.application.export_service import ExportService
+        from face_recognition.infrastructure.udisks import UDisksProvider
+        from face_recognition.infrastructure.persistence.attendance_backup import SQLiteExportStore
+        from face_recognition.infrastructure.persistence.attendance_reports import report
+        from face_recognition.infrastructure.persistence.export_files import publish
+        from .export import ExportIntegration
+        provider = UDisksProvider([database.path, Path(__file__).resolve()], window)
+        exports = ExportIntegration(window, ExportService(administrator, SQLiteExportStore(database), provider,
+                                                         report, publish), provider)
     integration = None
     if args.model_dir is not None:
         from .recognition import RecognitionIntegration
@@ -104,6 +115,7 @@ def main(argv=None):
         window.show()
     try:
         result = app.exec_()
+        if exports is not None: exports.finalize()
         if integration is not None: integration.finalize()
         if administration is not None:
             administration.finalize()
@@ -115,6 +127,7 @@ def main(argv=None):
                     return 1
         return result
     finally:
+        if exports is not None: exports.finalize()
         if integration is not None:
             integration.finalize()
         if administration is not None:

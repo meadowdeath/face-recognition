@@ -1,5 +1,10 @@
 # V3 archived-experiment cleanup
 
+Historical record of an earlier cleanup, not an inventory of current HEAD. Later
+recognition-core consolidation removed or renamed several components listed below.
+Use README and current operational CLIs for supported functionality; Git history
+preserves the implementation described here.
+
 V1 and V2 are experimentally closed. Their complete workflows remain in Git
 history; `v2-open-set-final` preserves completed V2. This cleanup intentionally
 removes their executable APIs from current HEAD without compatibility wrappers.
