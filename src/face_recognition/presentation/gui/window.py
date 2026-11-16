@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QApplication, QAbstractItemView, QCheckBox, QComboBox, QDateEdit, QDialog, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QPushButton, QScrollArea,
     QShortcut, QSizePolicy, QSlider, QStackedWidget, QStyle, QTableWidget, QTableWidgetItem,
-    QTimeEdit, QVBoxLayout, QWidget,
+    QTimeEdit, QVBoxLayout, QWidget, QTabWidget,
 )
 
 from .themes import THEMES, stylesheet
@@ -295,26 +295,52 @@ class KioskWindow(QMainWindow):
         col.addWidget(session_card)
         self.session_name = QLineEdit()
         self.session_name.setPlaceholderText("Nombre de la sesión")
-        col.addWidget(self.session_name)
-        self.session_start = button("Abrir o reanudar sesión" if self.persistent_attendance else "Iniciar sesión de asistencia", lambda: self.session_open_requested.emit()
-            if self.persistent_attendance else self.set_session_open(True), primary=True)
-        self.session_close = button("Cerrar sesión de asistencia", lambda: self.session_close_requested.emit()
-            if self.persistent_attendance else self.set_session_open(False))
+        self.session_start = button("Crear e iniciar sesión" if self.persistent_attendance else "Iniciar sesión de asistencia",
+            lambda: self.session_open_requested.emit() if self.persistent_attendance else self.set_session_open(True), primary=True)
+        self.session_close = button("Cerrar sesión activa" if self.persistent_attendance else "Cerrar sesión de asistencia",
+            lambda: self.session_close_requested.emit() if self.persistent_attendance else self.set_session_open(False))
         if self.persistent_attendance:
-            col.addWidget(self.session_start)
             col.addWidget(self.session_close)
+            self.session_tabs = QTabWidget()
+            col.addWidget(self.session_tabs)
+            create_page, manage_page, delete_page = QWidget(), QWidget(), QWidget()
+            for page, title in ((create_page, 'Crear sesión'), (manage_page, 'Gestionar sesiones'), (delete_page, 'Eliminar sesiones')):
+                self.session_tabs.addTab(page, title)
+            create = QVBoxLayout(create_page)
+            create.addWidget(self.session_name)
+            self.session_create_date = self.date_control()
+            create.addWidget(label('Fecha de la sesión', 'muted'))
+            create.addWidget(self.session_create_date)
+            create.addWidget(self.session_start)
+            manage = QVBoxLayout(manage_page)
+            self.stored_names = QComboBox()
             self.stored_sessions = QComboBox()
-            self.stored_sessions.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-            self.stored_sessions.setMinimumHeight(36)
-            self.stored_sessions.setAccessibleName('Sesiones existentes')
-            col.addWidget(self.stored_sessions)
-            selection_actions = QHBoxLayout()
-            self.session_resume = button('Reanudar sesión seleccionada')
-            self.session_rename = button('Renombrar sesión')
-            selection_actions.addWidget(self.session_resume)
-            selection_actions.addWidget(self.session_rename)
-            col.addLayout(selection_actions)
+            for combo, title in ((self.stored_names, 'Nombre de la sesión'), (self.stored_sessions, 'Fecha de la sesión')):
+                combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+                combo.setMinimumHeight(36)
+                combo.setAccessibleName(title)
+                manage.addWidget(label(title, 'muted'))
+                manage.addWidget(combo)
+            self.selected_session_details = label('Selecciona una sesión.')
+            manage.addWidget(self.selected_session_details)
+            self.session_resume = button('Reanudar sesión')
+            self.session_rename = button('Editar sesión')
+            manage.addWidget(self.session_resume)
+            manage.addWidget(self.session_rename)
+            destructive = QVBoxLayout(delete_page)
+            self.deletion_scope = label('Selecciona nombre y fecha en Gestionar sesiones.')
+            destructive.addWidget(self.deletion_scope)
+            self.deletion_buttons = []
+            for title in ('Vaciar asistencias de esta sesión', 'Eliminar sesión de esta fecha', 'Eliminar sesiones de todas las fechas'):
+                action = button(title)
+                action.setObjectName('destructive')
+                destructive.addWidget(action)
+                self.deletion_buttons.append(action)
+            self.deletion_notice = label('Solo bases sintéticas desechables; eliminación desactivada.', 'warning')
+            destructive.addWidget(self.deletion_notice)
+            self.session_tabs.setTabEnabled(2, False)
         else:
+            col.addWidget(self.session_name)
             col.addWidget(self.session_start)
             col.addWidget(self.session_close)
         self.session_hint = label("Solo memoria; no se guardan registros de asistencia.", "muted")

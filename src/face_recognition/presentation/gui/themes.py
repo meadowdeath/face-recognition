@@ -31,6 +31,7 @@ def stylesheet(name):
     QPushButton:checked {{ border: 2px solid {c['accent']}; color: {c['accent']}; }}
     QPushButton#primary {{ background: {c['button']}; color: white; border: none; }}
     QPushButton#primary:pressed {{ background: {c['pressed']}; }}
+    QPushButton#destructive {{ color: {c['error']}; border-color: {c['error']}; }}
     QPushButton#nav {{ text-align: left; padding-left: 16px; }}
     QPushButton#nav:checked {{ background: {c['accent']}; color: {c['sidebar']}; }}
     QLineEdit, QComboBox, QDateEdit, QTimeEdit {{ background: {c['card']}; border: 1px solid {c['border']}; border-radius: 6px; padding: 5px; min-height: 30px; }}

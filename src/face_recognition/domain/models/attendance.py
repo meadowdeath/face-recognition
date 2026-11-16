@@ -1,7 +1,7 @@
 """Minimal attendance metadata; independent of storage and recognition libraries."""
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from enum import Enum
 import re
 import unicodedata
@@ -56,6 +56,12 @@ def session_name(value: str) -> str:
     return normalize_session_name(value)[0]
 
 
+def calendar_date(value: date) -> date:
+    if type(value) is not date:
+        raise ValueError('An explicit calendar date is required')
+    return value
+
+
 def positive_id(value: int) -> None:
     if type(value) is not int or value <= 0:
         raise ValueError("Attendance identifiers must be positive integers")
@@ -78,12 +84,14 @@ class AttendanceSession:
     opened_at: datetime
     closed_at: datetime | None = None
     activation_revision: int = 1
+    session_date: date = field(kw_only=True)
 
     def __post_init__(self):
         positive_id(self.id)
         positive_id(self.activation_revision)
         object.__setattr__(self, "name", session_name(self.name))
         object.__setattr__(self, "opened_at", utc_datetime(self.opened_at))
+        calendar_date(self.session_date)
         if self.closed_at is not None:
             object.__setattr__(self, "closed_at", utc_datetime(self.closed_at))
             if self.closed_at < self.opened_at:
@@ -113,6 +121,46 @@ class SessionOutcome(Enum):
 class SessionResult:
     outcome: SessionOutcome
     session: AttendanceSession | None = None
+
+
+class DeletionOperation(Enum):
+    CLEAR = 'clear_attendance'
+    SESSION = 'delete_session'
+    NAME = 'delete_all_dates'
+
+
+@dataclass(frozen=True)
+class SyntheticDeletionAuthorization:
+    enabled: bool = False
+    persistent: bool = False
+    live: bool = False
+    recording: bool = False
+
+    def require(self):
+        if not self.enabled or not self.persistent or self.live or self.recording:
+            raise PermissionError('Session deletion is restricted to explicitly enabled persistent synthetic testing')
+
+
+@dataclass(frozen=True)
+class DeletionPreview:
+    operation: DeletionOperation
+    target_session_id: int
+    sessions: tuple[tuple[AttendanceSession, int], ...]
+    fingerprint: str
+
+    @property
+    def attendance_count(self):
+        return sum(count for _, count in self.sessions)
+
+    @property
+    def deleted_session_count(self):
+        return 0 if self.operation is DeletionOperation.CLEAR else len(self.sessions)
+
+
+@dataclass(frozen=True)
+class DeletionResult:
+    sessions_deleted: int
+    records_deleted: int
 
 
 @dataclass(frozen=True)

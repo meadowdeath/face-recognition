@@ -108,7 +108,7 @@ class AttendanceServiceTests(unittest.TestCase):
                 patch.object(self.records, 'list_between', wraps=self.records.list_between) as records:
             rows = self.service.records_between(start, self.now)
             self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0][1], 'First')
+            self.assertEqual(rows[0][1], f'First · {first.session_date:%d/%m/%Y}')
             self.assertEqual(sessions.call_count, 1)
             self.assertEqual(records.call_count, 1)
 

@@ -6,7 +6,7 @@ from enum import Enum
 
 from face_recognition.domain.models.attendance import (
     AttendancePersistenceError, AttendanceRecord, DuplicateSessionNameError, SessionConflictError,
-    SessionOutcome, SessionResult, positive_id, utc_datetime, validate_person_id,
+    SessionOutcome, SessionResult, SyntheticDeletionAuthorization, calendar_date, positive_id, utc_datetime, validate_person_id,
 )
 
 
@@ -25,9 +25,10 @@ class RegistrationResult:
 
 
 class AttendanceService:
-    def __init__(self, participants, sessions, records, *, clock=None):
+    def __init__(self, participants, sessions, records, *, clock=None, deletion_authorization=None):
         self.participants, self.sessions, self.records = participants, sessions, records
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.deletion_authorization = deletion_authorization or SyntheticDeletionAuthorization()
 
     def active_session(self):
         return self.sessions.current()
@@ -36,8 +37,8 @@ class AttendanceService:
         sessions = self.sessions.list()
         return sessions[-1] if sessions else None
 
-    def open_session(self, name):
-        return self.sessions.open(name, utc_datetime(self.clock()))
+    def open_session(self, name, session_date=None):
+        return self.sessions.open(name, utc_datetime(self.clock()), session_date)
 
     def close_session(self, expected_session_id, expected_activation_revision=None):
         return self.sessions.close(expected_session_id, utc_datetime(self.clock()),
@@ -52,8 +53,14 @@ class AttendanceService:
     def session_by_id(self, session_id):
         return self.sessions.get(session_id)
 
-    def session_by_name(self, name):
-        return self.sessions.get_by_name(name)
+    def session_by_name(self, name, session_date):
+        return self.sessions.get_by_name(name, session_date)
+
+    def session_names(self):
+        return self.sessions.names()
+
+    def session_dates(self, name):
+        return self.sessions.dates_for_name(name)
 
     @staticmethod
     def _session_operation(operation, *args, renamed=False):
@@ -69,8 +76,13 @@ class AttendanceService:
         except AttendancePersistenceError:
             return SessionResult(SessionOutcome.FAILED)
 
-    def open_or_resume_session(self, name):
-        return self._session_operation(self.sessions.open_or_resume, name, utc_datetime(self.clock()))
+    def create_session(self, name, session_date):
+        day = calendar_date(session_date)
+        return self._session_operation(self.sessions.open_or_resume, name, utc_datetime(self.clock()), day)
+
+    def open_or_resume_session(self, name, session_date=None):
+        """Compatibility: strict creation only, never implicit resumption."""
+        return self.create_session(name, session_date if session_date is not None else utc_datetime(self.clock()).astimezone().date())
 
     def resume_session(self, session_id):
         return self._session_operation(self.sessions.resume, session_id)
@@ -78,20 +90,35 @@ class AttendanceService:
     def rename_session(self, session_id, name):
         return self._session_operation(self.sessions.rename, session_id, name, renamed=True)
 
+    def edit_session(self, session_id, name, session_date):
+        return self._session_operation(self.sessions.edit, session_id, name, calendar_date(session_date), renamed=True)
+
+    def prepare_deletion(self, operation, session_id):
+        self.deletion_authorization.require()
+        if self.active_session() is not None:
+            raise SessionConflictError('Close the active session before deleting attendance data')
+        return self.sessions.prepare_deletion(operation, session_id, self.deletion_authorization)
+
+    def execute_deletion(self, preview):
+        self.deletion_authorization.require()
+        if self.active_session() is not None:
+            raise SessionConflictError('Close the active session before deleting attendance data')
+        return self.sessions.execute_deletion(preview, self.deletion_authorization)
+
     def session_count(self, session_id):
         return self.records.count_for_session(session_id)
 
     def records_between(self, start, end):
         records = self.records.list_between(start, end)
         # Two queries, not one query per table cell or record.
-        sessions = {session.id: session.name for session in self.sessions.list()}
+        sessions = {session.id: f'{session.name} · {session.session_date:%d/%m/%Y}' for session in self.sessions.list()}
         return tuple((record, sessions[record.attendance_session_id]) for record in records)
 
     def filtered_records(self, *, session_id=None, start=None, end=None):
         if session_id is None and start is not None and end is not None:
             return self.records_between(start, end)
         records = self.records.query(session_id=session_id, start=start, end=end)
-        sessions = {session.id: session.name for session in self.sessions.list()}
+        sessions = {session.id: f'{session.name} · {session.session_date:%d/%m/%Y}' for session in self.sessions.list()}
         return tuple((record, sessions[record.attendance_session_id]) for record in records)
 
     def register(self, person_id, expected_session_id, expected_activation_revision=1):

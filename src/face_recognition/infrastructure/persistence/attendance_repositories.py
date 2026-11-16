@@ -1,11 +1,14 @@
 """Explicit attendance operations, with no automatic writes from recognition."""
 
-from datetime import datetime
+from datetime import date, datetime
 from dataclasses import replace
+from hashlib import sha256
+import json
 
 from face_recognition.domain.models.attendance import (
     AttendanceRecord, AttendanceSession, DeviceSettings, Participant,
     DuplicateSessionNameError, SessionConflictError, SessionOutcome, SessionResult, StaleSessionActivationError,
+    DeletionOperation, DeletionPreview, DeletionResult, SyntheticDeletionAuthorization, calendar_date,
     normalize_session_name, positive_id, utc_datetime, validate_person_id,
 )
 from .attendance_database import AttendanceDatabase, AttendancePersistenceError, read_timestamp, timestamp
@@ -19,7 +22,8 @@ def _session(row):
     if row is None:
         return None
     result = AttendanceSession(row["id"], row["name"], read_timestamp(row["opened_at"]),
-        None if row["closed_at"] is None else read_timestamp(row["closed_at"]), row['activation_revision'])
+        None if row["closed_at"] is None else read_timestamp(row["closed_at"]), row['activation_revision'],
+        session_date=date.fromisoformat(row['session_date']))
     if result.name_key != row['name_key']:
         raise AttendancePersistenceError('Noncanonical session name key')
     return result
@@ -67,22 +71,36 @@ class SQLiteAttendanceSessionRepository:
     def __init__(self, database: AttendanceDatabase):
         self.database = database
 
-    def open(self, name: str, opened_at: datetime) -> AttendanceSession:
+    def open(self, name: str, opened_at: datetime, session_date: date | None = None) -> AttendanceSession:
+        """Strict creation; legacy callers default to the opening instant's local day."""
         name, key = normalize_session_name(name)
         opened_at = utc_datetime(opened_at)
+        day = calendar_date(session_date) if session_date is not None else opened_at.astimezone().date()
         with self.database.transaction(write=True) as connection:
-            if connection.execute('SELECT 1 FROM attendance_sessions WHERE name_key=?', (key,)).fetchone():
-                raise DuplicateSessionNameError('Session name already exists')
+            if connection.execute('SELECT 1 FROM attendance_sessions WHERE name_key=? AND session_date=?', (key, day.isoformat())).fetchone():
+                raise DuplicateSessionNameError('Session name and date already exist; select the existing event')
             if connection.execute("SELECT 1 FROM attendance_sessions WHERE closed_at IS NULL").fetchone():
                 raise SessionConflictError("An attendance session is already open")
-            cursor = connection.execute("INSERT INTO attendance_sessions (name, name_key, opened_at) VALUES (?,?,?)",
-                (name, key, timestamp(opened_at)))
-            return AttendanceSession(cursor.lastrowid, name, opened_at)
+            cursor = connection.execute("INSERT INTO attendance_sessions (name, name_key, opened_at,session_date) VALUES (?,?,?,?)",
+                (name, key, timestamp(opened_at), day.isoformat()))
+            return AttendanceSession(cursor.lastrowid, name, opened_at, session_date=day)
 
-    def get_by_name(self, name: str) -> AttendanceSession | None:
+    def get_by_name(self, name: str, session_date: date) -> AttendanceSession | None:
+        key = normalize_session_name(name)[1]
+        day = calendar_date(session_date)
+        with self.database.transaction() as connection:
+            return _session(connection.execute('SELECT * FROM attendance_sessions WHERE name_key=? AND session_date=?', (key, day.isoformat())).fetchone())
+
+    def names(self):
+        with self.database.transaction() as connection:
+            return tuple((row['name_key'], row['name']) for row in connection.execute(
+                'SELECT s.name_key,s.name FROM attendance_sessions s WHERE s.id=(SELECT min(x.id) FROM attendance_sessions x WHERE x.name_key=s.name_key) ORDER BY s.name_key'))
+
+    def dates_for_name(self, name):
         key = normalize_session_name(name)[1]
         with self.database.transaction() as connection:
-            return _session(connection.execute('SELECT * FROM attendance_sessions WHERE name_key=?', (key,)).fetchone())
+            return tuple(_session(row) for row in connection.execute(
+                'SELECT * FROM attendance_sessions WHERE name_key=? ORDER BY session_date,id', (key,)))
 
     @staticmethod
     def _activate(connection, session):
@@ -102,32 +120,28 @@ class SQLiteAttendanceSessionRepository:
                 raise LookupError('Attendance session does not exist')
             return self._activate(connection, session)
 
-    def open_or_resume(self, name: str, opened_at: datetime) -> SessionResult:
-        name, key = normalize_session_name(name)
-        opened_at = utc_datetime(opened_at)
-        with self.database.transaction(write=True) as connection:
-            session = _session(connection.execute('SELECT * FROM attendance_sessions WHERE name_key=?', (key,)).fetchone())
-            if session is not None:
-                return self._activate(connection, session)
-            if connection.execute('SELECT 1 FROM attendance_sessions WHERE closed_at IS NULL').fetchone():
-                raise SessionConflictError('Another attendance session is open')
-            cursor = connection.execute('INSERT INTO attendance_sessions (name, name_key, opened_at) VALUES (?,?,?)',
-                                        (name, key, timestamp(opened_at)))
-            return SessionResult(SessionOutcome.CREATED, AttendanceSession(cursor.lastrowid, name, opened_at))
+    def open_or_resume(self, name: str, opened_at: datetime, session_date=None) -> SessionResult:
+        """Compatibility entry point: creation only; resumption is always explicit by ID."""
+        return SessionResult(SessionOutcome.CREATED, self.open(name, opened_at, session_date))
 
     def rename(self, session_id: int, name: str) -> AttendanceSession:
+        return self.edit(session_id, name, None)
+
+    def edit(self, session_id: int, name: str, session_date: date | None) -> AttendanceSession:
         positive_id(session_id)
         name, key = normalize_session_name(name)
+        day = calendar_date(session_date) if session_date is not None else None
         with self.database.transaction(write=True) as connection:
             session = _session(connection.execute('SELECT * FROM attendance_sessions WHERE id=?', (session_id,)).fetchone())
             if session is None:
                 raise LookupError('Attendance session does not exist')
             if session.is_open:
                 raise SessionConflictError('Only closed sessions may be renamed')
-            if connection.execute('SELECT 1 FROM attendance_sessions WHERE name_key=? AND id<>?', (key, session_id)).fetchone():
-                raise DuplicateSessionNameError('Another session owns this name')
-            connection.execute('UPDATE attendance_sessions SET name=?, name_key=? WHERE id=?', (name, key, session_id))
-            return replace(session, name=name)
+            day = day if day is not None else session.session_date
+            if connection.execute('SELECT 1 FROM attendance_sessions WHERE name_key=? AND session_date=? AND id<>?', (key, day.isoformat(), session_id)).fetchone():
+                raise DuplicateSessionNameError('Another session owns this name and date')
+            connection.execute('UPDATE attendance_sessions SET name=?, name_key=?,session_date=? WHERE id=?', (name, key, day.isoformat(), session_id))
+            return replace(session, name=name, session_date=day)
 
     def get(self, session_id: int) -> AttendanceSession | None:
         positive_id(session_id)
@@ -165,6 +179,57 @@ class SQLiteAttendanceSessionRepository:
                 SELECT s.*, count(r.id) AS attendance_count FROM attendance_sessions s
                 LEFT JOIN attendance_records r ON r.attendance_session_id=s.id
                 GROUP BY s.id ORDER BY s.opened_at, s.id'''))
+
+    def _deletion_preview(self, connection, operation, session_id):
+        if not isinstance(operation, DeletionOperation):
+            raise ValueError('Unknown deletion operation')
+        positive_id(session_id)
+        if connection.execute('SELECT 1 FROM attendance_sessions WHERE closed_at IS NULL').fetchone():
+            raise SessionConflictError('Close every active session before deleting attendance data')
+        selected = connection.execute('SELECT * FROM attendance_sessions WHERE id=?', (session_id,)).fetchone()
+        if selected is None:
+            raise LookupError('Session no longer exists; prepare a new confirmation')
+        rows = connection.execute('SELECT * FROM attendance_sessions WHERE name_key=? ORDER BY session_date,id',
+            (selected['name_key'],)).fetchall() if operation is DeletionOperation.NAME else [selected]
+        identifiers = tuple(row['id'] for row in rows)
+        placeholders = ','.join('?' for _ in identifiers)
+        records = connection.execute(f'SELECT * FROM attendance_records WHERE attendance_session_id IN ({placeholders}) ORDER BY id', identifiers).fetchall()
+        if operation is DeletionOperation.CLEAR and not records:
+            raise ValueError('There are no attendance records to clear')
+        counts = {identifier: 0 for identifier in identifiers}
+        for record in records:
+            counts[record['attendance_session_id']] += 1
+        # Full row identities AND values, not merely counts; AUTOINCREMENT plus
+        # non-reuse guards prevent delete/reinsert ABA even with identical values.
+        payload = (str(self.database.path), operation.value, session_id,
+                   tuple(tuple(row) for row in rows), tuple(tuple(row) for row in records))
+        digest = sha256(json.dumps(payload, ensure_ascii=True, separators=(',', ':')).encode()).hexdigest()
+        return DeletionPreview(operation, session_id, tuple((_session(row), counts[row['id']]) for row in rows), digest)
+
+    def prepare_deletion(self, operation, session_id, authorization):
+        if not isinstance(authorization, SyntheticDeletionAuthorization):
+            raise PermissionError('Synthetic deletion authorization is required')
+        authorization.require()
+        with self.database.transaction() as connection:
+            return self._deletion_preview(connection, operation, session_id)
+
+    def execute_deletion(self, preview, authorization):
+        if not isinstance(authorization, SyntheticDeletionAuthorization):
+            raise PermissionError('Synthetic deletion authorization is required')
+        authorization.require()
+        if not isinstance(preview, DeletionPreview):
+            raise ValueError('A confirmed deletion preview is required')
+        with self.database.transaction(write=True) as connection:
+            actual = self._deletion_preview(connection, preview.operation, preview.target_session_id)
+            if actual != preview:
+                raise ValueError('The affected data changed; prepare a new confirmation')
+            identifiers = tuple(session.id for session, _ in actual.sessions)
+            placeholders = ','.join('?' for _ in identifiers)
+            records = connection.execute(f'DELETE FROM attendance_records WHERE attendance_session_id IN ({placeholders})', identifiers).rowcount
+            sessions = 0
+            if preview.operation is not DeletionOperation.CLEAR:
+                sessions = connection.execute(f'DELETE FROM attendance_sessions WHERE id IN ({placeholders})', identifiers).rowcount
+            return DeletionResult(sessions, records)
 
 
 class SQLiteAttendanceRecordRepository:

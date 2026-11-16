@@ -43,7 +43,7 @@ class SessionManagementTests(unittest.TestCase):
         first = self.sessions.open('  Optimizacio\u0301n   semanal\t ', NOW)
         self.assertEqual(first.name, 'Optimización semanal')
         for name in ('OPTIMIZACIÓN SEMANAL', ' optimización   semanal ', 'Optimizacio\u0301n semanal'):
-            self.assertEqual(self.sessions.get_by_name(name), first)
+            self.assertEqual(self.sessions.get_by_name(name, first.session_date), first)
         self.assertNotEqual(normalize_session_name('Inglés')[1], normalize_session_name('Ingles')[1])
         self.assertEqual(normalize_session_name('Straße')[1], normalize_session_name('STRASSE')[1])
         for bad in ('', ' \t\n', '\x00', 'A\x1bB', 'A\u202eB', 'A\ud800B', None):
@@ -56,11 +56,11 @@ class SessionManagementTests(unittest.TestCase):
         first = created.session
         record, _ = self.records.add('p001', first.id, NOW)
         for _ in range(2):
-            active = self.sessions.open_or_resume(' ORIGINAL ', NOW + timedelta(days=1))
+            active = self.sessions.resume(first.id)
             self.assertIs(active.outcome, SessionOutcome.ALREADY_ACTIVE)
             self.assertEqual(active.session.activation_revision, 1)
         self.sessions.close(first.id, NOW + timedelta(hours=1))
-        resumed = self.sessions.open_or_resume('original', NOW + timedelta(days=1))
+        resumed = self.sessions.resume(first.id)
         self.assertIs(resumed.outcome, SessionOutcome.RESUMED)
         self.assertEqual(resumed.session.id, first.id)
         self.assertEqual(resumed.session.name, first.name)
@@ -84,7 +84,7 @@ class SessionManagementTests(unittest.TestCase):
         first = self.sessions.open('First', NOW)
         self.sessions.close(first.id, NOW)
         other = self.sessions.open('Other', NOW)
-        for operation in (lambda: self.sessions.resume(first.id), lambda: self.sessions.open_or_resume('First', NOW),
+        for operation in (lambda: self.sessions.resume(first.id), lambda: self.sessions.resume(first.id),
                           lambda: self.sessions.open_or_resume('Third', NOW)):
             with self.assertRaises(SessionConflictError): operation()
         with self.assertRaises(DuplicateSessionNameError): self.sessions.open(' FIRST ', NOW)
@@ -111,8 +111,8 @@ class SessionManagementTests(unittest.TestCase):
         self.assertIs(result.outcome, SessionOutcome.RENAMED)
         self.assertEqual(result.session.id, first.id)
         self.assertEqual(self.records.count_for_session(first.id), 1)
-        self.assertIsNone(self.sessions.get_by_name('First'))
-        self.assertEqual(self.sessions.get_by_name('renamed'), result.session)
+        self.assertIsNone(self.sessions.get_by_name('First', first.session_date))
+        self.assertEqual(self.sessions.get_by_name('renamed', first.session_date), result.session)
         self.assertEqual(self.sessions.current(), other)
 
     def test_revision_is_required_by_final_transaction_even_for_duplicate(self):
@@ -156,7 +156,10 @@ class SessionManagementTests(unittest.TestCase):
             barrier = Barrier(2)
             def activate(_):
                 barrier.wait(timeout=3)
-                return self.sessions.open_or_resume(name, NOW)
+
+                if exists: return self.sessions.resume(previous.id)
+                try: return self.sessions.open_or_resume(name, NOW)
+                except DuplicateSessionNameError: return self.sessions.resume(self.sessions.get_by_name(name, NOW.astimezone().date()).id)
             with ThreadPoolExecutor(max_workers=2) as executor:
                 results = list(executor.map(activate, range(2)))
             self.assertEqual({r.outcome for r in results},
@@ -175,7 +178,7 @@ class SessionManagementTests(unittest.TestCase):
         self.assertEqual(self.records.query(session_id=first.id), (a, b))
         self.assertEqual(self.records.query(start=NOW, end=NOW+timedelta(days=1)), (a,))
         self.assertEqual(self.records.query(session_id=first.id, start=NOW+timedelta(days=1), end=NOW+timedelta(days=2)), (b,))
-        self.assertEqual(self.service.filtered_records(session_id=second.id), ((c, 'Second'),))
+        self.assertEqual(self.service.filtered_records(session_id=second.id), ((c, f'Second · {second.session_date:%d/%m/%Y}'),))
         with self.assertRaises(ValueError): self.records.query()
         with self.assertRaises(ValueError): self.records.query(start=NOW)
         with patch.object(self.sessions.database, 'transaction', wraps=self.db.transaction) as queries:
@@ -223,7 +226,7 @@ class AttendanceMigrationTests(unittest.TestCase):
         self.assertEqual(sessions.get(7).name_key, 'optimización')
         self.assertEqual(SQLiteDeviceSettingsRepository(self.db).get().standby_timeout_seconds, 120)
         with self.db.transaction() as c:
-            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], 2)
+            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], 3)
             self.assertEqual(c.execute('PRAGMA foreign_keys').fetchone()[0], 1)
             self.assertEqual(c.execute('PRAGMA foreign_key_check').fetchall(), [])
         after = self.snapshot()

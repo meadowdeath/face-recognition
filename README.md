@@ -540,8 +540,8 @@ duplicate/invalid identifiers and never inspect models to discover participants.
 There are no names, identity mappings or enrollment operations. Registration of
 an identifier does not establish consent.
 
-Use PIN `123456`, enter `Sesiones`, supply a nonempty name and select
-`Abrir o reanudar sesión`.
+Use PIN `123456`, enter `Sesiones → Crear sesión`, supply a name and an explicit
+calendar date, then select `Crear e iniciar sesión`.
 Return to `Asistencia`: select `p001 · Aceptar` and click `Simular decisión`.
 Repeat for duplicate attendance; select `UNKNOWN · Rechazar` for no write, or
 `p003 · Aceptar` to test an unregistered identifier (leave p003 unregistered).
@@ -555,37 +555,104 @@ history, stops eligibility and clears transient results. Exiting the application
 does **not** close a session. Restart restores any open session, initially in
 Standby. Temporary sessions remain available when no database is supplied.
 
-An attendance session is **one attendance event**, not a recurring course/group.
-Names are unique under a shared domain normalization: Unicode NFC, leading/trailing
-whitespace removal, internal whitespace collapse and Unicode `casefold()` (NFC
-again after folding). Display case is retained separately from the comparison
-`name_key`; accents remain meaningful (`Inglés` differs from `Ingles`). Whitespace
-controls such as tabs/newlines collapse to spaces; other control, format and
-surrogate characters are rejected. SQLite `NOCASE` is not used for this policy.
+An attendance session is **one event identified by normalized name and explicit
+calendar date**. `Optimización` on 2026-11-16 and on 2026-11-23 are different
+sessions; a participant can attend each once. Different names can share a date.
+Name normalization remains Unicode NFC, whitespace trim/collapse, case folding
+and NFC again; display case and accents are preserved (`Inglés` differs from
+`Ingles`). Whitespace controls collapse; other controls/format characters are
+rejected. SQLite `NOCASE` is not used.
 
-A new name creates an event. Entering an existing closed name resumes that same
-event, preserving ID, original opening time, name, records and original attendance
-timestamps. Selecting an already active matching event is an idempotent success;
-it never increments the revision. A different active session prevents activation.
-Closing and then resuming changes `closed_at` back to NULL and atomically increments
-`activation_revision`. `closed_at` describes current closure state, not an audit
-history; no activation-history table is added. Use distinct names for recurring
-events, for example `Optimización - 2026-11-16` and `Optimización - 2026-11-23`.
-Reusing a name intentionally resumes the same event and existing attendance
-continues to count as a duplicate.
+The existing Sesiones screen has three tabs, with active-session information and
+`Cerrar sesión activa` accessible above them:
 
-The compact stored-session selector shows name, state and count; its underlying
-value is the immutable database ID. `Reanudar sesión seleccionada` resumes a
-closed selection only when no other event is active. `Renombrar sesión` opens a
-themed confirmation dialog, is available only for closed selections and rejects
-names owned by another session. Display-case changes with the same key are allowed.
-Renaming preserves IDs/history and refreshes selectors/filter names. The session
-controls scroll vertically on the 800 × 480 display. Counts are loaded with one
-grouped query rather than one query per session; refresh preserves selection IDs.
+- **Crear sesión:** name and `QDateEdit` (today by default), then `Crear e iniciar
+  sesión`. Creation always inserts a new event. An existing name/date reports
+  `Ya existe una sesión con ese nombre y fecha. Selecciónala en Gestionar sesiones.`
+  It never resumes implicitly. Another active event blocks creation.
+- **Gestionar sesiones:** linked name/date selectors. Dates list only events for
+  the selected normalized name; the selected event ID is authoritative. The
+  summary shows name, event date, state and count. `Reanudar sesión` preserves ID,
+  event date, original opening time and all attendance/timestamps, clears
+  `closed_at` and advances the activation revision only on a closed-to-open
+  transition. Existing attendance remains a duplicate for that event. `Editar
+  sesión` provides name/date inputs and explicit `Guardar cambios`/`Cancelar`;
+  editing is restricted to closed sessions and rejects name/date collisions.
+- **Eliminar sesiones:** three targeted operations described below, disabled by
+  default. The scope mirrors the management selection with name, date and count.
+
+Session dates are Python `datetime.date` values stored as `YYYY-MM-DD`; they are
+not opening timestamps or registration timestamps. Editing the event date never
+rewrites `registered_at`. Renaming/editing changes only the selected event, not
+other dates with the same normalized name. Selectors preserve event IDs on refresh;
+counts use one grouped query. `closed_at` is current closure state, not a full
+activation audit log. All four launch modes, Standby, theme handling, preview FPS
+and camera lifecycle remain unchanged. No global reset, session activation-history
+table or production authentication is added.
+
+### Targeted synthetic deletion only
+
+Deletion is available only when explicitly launched with an isolated, disposable
+synthetic database and **no model/live recording**:
+
+```bash
+QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
+  --attendance-db "$HOME/.local/share/face-recognition/disposable-synthetic.sqlite3" \
+  --enable-synthetic-session-deletion
+```
+
+On Windows use `--windowed` and the same database/deletion flags with native Qt.
+`--enable-synthetic-session-deletion` requires `--attendance-db` and rejects
+`--model-dir` or `--enable-attendance-recording`. Service and repository checks
+also enforce the synthetic authorization context; hiding buttons is not the only
+boundary. The flag does not establish database provenance, consent or production
+access control. Never select an operational database. There is no unrestricted
+deletion CLI.
+
+| Action | Deleted | Preserved |
+| --- | --- | --- |
+| `Vaciar asistencias de esta sesión` | Records for the selected name/date event | That event's ID/name/date/opening time; other events; participants/settings |
+| `Eliminar sesión de esta fecha` | Selected event and its records | Other dates and names; participants/settings |
+| `Eliminar sesiones de todas las fechas` | All events and records for the selected normalized name | Other names and their records; participants/settings |
+
+All three operations reject while **any** session is active, in both service and
+transaction checks. Empty target scopes are disabled. Every action prepares a
+read-only preview and opens its own themed confirmation with actual names, dates,
+affected/deleted session counts, record counts, preservation explanation and an
+application-irreversibility warning. All-dates summaries list every date/count
+inside a scroll area. `Cancelar` is the default; Escape or closing the dialog
+writes nothing. A specific destructive button is required to execute.
+
+Confirmed execution takes `BEGIN IMMEDIATE`, rechecks active sessions and compares
+the exact selected scope and full session/record snapshot against the preview,
+including row identities and values, not just totals. Changed records, equal-count
+replacements, edited targets or added dates abort and require a new confirmation.
+Records are deleted first, then sessions where applicable, respecting the existing
+`ON DELETE RESTRICT`. Both changes commit together or roll back. Actual deleted
+counts are reported and selectors/Records filters refresh. No database file is
+replaced or removed, and no participant, setting, credential, model or biometric
+file is deleted. Clearing records preserves the event for later resumption and
+fresh attendance.
+
+The two integer identity tables use SQLite **AUTOINCREMENT** and guards against
+explicit reuse/mutation of IDs. SQLite's internal `sqlite_sequence` high-water
+marks survive targeted deletion, including deletion of the last event/record.
+Never reset them manually. A deleted event recreated with the same name/date has
+a new ID; stale recognition cannot target it. The same rule prevents a newly
+inserted record with identical values from masquerading as a confirmed old record.
+Activation revisions, worker generations, temporal decision sequences, freshness
+and face-segment checks remain required. Clearing then resuming still advances
+activation revision, rejecting old decisions. No recognition math changes.
+
+Global reset, production administrator authentication/reauthentication and safe
+system power controls remain Phase 6 work. This prototype's demonstration PIN is
+not production authorization. Administrative attendance deletion is distinct from
+biometric-data suppression and does not securely erase storage pages, journals,
+backups or flash.
 
 `AttendanceService` coordinates session operations, participant eligibility,
 duplicate results, grouped counts and record filters over the existing repositories.
-SQLite schema version **2** preserves all four business tables. New registrations show `Asistencia
+SQLite schema version **3** preserves all four business tables. New registrations show `Asistencia
 registrada`; duplicates show `Asistencia ya registrada` with the **original**
 registration time. Missing participants, closed sessions and storage failures
 produce distinct Spanish outcomes, never false success or temporary fallback.
@@ -649,7 +716,7 @@ Focused Raspberry Pi validation, synthetic fixtures only (no training tests):
 ```bash
 QT_QPA_PLATFORM=offscreen PYTHONPATH=src python -m unittest \
   tests.unit.test_attendance_persistence tests.unit.test_attendance_service \
-  tests.unit.test_attendance_sessions \
+  tests.unit.test_attendance_sessions tests.unit.test_session_dates_deletion \
   tests.unit.test_gui_attendance tests.unit.test_kiosk_gui \
   tests.unit.test_gui_recognition tests.unit.test_live_open_set_recognition \
   tests.integration.test_live_open_set_cli
@@ -659,7 +726,7 @@ Phase 4's 27 persistence checks passed on Raspberry Pi, including POSIX
 permissions. Its complete Pi suite was manually interrupted after about 20
 minutes; it is **not** recorded as a full-suite pass. The initial Phase 5 focused
 suite (114 checks) and 18 functional acceptance checks subsequently passed on Pi.
-The session-resumption/migration extensions still require manual Pi validation.
+The earlier session-management revision was validated on Pi; this dated-session/deletion revision still requires manual Pi validation.
 Windows development should also run `python -m unittest discover
 -s tests` with `PYTHONPATH=src` and the Qt offscreen backend.
 
@@ -685,30 +752,38 @@ database.initialize()
 settings = SQLiteDeviceSettingsRepository(database).get()
 ```
 
-Initialization uses `PRAGMA user_version`: version 0 creates the latest schema
-**2** directly; version 1 migrates transactionally; version 2 validates and reopens
-without modifying data. Singleton defaults (`dark`, 30 seconds) are inserted only
-for a new database. Unsupported versions, nonempty unversioned databases and
-incomplete/weakened schemas fail explicitly; no reset or destructive recovery is
-performed. Failed new creation may leave an empty database file/private directory.
+Initialization uses `PRAGMA user_version`: version 0 creates schema **3** directly;
+version 1 follows its supported normalization/collision migration to v2 and then
+v3; version 2 migrates to v3; version 3 validates and reopens. Unsupported versions,
+nonempty unversioned databases and incomplete/weakened schemas fail explicitly.
+Defaults are inserted only for a new database. No automatic recovery/reset occurs.
 
-The v1→v2 migration validates the genuine v1 schema, computes all normalized keys
-and checks collisions **before** altering columns. It uses `ALTER TABLE` without
-table replacement or disabling foreign keys. It backfills keys and revision 1,
-installs the same uniqueness/validity constraints as new databases, checks integrity
-and foreign keys, then sets version 2 and commits. IDs, stored display names,
-timestamps, participants, records, settings and file permissions are preserved.
-Any failure rolls back schema/data/version changes. Equivalent-name collisions or
-invalid old names require deliberate, controlled administrative maintenance of the
-v1 database before retrying. No sessions are automatically merged, renamed, deleted
-or discarded, and changing the version number is not a repair. No destructive
-maintenance UI is provided under the demonstration PIN.
+Migration to v3 infers each event date from its original aware UTC `opened_at`
+converted using the device's local timezone rules for that instant. The
+`AttendanceDatabase(..., migration_timezone=tzinfo)` boundary allows deterministic
+synthetic timezone tests; normal GUI initialization uses the OS local timezone.
+These dates are **inferred** and can be corrected by editing closed sessions.
+Stored names, including date-looking text, are not parsed or rewritten.
+
+SQLite cannot ALTER an integer primary key into AUTOINCREMENT. The v2→v3 migration
+therefore rebuilds only sessions and their dependent records inside one transaction,
+with foreign keys **ON** throughout: copy parent/child rows preserving IDs, drop
+old child before old parent, rename the copied tables and recreate constraints.
+This migration-only rebuild is necessary for non-reusing identities; destructive
+session actions themselves use only targeted DELETE statements, never DROP/reset.
+There remain four business tables; `sqlite_sequence` is SQLite's internal allocator.
+New and migrated databases enforce the same date/composite-uniqueness/identity
+constraints. Original timestamps, revisions, participants, records, settings and
+file protection are preserved. Integrity/FK checks precede the version update and
+commit; any failure rolls back the entire migration. Genuine v1 and v2 schema
+fixtures test this path. Existing v1 normalized-name collisions still require
+deliberate offline maintenance; they are never automatically merged or discarded.
 
 | Table | Columns and principal constraints |
 | --- | --- |
 | `participants` | `person_id TEXT PRIMARY KEY NOT NULL`, `created_at TEXT NOT NULL` |
-| `attendance_sessions` | `id INTEGER PRIMARY KEY`, nonempty `name`, unique nonempty `name_key`, `opened_at NOT NULL`, nullable `closed_at >= opened_at`, positive integer `activation_revision` (default 1) |
-| `attendance_records` | `id INTEGER PRIMARY KEY`, `person_id NOT NULL` FK, `attendance_session_id NOT NULL` FK, `registered_at NOT NULL`; unique `(attendance_session_id, person_id)` |
+| `attendance_sessions` | `id INTEGER PRIMARY KEY AUTOINCREMENT`, nonempty `name`/`name_key`, valid NOT NULL `session_date`, unique `(name_key, session_date)`, UTC opening/closure times, positive `activation_revision` |
+| `attendance_records` | `id INTEGER PRIMARY KEY AUTOINCREMENT`, `person_id NOT NULL` FK, `attendance_session_id NOT NULL` FK, `registered_at NOT NULL`; unique `(attendance_session_id, person_id)` |
 | `device_settings` | `id INTEGER PRIMARY KEY CHECK(id=1)`, `theme` limited to `dark/light`, integer timeout limited to `30/60/120`; both preferences NOT NULL |
 
 ```mermaid
@@ -754,9 +829,10 @@ validation and attendance insertion hold one write reservation, so concurrent
 closure/deletion cannot slip between them. Reads use short consistent transactions.
 Successful operations commit; failures roll back; connections always close.
 
-Session repositories also provide `get_by_name`, atomic `open_or_resume`, `resume`,
-`rename`, and grouped `list_with_counts`. Strict `open` still rejects existing
-names. The service exposes these operations as focused outcomes (created, resumed,
+Session repositories also provide name/date lookup, distinct names and available
+dates, explicit `resume`, closed-event `edit`, and grouped `list_with_counts`.
+Creation rejects existing name/date pairs. Legacy `open_or_resume` entry points
+are adapted to strict creation only; they never resume automatically. The service exposes these operations as focused outcomes (created, resumed,
 already active, conflicting active session, duplicate name, missing session, failure).
 The repository generates the canonical Unicode key; database uniqueness and
 INSERT/UPDATE triggers reject missing/empty/NUL-containing keys. An empty column

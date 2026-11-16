@@ -25,9 +25,10 @@ from face_recognition.infrastructure.persistence.attendance_repositories import 
 AVAILABLE = importlib.util.find_spec('PyQt5') is not None
 if AVAILABLE:
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-    from PyQt5.QtCore import QDate, QTimeZone, QTimer
+    from PyQt5.QtCore import QDate, QTimeZone, QTimer, Qt
     from PyQt5.QtTest import QTest
-    from PyQt5.QtWidgets import QApplication, QScrollArea
+    from PyQt5.QtWidgets import QApplication, QScrollArea, QLineEdit, QDateEdit, QLabel, QPushButton
+    from face_recognition.domain.models.attendance import DeletionOperation, SyntheticDeletionAuthorization
     from face_recognition.application.live_recognition import LiveRecognitionView
     from face_recognition.presentation.gui.attendance import AttendanceIntegration, local_day_range
     from face_recognition.presentation.gui.window import KioskWindow, LifecycleState
@@ -61,10 +62,13 @@ class GuiAttendanceTests(unittest.TestCase):
         self.people.add('p001', self.now)
         self.people.add('p002', self.now)
 
-    def window(self, *, live=False, recording=True, failed=False):
+    def window(self, *, live=False, recording=True, failed=False, deletion=False):
         w = KioskWindow(live_mode=live, persistent_attendance=True)
+        if deletion:
+            self.service.deletion_authorization = SyntheticDeletionAuthorization(True, True, False, False)
         attendance = AttendanceIntegration(w, None if failed else self.service,
-            recording_enabled=recording, initialization_error='Base de datos no disponible.' if failed else '')
+            recording_enabled=recording, initialization_error='Base de datos no disponible.' if failed else '',
+            synthetic_deletion_enabled=deletion)
         w.show()
         def cleanup():
             w.close()
@@ -156,7 +160,7 @@ class GuiAttendanceTests(unittest.TestCase):
             w.navigate('records')
             self.assertEqual(w.records_table.rowCount(), 1)
             self.assertEqual(w.records_table.item(0, 0).text(), 'p001')
-            self.assertEqual(w.records_table.item(0, 1).text(), 'Historical synthetic')
+            self.assertEqual(w.records_table.item(0, 1).text(), f'Historical synthetic · {session.session_date:%d/%m/%Y}')
             count = query.call_count
             QTest.qWait(80)
             self.assertEqual(query.call_count, count)
@@ -178,7 +182,7 @@ class GuiAttendanceTests(unittest.TestCase):
         self.assertIsNone(w2.attendance_session_id)
         self.assertIn('nombre', w2.session_hint.text())
         w2.session_name.setText('Synthetic')
-        with patch.object(self.service, 'open_or_resume_session', side_effect=AttendancePersistenceError('PRIVATE')):
+        with patch.object(self.service, 'create_session', side_effect=AttendancePersistenceError('PRIVATE')):
             w2.session_start.click()
         self.assertFalse(w2.session_open)
         self.assertNotIn('PRIVATE', w2.session_hint.text())
@@ -362,7 +366,7 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
         self.assertIn('Sesión creada correctamente', w.session_hint.text())
         w.session_name.setText(' OPTIMIZACIÓN - 2026-11-16 ')
         w.session_start.click()
-        self.assertEqual(w.session_hint.text(), 'La sesión ya está activa.')
+        self.assertIn('Ya existe una sesión con ese nombre y fecha', w.session_hint.text())
         self.assertEqual(w.attendance_activation_revision, 1)
         self.assertFalse(w.session_resume.isEnabled())
         self.assertFalse(w.session_rename.isEnabled())
@@ -382,6 +386,9 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
         w.session_close.click()
         w.session_name.setText('optimización - 2026-11-16')
         w.session_start.click()
+        self.assertIsNone(w.attendance_activation_revision)
+        self.assertIn('Ya existe una sesión con ese nombre y fecha', w.session_hint.text())
+        w.session_resume.click()
         self.assertEqual(w.attendance_activation_revision, 3)
         self.assertEqual(len(self.sessions.list()), 1)
         w.close()
@@ -403,10 +410,10 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
         self.assertTrue(w.session_rename.isEnabled())
         def respond(name, accepted):
             dialog = self.app.activeModalWidget()
-            self.assertEqual(dialog.windowTitle(), 'Renombrar sesión')
-            self.assertEqual(dialog.textValue(), 'First')
+            self.assertEqual(dialog.windowTitle(), 'Editar sesión')
+            self.assertEqual(dialog.findChild(QLineEdit, 'edit_session_name').text(), 'First')
             self.assertEqual(dialog.styleSheet(), w.styleSheet())
-            dialog.setTextValue(name)
+            dialog.findChild(QLineEdit, 'edit_session_name').setText(name)
             dialog.accept() if accepted else dialog.reject()
         for name, accepted, expected in (('Cancelled', False, 'First'), ('OTHER', True, 'First'), ('Renamed', True, 'Renamed')):
             QTimer.singleShot(0, lambda n=name, a=accepted: respond(n, a))
@@ -414,11 +421,11 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
             self.assertEqual(self.sessions.get(first.id).name, expected)
         self.assertEqual(w.stored_sessions.currentData(), first.id)
         self.assertEqual(w.records_session.currentData(), first.id)
-        self.assertEqual(w.records_session.currentText(), 'Renamed')
+        self.assertEqual(w.records_session.currentText(), f'Renamed · {first.session_date:%d/%m/%Y}')
         w.records_date.setDate(self.day)
         w.authenticated = True
         w.navigate('records')
-        self.assertEqual(w.records_table.item(0, 1).text(), 'Renamed')
+        self.assertEqual(w.records_table.item(0, 1).text(), f'Renamed · {first.session_date:%d/%m/%Y}')
         self.assertEqual(self.records.count_for_session(first.id), 1)
 
     def test_session_and_date_filters_full_history_and_unrestricted_guard(self):
@@ -487,3 +494,166 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
         self.assertGreater(self.live_ui.generation, previous)
         self.assertIsNone(self.attendance.confirmation)
         self.assertEqual(self.live_ui.session_revision, 2)
+
+    def dated_events(self):
+        events = []
+        for name, day, person in (('Optimización', self.day.toPyDate(), 'p001'),
+                                  ('optimización', self.day.addDays(7).toPyDate(), 'p002'),
+                                  ('Inglés', self.day.toPyDate(), 'p001')):
+            session = self.service.create_session(name, day).session
+            self.service.register(person, session.id)
+            self.service.close_session(session.id)
+            events.append(self.sessions.get(session.id))
+        return events
+
+    def select_event(self, w, event):
+        w.stored_names.setCurrentIndex(w.stored_names.findData(event.name_key))
+        w.stored_sessions.setCurrentIndex(w.stored_sessions.findData(event.id))
+
+    def test_dated_creation_tabs_linked_selectors_and_edit_date(self):
+        w, controller = self.window()
+        self.assertEqual([w.session_tabs.tabText(i) for i in range(3)], ['Crear sesión', 'Gestionar sesiones', 'Eliminar sesiones'])
+        self.assertEqual(w.session_create_date.date(), QDate.currentDate())
+        self.assertEqual(w.session_start.text(), 'Crear e iniciar sesión')
+        w.session_name.setText('Optimización')
+        w.session_create_date.setDate(self.day)
+        w.session_start.click()
+        first = self.sessions.current()
+        self.service.register('p001', first.id)
+        w.session_close.click()
+        w.session_start.click()
+        self.assertIn('Ya existe una sesión con ese nombre y fecha', w.session_hint.text())
+        self.assertIsNone(w.attendance_session_id)
+        w.session_create_date.setDate(self.day.addDays(7))
+        w.session_start.click()
+        second = self.sessions.current()
+        w.session_close.click()
+        self.assertEqual(w.stored_names.count(), 1)
+        self.assertEqual(w.stored_sessions.count(), 2)
+        self.select_event(w, first)
+        def edit():
+            dialog = self.app.activeModalWidget()
+            dialog.findChild(QLineEdit, 'edit_session_name').setText('Aplicada')
+            dialog.findChild(QDateEdit, 'edit_session_date').setDate(self.day.addDays(1))
+            dialog.accept()
+        QTimer.singleShot(0, edit)
+        w.session_rename.click()
+        actual = self.sessions.get(first.id)
+        self.assertEqual(actual.session_date, self.day.addDays(1).toPyDate())
+        self.assertEqual(actual.opened_at, first.opened_at)
+        self.assertEqual(self.records.get(first.id, 'p001').registered_at, self.now)
+        self.assertEqual(w.stored_names.count(), 2)
+        self.assertEqual(w.stored_sessions.currentData(), first.id)
+        self.assertIn('Aplicada', w.records_session.itemText(w.records_session.findData(first.id)))
+        self.assertEqual(self.sessions.get(second.id).session_date, second.session_date)
+
+    def test_destructive_dialog_cancel_close_escape_and_all_scope_text(self):
+        first, second, other = self.dated_events()
+        w, controller = self.window(deletion=True)
+        self.select_event(w, first)
+        expected = (
+            ('Vaciar asistencias de esta sesión', 'Vaciar asistencias', 0, 1),
+            ('Eliminar sesión de esta fecha', 'Eliminar sesión', 1, 1),
+            ('Eliminar sesiones de todas las fechas', 'Eliminar todas las fechas', 2, 2),
+        )
+        for mode in ('cancel', 'close', 'escape'):
+            for index, (title, confirm, sessions, records) in enumerate(expected):
+                def respond(i=index, t=title, c=confirm, sc=sessions, rc=records):
+                    dialog = self.app.activeModalWidget()
+                    self.assertEqual(dialog.windowTitle(), t)
+                    text = dialog.findChild(QLabel, 'deletion_summary').text()
+                    self.assertIn(first.name, text)
+                    self.assertIn(first.session_date.strftime('%d/%m/%Y'), text)
+                    self.assertIn(f'Sesiones que se eliminarán: {sc}', text)
+                    self.assertIn(f'Asistencias que se eliminarán: {rc}', text)
+                    self.assertIn('participantes y las preferencias se conservarán', text)
+                    self.assertIn('no se puede deshacer', text)
+                    if i == 2:
+                        self.assertIn(second.session_date.strftime('%d/%m/%Y'), text)
+                        self.assertIn('Todas las fechas', text)
+                    buttons = {b.text(): b for b in dialog.findChildren(QPushButton)}
+                    self.assertTrue(buttons['Cancelar'].isDefault())
+                    self.assertFalse(buttons[c].isDefault())
+                    self.assertEqual(len(self.sessions.list()), 3)
+                    if mode == 'cancel': buttons['Cancelar'].click()
+                    elif mode == 'close': dialog.close()
+                    else: QTest.keyClick(dialog, Qt.Key_Escape)
+                QTimer.singleShot(0, respond)
+                w.deletion_buttons[index].click()
+                self.assertEqual(len(self.sessions.list()), 3)
+                self.assertEqual(sum(c for _, c in self.sessions.list_with_counts()), 3)
+
+    def test_all_three_confirmed_operations_refresh_scopes_and_records(self):
+        first, second, other = self.dated_events()
+        w, controller = self.window(deletion=True)
+        self.select_event(w, first)
+        w.records_date.setDate(self.day)
+        w.records_session.setCurrentIndex(w.records_session.findData(first.id))
+        def accept(): self.app.activeModalWidget().accept()
+        QTimer.singleShot(0, accept)
+        w.deletion_buttons[0].click()
+        self.assertIsNotNone(self.sessions.get(first.id))
+        self.assertEqual(self.records.count_for_session(first.id), 0)
+        self.assertEqual(w.records_table.rowCount(), 0)
+        self.assertEqual(w.stored_sessions.currentData(), first.id)
+        self.assertFalse(w.deletion_buttons[0].isEnabled())
+        QTimer.singleShot(0, accept)
+        w.deletion_buttons[1].click()
+        self.assertIsNone(self.sessions.get(first.id))
+        self.assertEqual(w.stored_sessions.findData(first.id), -1)
+        self.assertEqual(w.records_session.findData(first.id), -1)
+        self.select_event(w, second)
+        QTimer.singleShot(0, accept)
+        w.deletion_buttons[2].click()
+        self.assertEqual(w.stored_names.findData(first.name_key), -1)
+        self.assertEqual(self.records.count_for_session(other.id), 1)
+        self.assertEqual(len(self.people.list()), 2)
+        self.assertIsNotNone(self.sessions.get(other.id))
+        self.assertIn('Sesiones eliminadas: 1 · Asistencias eliminadas: 1', w.session_hint.text())
+
+    def test_changed_confirmation_aborts_even_when_record_count_is_unchanged(self):
+        first, _, _ = self.dated_events()
+        w, _ = self.window(deletion=True)
+        self.select_event(w, first)
+        def change_and_accept():
+            record = self.records.get(first.id, 'p001')
+            with self.db.transaction(write=True) as c:
+                c.execute('DELETE FROM attendance_records WHERE id=?', (record.id,))
+                from face_recognition.infrastructure.persistence.attendance_database import timestamp
+                c.execute('INSERT INTO attendance_records (person_id,attendance_session_id,registered_at) VALUES (?,?,?)',
+                          ('p002', first.id, timestamp(record.registered_at)))
+            self.app.activeModalWidget().accept()
+        QTimer.singleShot(0, change_and_accept)
+        w.deletion_buttons[1].click()
+        self.assertIsNotNone(self.sessions.get(first.id))
+        self.assertEqual(self.records.count_for_session(first.id), 1)
+        self.assertIn('datos cambiaron', w.session_hint.text())
+
+    def test_synthetic_deletion_requires_opt_in_and_remains_disabled_in_live_mode(self):
+        first, _, _ = self.dated_events()
+        for live, flag in ((False, False), (True, True)):
+            w, controller = self.window(live=live, deletion=flag)
+            self.select_event(w, first)
+            self.assertFalse(w.session_tabs.isTabEnabled(2))
+            self.assertTrue(all(not b.isEnabled() for b in w.deletion_buttons))
+            with patch.object(self.service, 'prepare_deletion', side_effect=AssertionError('No permission')):
+                controller.delete_selected(DeletionOperation.SESSION)
+        self.assertEqual(len(self.sessions.list()), 3)
+
+    def test_deletion_is_disabled_and_revalidated_while_any_session_is_open(self):
+        first, _, _ = self.dated_events()
+        w, controller = self.window(deletion=True)
+        self.service.create_session('Active unrelated', self.day.toPyDate())
+        controller.refresh_session()
+        self.select_event(w, first)
+        self.assertTrue(all(not b.isEnabled() for b in w.deletion_buttons))
+        controller.delete_selected(DeletionOperation.NAME)
+        self.assertEqual(len(self.sessions.list()), 4)
+        self.assertIn('cierra la sesión activa', w.session_hint.text())
+
+    def test_synthetic_deletion_flag_combinations_are_rejected_before_initialization(self):
+        for flags in (['--enable-synthetic-session-deletion'],
+                      ['--enable-synthetic-session-deletion','--attendance-db',str(self.db.path),'--model-dir','unused'],
+                      ['--enable-synthetic-session-deletion','--attendance-db',str(self.db.path),'--enable-attendance-recording'],
+                      ['--enable-synthetic-session-deletion','--attendance-db',str(self.db.path),'--model-dir','unused','--enable-attendance-recording']):
+            with self.subTest(flags=flags), redirect_stderr(StringIO()), self.assertRaises(SystemExit): main(flags)
