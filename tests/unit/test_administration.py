@@ -16,17 +16,30 @@ from face_recognition.domain.models.attendance import AttendancePersistenceError
 from face_recognition.infrastructure.persistence.admin_credentials import SQLiteAdminCredentialRepository
 from face_recognition.infrastructure.persistence.attendance_database import AttendanceDatabase, timestamp
 from face_recognition.infrastructure.persistence.attendance_repositories import SQLiteAdministrationRepository, SQLiteParticipantRepository, SQLiteAttendanceSessionRepository, SQLiteAttendanceRecordRepository, SQLiteDeviceSettingsRepository
-from tests.admin_fakes import TEST_PIN, grant
+from tests.admin_fakes import TEST_PIN, grant, use_fast_credentials
+from face_recognition.infrastructure.persistence import admin_credentials as credential_module
+
 from tests.attendance_v3_schema import create_v3
 from tests.attendance_v2_schema import create_v2
 from tests.attendance_v1_schema import create_v1
 
+PRODUCTION_DERIVE = credential_module.derive
 NOW = datetime(2026, 11, 16, tzinfo=timezone.utc)
 NEW_PIN = '092847'
 
 
 class AdministrationTests(unittest.TestCase):
+    REAL_CRYPTO_TESTS = frozenset((
+        'test_hash_salt_constant_time_and_plaintext_not_stored',
+        'test_change_pin_verifies_current_new_salt_logout_old_rejection',
+        'test_concurrent_failed_attempts_are_atomic',
+    ))
+
     def setUp(self):
+        if self._testMethodName in self.REAL_CRYPTO_TESTS:
+            self.assertIs(credential_module.derive, PRODUCTION_DERIVE)
+        else:
+            use_fast_credentials(self)
         self.temp = TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name)/'synthetic.sqlite3'
         self.db = AttendanceDatabase(self.path); self.db.initialize()
@@ -67,8 +80,10 @@ class AdministrationTests(unittest.TestCase):
         self.setup_admin()
         with self.db.transaction() as c: row = c.execute('SELECT * FROM admin_credentials').fetchone()
         self.assertEqual(len(row['pin_hash']),32); self.assertGreaterEqual(len(row['pin_salt']),16)
-        self.assertGreaterEqual(row['iterations'],600000)
+        self.assertEqual(row['iterations'],600000)
         self.assertNotIn(TEST_PIN.encode(), self.path.read_bytes())
+        reopened = SQLiteAdminCredentialRepository(AttendanceDatabase(self.path))
+        self.assertIs(reopened.verify(TEST_PIN, lambda:self.now)[0].outcome, Outcome.AUTHENTICATED)
         with patch('face_recognition.infrastructure.persistence.admin_credentials.compare_digest', wraps=__import__('hmac').compare_digest) as compare:
             self.assertIs(self.admin.authenticate(TEST_PIN).outcome, Outcome.AUTHENTICATED)
             compare.assert_called_once()
@@ -93,8 +108,13 @@ class AdministrationTests(unittest.TestCase):
 
     def test_concurrent_failed_attempts_are_atomic(self):
         self.setup_admin()
-        with ThreadPoolExecutor(max_workers=5) as pool:
-            results=list(pool.map(lambda _: self.repo.verify(NEW_PIN,self.now)[0],range(5)))
+        from threading import Barrier
+        ready = Barrier(5)
+        def concurrent_real_derive(*args):
+            ready.wait(timeout=10)
+            return PRODUCTION_DERIVE(*args)
+        with patch.object(credential_module, 'derive', side_effect=concurrent_real_derive), ThreadPoolExecutor(max_workers=5) as pool:
+            results=list(pool.map(lambda _: self.repo.verify(NEW_PIN,lambda:self.now)[0],range(5)))
         self.assertEqual(sum(r.outcome is Outcome.INCORRECT for r in results),4)
         self.assertEqual(sum(r.outcome is Outcome.LOCKED for r in results),1)
         with self.db.transaction() as c: self.assertEqual(c.execute('SELECT failed_attempts FROM admin_credentials').fetchone()[0],5)
@@ -220,7 +240,7 @@ class AdministrationTests(unittest.TestCase):
 
     def test_pin_change_derivation_failure_rolls_back_credential_and_attempt_reset(self):
         self.setup_admin(); before=self.repo.stamp()
-        self.repo.verify(NEW_PIN,self.now)
+        self.repo.verify(NEW_PIN,lambda:self.now)
         from face_recognition.infrastructure.persistence.admin_credentials import derive as real_derive
         count=0
         def fail_second(*args):
@@ -237,7 +257,7 @@ class AdministrationTests(unittest.TestCase):
         self.setup_admin()
         for failed,seconds in ((4,60),(9,120),(14,240),(19,240)):
             with self.db.transaction(write=True) as c:c.execute('UPDATE admin_credentials SET failed_attempts=?,locked_until=NULL WHERE id=1',(failed,))
-            self.assertEqual(self.repo.verify(NEW_PIN,self.now)[0].retry_after,seconds)
+            self.assertEqual(self.repo.verify(NEW_PIN,lambda:self.now)[0].retry_after,seconds)
             self.now+=timedelta(seconds=seconds+1)
         for column,value in (('pin_hash',b'bad'),('pin_salt',b'short'),('algorithm','sha256'),('iterations',1000),('failed_attempts',-1),('locked_until','invalid'),('id',2)):
             with self.subTest(column=column),self.assertRaises(ValueError):

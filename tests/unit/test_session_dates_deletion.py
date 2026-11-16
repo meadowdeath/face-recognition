@@ -20,7 +20,7 @@ from face_recognition.infrastructure.persistence.attendance_database import Atte
 from face_recognition.infrastructure.persistence.attendance_repositories import (
     SQLiteAttendanceSessionRepository, SQLiteAttendanceRecordRepository, SQLiteParticipantRepository, SQLiteDeviceSettingsRepository,
 )
-from tests.admin_fakes import configured_admin, grant
+from tests.admin_fakes import use_fast_credentials, configured_admin, grant
 from tests.attendance_v1_schema import create_v1
 from tests.attendance_v2_schema import create_v2
 
@@ -31,6 +31,7 @@ DAY = date(2026, 11, 16)
 
 class DatedDeletionTests(unittest.TestCase):
     def setUp(self):
+        use_fast_credentials(self)
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / 'synthetic.sqlite3'

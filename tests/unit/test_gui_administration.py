@@ -22,7 +22,7 @@ if AVAILABLE:
     from face_recognition.presentation.gui.admin import AdminIntegration
     from face_recognition.presentation.gui.attendance import AttendanceIntegration
     from face_recognition.presentation.gui.window import KioskWindow, LifecycleState
-    from tests.admin_fakes import configured_admin, TEST_PIN
+    from tests.admin_fakes import use_fast_credentials, configured_admin, TEST_PIN
 
 
 @unittest.skipUnless(AVAILABLE,'Optional Qt dependency unavailable')
@@ -36,6 +36,7 @@ class GuiAdministrationTests(unittest.TestCase):
                 QFontDatabase.addApplicationFont(os.path.join(os.environ.get('WINDIR','C:/Windows'),'Fonts','segoeui.ttf'))
 
     def setUp(self):
+        use_fast_credentials(self)
         self.temp=TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.db=AttendanceDatabase(Path(self.temp.name)/'synthetic.sqlite3'); self.db.initialize()
         self.now=datetime(2026,11,16,tzinfo=timezone.utc)
@@ -93,7 +94,7 @@ class GuiAdministrationTests(unittest.TestCase):
 
     def test_lockout_countdown_and_return_navigation_does_not_reset_attempts(self):
         self.login()
-        for _ in range(5):self.admin.credentials.verify('817263',self.now)
+        for _ in range(5):self.admin.credentials.verify('817263',lambda:self.now)
         self.w.navigate('attendance');self.w.open_admin()
         self.assertFalse(self.w.pin_confirm.isEnabled());self.assertIn('segundos',self.w.pin_message.text())
         self.assertTrue(self.ui.lock_timer.isActive())
@@ -101,7 +102,7 @@ class GuiAdministrationTests(unittest.TestCase):
 
     def test_sensitive_dialog_starts_locked_and_stops_countdown_after_cancellation(self):
         self.login()
-        for _ in range(5):self.admin.credentials.verify('817263',self.now)
+        for _ in range(5):self.admin.credentials.verify('817263',lambda:self.now)
         def inspect():
             dialog=self.app.activeModalWidget()
             confirm=next(b for b in dialog.findChildren(QPushButton) if b.text()=='Confirmar')
@@ -222,3 +223,63 @@ class GuiAdministrationTests(unittest.TestCase):
             power.execute.assert_called_once_with('reboot')
             if fails:self.assertIn('cerró de forma segura',output.getvalue())
             for item in controllers:item.window.close()
+
+    def test_authentication_uses_one_worker_and_does_not_block_gui_or_survive_cancellation(self):
+        from threading import Event, get_ident
+        from tests.admin_fakes import fast_test_derive
+        from face_recognition.infrastructure.persistence import admin_credentials
+        entered,release=Event(),Event(); gui_thread=get_ident(); worker_threads=[]; ticks=[]
+        def derive(*args):
+            worker_threads.append(get_ident());entered.set()
+            if not release.wait(5):raise AssertionError('Authentication was not released')
+            return fast_test_derive(*args)
+        self.w.open_admin()
+        with patch.object(admin_credentials,'derive',side_effect=derive):
+            try:
+                for digit in TEST_PIN:self.w.enter_digit(digit)
+                self.w.confirm_pin();first=self.ui.job
+                self.wait_for(entered.is_set)
+                QTimer.singleShot(0,lambda:ticks.append(True));self.wait_for(lambda:bool(ticks))
+                self.w.confirm_pin();self.assertIs(self.ui.job,first)
+                self.assertFalse(self.w.pin_confirm.isEnabled())
+                self.w.open_admin()  # Revisiting login must not re-enable a pending task.
+                self.assertFalse(self.w.pin_confirm.isEnabled())
+                self.w.navigate('attendance')
+            finally:release.set()
+            self.wait_for(lambda:self.ui.job is None)
+        self.assertEqual(len(worker_threads),1);self.assertNotEqual(worker_threads[0],gui_thread)
+        self.assertFalse(self.ui.allowed());self.assertIs(self.w.lifecycle_state,LifecycleState.ATTENDANCE)
+
+    def test_authentication_failure_debug_output_contains_timing_not_secrets(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        self.w.live_debug_enabled=True
+        stamp=self.admin.credentials.stamp()
+        with patch.object(self.admin.credentials,'verify',side_effect=AttendancePersistenceError('Private detail')),redirect_stdout(StringIO()) as output:
+            self.login()
+        self.assertFalse(self.ui.allowed());self.assertEqual(self.w.pin,'')
+        self.assertIn('base de datos',self.w.pin_message.text())
+        self.assertIn('ms',output.getvalue())
+        for secret in (TEST_PIN,stamp[0].hex(),stamp[1].hex(),'Private detail'):
+            self.assertNotIn(secret,output.getvalue())
+
+    def test_shutdown_waits_for_blocked_authentication_task(self):
+        from threading import Event
+        from tests.admin_fakes import fast_test_derive
+        from face_recognition.infrastructure.persistence import admin_credentials
+        entered,release=Event(),Event()
+        def derive(*args):
+            entered.set()
+            if not release.wait(5):raise AssertionError('Authentication was not released')
+            return fast_test_derive(*args)
+        self.w.open_admin()
+        with patch.object(admin_credentials,'derive',side_effect=derive):
+            try:
+                for digit in TEST_PIN:self.w.enter_digit(digit)
+                self.w.confirm_pin();self.wait_for(entered.is_set)
+                self.w.close()
+                self.assertIs(self.w.lifecycle_state,LifecycleState.SHUTDOWN)
+                self.assertFalse(self.w._admin_shutdown_finished)
+            finally:release.set()
+            self.wait_for(lambda:self.ui.job is None)
+        self.assertTrue(self.w._admin_shutdown_finished);self.assertFalse(self.ui.allowed())

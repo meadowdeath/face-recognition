@@ -20,7 +20,7 @@ from face_recognition.infrastructure.persistence.attendance_database import Atte
 from face_recognition.infrastructure.persistence.attendance_repositories import (
     SQLiteAttendanceRecordRepository, SQLiteAttendanceSessionRepository, SQLiteParticipantRepository, SQLiteDeviceSettingsRepository,
 )
-from tests.admin_fakes import configured_admin
+from tests.admin_fakes import use_fast_credentials, configured_admin
 from tests.attendance_v1_schema import create_v1
 
 NOW = datetime(2026, 1, 2, 10, tzinfo=timezone.utc)
@@ -28,6 +28,7 @@ NOW = datetime(2026, 1, 2, 10, tzinfo=timezone.utc)
 
 class SessionManagementTests(unittest.TestCase):
     def setUp(self):
+        use_fast_credentials(self)
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / 'synthetic.sqlite3'

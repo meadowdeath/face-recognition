@@ -38,7 +38,7 @@ class AdminService:
         self.logout()
         with self._lock: generation = self._generation
         try:
-            result, stamp = self.credentials.verify(pin, utc_datetime(self.clock()))
+            result, stamp = self.credentials.verify(pin, self.clock)
             with self._lock:
                 if generation != self._generation: return AuthResult(AuthOutcome.FAILED)
                 if result.outcome is AuthOutcome.AUTHENTICATED: self._stamp = stamp
@@ -52,7 +52,7 @@ class AdminService:
         self.require_authenticated()
         self.invalidate_authorizations()
         with self._lock: generation, expected = self._generation, self._stamp
-        result, stamp = self.credentials.verify(validate_pin(pin), utc_datetime(self.clock()))
+        result, stamp = self.credentials.verify(validate_pin(pin), self.clock)
         with self._lock:
             if generation != self._generation or expected != self._stamp:
                 raise PermissionError('Authorization was cancelled')
@@ -74,7 +74,7 @@ class AdminService:
     def change_pin(self, current, new, confirmation):
         self.require_authenticated()
         try:
-            result = self.credentials.change(current, new, confirmation, utc_datetime(self.clock()))
+            result = self.credentials.change(current, new, confirmation, self.clock)
             if result.outcome is AuthOutcome.AUTHENTICATED: self.logout()
             return result
         except ValueError:

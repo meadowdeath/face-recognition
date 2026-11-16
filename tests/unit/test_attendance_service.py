@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from tests.admin_fakes import configured_admin
+from tests.admin_fakes import use_fast_credentials, configured_admin
 from face_recognition.application.attendance_service import AttendanceService, RegistrationOutcome as Outcome
 from face_recognition.domain.models.attendance import AttendancePersistenceError
 from face_recognition.infrastructure.persistence.attendance_database import AttendanceDatabase
@@ -20,6 +20,7 @@ from face_recognition.presentation.cli.attendance_participants import main
 
 class AttendanceServiceTests(unittest.TestCase):
     def setUp(self):
+        use_fast_credentials(self)
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.db = AttendanceDatabase(Path(self.temp.name) / 'synthetic.sqlite3', busy_timeout_ms=10)

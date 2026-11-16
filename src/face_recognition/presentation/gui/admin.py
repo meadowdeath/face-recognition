@@ -91,7 +91,7 @@ class AdminIntegration:
             configured = self.service is not None and self.service.configured()
         except ERRORS:
             configured = False
-        self.window.pin_confirm.setEnabled(configured)
+        self.window.pin_confirm.setEnabled(configured and self.job is None and monotonic() >= self.lock_deadline)
         if not configured:
             self.window.pin_hint.setText('Configuración requerida: ejecuta la herramienta administrativa local.')
             self.window.pin_message.setText(AUTH_MESSAGES[AuthOutcome.SETUP_REQUIRED])
@@ -136,7 +136,7 @@ class AdminIntegration:
         w = self.window
         pin, w.pin = w.pin, ''
         w.update_pin()
-        if not self.update_setup_state() or self.job is not None or monotonic() < self.lock_deadline:
+        if self.job is not None or not self.update_setup_state() or monotonic() < self.lock_deadline:
             return
         w.pin_confirm.setEnabled(False)
         w.pin_message.setText('Verificando PIN…')

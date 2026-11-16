@@ -15,7 +15,7 @@ from time import monotonic
 import unittest
 from unittest.mock import patch
 
-from tests.admin_fakes import TEST_PIN, configured_admin
+from tests.admin_fakes import use_fast_credentials, TEST_PIN, configured_admin
 from face_recognition.application.attendance_service import AttendanceService
 from face_recognition.domain.models.attendance import AttendancePersistenceError
 from face_recognition.infrastructure.persistence.attendance_database import AttendanceDatabase
@@ -51,6 +51,7 @@ class GuiAttendanceTests(unittest.TestCase):
                 QFontDatabase.addApplicationFont(os.path.join(os.environ.get('WINDIR', 'C:/Windows'), 'Fonts', 'segoeui.ttf'))
 
     def setUp(self):
+        use_fast_credentials(self)
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.db = AttendanceDatabase(Path(self.temp.name) / 'synthetic.sqlite3', busy_timeout_ms=10)
@@ -474,21 +475,33 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
     def test_same_session_resumption_invalidates_worker_generation_and_revision_binding(self):
         self.live()
         identifier, generation = self.w.attendance_session_id, self.live_ui.generation
-        first_view = self.decision()
+        # Authentication speed is unrelated to this revision regression. Keep the
+        # decision fresh on a logical clock while exercising the real stale-revision
+        # registration -> NO_SESSION -> refresh_session -> generation-change path.
+        logical_now = 100.
+        first_view = self.decision(decision_at=logical_now)
         self.administrator.authenticate(TEST_PIN); self.service.close_session(identifier, 1)
-        self.administrator.authenticate(TEST_PIN); self.assertEqual(self.service.resume_session(identifier).session.activation_revision, 2)
-        # UI still holds activation 1: the service must refuse it even though the ID is open again.
-        self.deliver(first_view)
-        self.assertEqual(self.records.count_for_session(identifier), 0)
-        self.assertEqual(self.w.attendance_activation_revision, 2)
-        self.assertNotEqual(self.live_ui.generation, generation)
-        self.assertIsNone(self.attendance.confirmation)
-        self.deliver(first_view, generation=generation)
-        self.assertEqual(self.records.count_for_session(identifier), 0)
-        self.assertFalse(self.attendance.handle_live(self.decision(), self.live_ui.generation,
-            identifier, True, monotonic(), 2, activation_revision=1))
-        self.deliver(self.decision())
-        self.assertEqual(self.records.count_for_session(identifier), 1)
+        self.administrator.authenticate(TEST_PIN)
+        self.assertEqual(self.service.resume_session(identifier).session.activation_revision, 2)
+        self.assertEqual(self.w.attendance_activation_revision, 1)
+        with patch('face_recognition.presentation.gui.recognition.monotonic', return_value=logical_now), \
+                patch.object(self.service, 'register', wraps=self.service.register) as register, \
+                patch.object(self.attendance, 'refresh_session', wraps=self.attendance.refresh_session) as refresh:
+            self.deliver(first_view)
+            register.assert_called_once_with('p001', identifier, 1)
+            refresh.assert_called_once()
+            self.assertEqual(self.records.count_for_session(identifier), 0)
+            self.assertEqual(self.w.attendance_activation_revision, 2)
+            self.assertNotEqual(self.live_ui.generation, generation)
+            self.assertIsNone(self.attendance.confirmation)
+            self.deliver(first_view, generation=generation)
+            self.assertEqual(register.call_count, 1)
+            self.assertFalse(self.attendance.handle_live(self.decision(decision_at=logical_now), self.live_ui.generation,
+                identifier, True, logical_now, 2, activation_revision=1))
+            self.assertEqual(register.call_count, 1)
+            self.deliver(self.decision(decision_at=logical_now))
+            self.assertEqual(register.call_args.args, ('p001', identifier, 2))
+            self.assertEqual(self.records.count_for_session(identifier), 1)
 
     def test_refresh_detects_same_id_new_revision_and_clears_confirmation(self):
         self.live()

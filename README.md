@@ -923,9 +923,13 @@ Live attendance recording fails closed without configured credentials.
 PIN storage uses standard-library PBKDF2-HMAC-SHA256, **600,000 iterations**, a fresh
 cryptographic salt for setup/change, and `hmac.compare_digest`. The algorithm/work
 factor is versioned and validated, with no downgrade below this baseline. Raspberry
-Pi verification latency is **not yet measured** for Phase 6; measure login/PIN change on the device before deployment. `--debug` prints only
-the authentication task latency (milliseconds), excluding operator typing; it
-never prints PINs, hashes or salts. Record those timings before final deployment.
+Pi 3B+ production-derivation benchmark supplied by the operator (600,000
+iterations, 32-byte key, 16-byte salt): runs **2560.84, 2553.11, 2562.34, 2553.62,
+2562.34 ms**; mean **2558.45 ms**, median **2560.84 ms**, maximum **2562.34 ms**.
+This measures derivation, not the whole GUI operation. `--debug` reports the
+complete authentication task latency without PINs, hashes or salts. A successful
+PIN change performs two derivations. These figures explain why derivation must
+not hold SQLite's write reservation; the production work factor remains unchanged.
 No lower work factor was chosen to improve UI responsiveness. PBKDF2 executes in
 one short-lived Qt authentication task, separate from recognition; the event loop
 remains responsive. Once credential change is submitted, its dialog cannot be
@@ -934,8 +938,17 @@ cancelled mid-transaction. Input fields are cleared after submission/closure.
 Five consecutive incorrect attempts impose a 60-second persistent lockout. Further
 five-attempt groups escalate to 120 and then at most 240 seconds. Successful
 verification resets the counter and lock. Login, PIN change and fresh operation
-verification share this accounting under `BEGIN IMMEDIATE`. Locked attempts do
-not derive hashes. The GUI displays a nonblocking countdown. Screen changes or
+verification use optimistic authentication: a short read validates eligibility,
+then closes before PBKDF2. A short `BEGIN IMMEDIATE` re-reads the complete credential
+stamp (hash, salt, algorithm, work factor and creation/update timestamps), checks
+the current lockout and updates the latest counter. Replaced credentials yield
+failure with no retry or accounting against the replacement. An in-flight result
+cannot bypass or extend a newly active lockout. The supplied UTC clock is read
+after write-lock acquisition, so hashing/contention cannot shorten a new lockout;
+a rollback of the clock during verification fails closed. PIN changes derive both
+old/new hashes outside transactions and atomically replace only still-current,
+unlocked credentials; no preliminary counter reset occurs. Busy timeouts, schema
+v4 and the 60/120/240-second policy are unchanged. Locked attempts do not derive hashes. The GUI displays a nonblocking countdown. Screen changes or
 process restarts cannot clear the database lock. A wall-clock rollback can extend
 lockout; moving the clock forward can shorten it. A time earlier than credential
 change is rejected conservatively. Reliable device time and privileged OS access
@@ -1031,7 +1044,7 @@ Focused Pi regression (synthetic fixtures, no expensive model-training tests):
 
 ```bash
 QT_QPA_PLATFORM=offscreen PYTHONPATH=src python -m unittest \
-  tests.unit.test_administration tests.unit.test_device tests.unit.test_gui_administration \
+  tests.unit.test_administration tests.unit.test_admin_concurrency tests.unit.test_device tests.unit.test_gui_administration \
   tests.unit.test_attendance_persistence tests.unit.test_attendance_sessions \
   tests.unit.test_session_dates_deletion tests.unit.test_attendance_service \
   tests.unit.test_gui_attendance tests.unit.test_kiosk_gui \
@@ -1053,3 +1066,57 @@ from biometric suppression. Authorization/consent, retention/withdrawal, physica
 security and the existing December 31, 2026 biometric-processing deadline still
 require review before real attendance collection. This prototype is not production
 ready. No recognition policy, model artifact or external biometric data was changed.
+
+
+### Authentication regression test boundaries
+
+`AdministrationTests` explicitly retains real production PBKDF2 in
+`test_hash_salt_constant_time_and_plaintext_not_stored`,
+`test_change_pin_verifies_current_new_salt_logout_old_rejection`, and
+`test_concurrent_failed_attempts_are_atomic`. They cover real setup, leading-zero
+verification, incorrect/old PIN rejection, fresh salts, constant-time comparison,
+600,000 iterations, persistence, changes and five concurrent failures. A guard
+asserts that these cases do not inherit the derivation substitute.
+
+Other authentication-behavior, attendance and GUI tests explicitly scope
+`tests.admin_fakes.use_fast_credentials` to one test. This mocks only the derivation
+boundary with a deterministic **test-only** digest; SQLite transactions, credential
+state, lockout counters and application authorization remain real. It does not
+add a production fast mode, CLI bypass or reduced production work factor.
+`tests.unit.test_admin_concurrency` uses events/barriers and injected clocks for
+credential replacement, committed ordering, new-lockout races, transaction-free
+derivation, unrelated writes and failure rollback. GUI authentication tests verify
+worker ownership, responsiveness, cancellation, shutdown and sanitized debug output.
+
+The session-revision regression uses an explicit logical decision time and unchanged
+freshness limit. It reaches stale-revision registration rejection and its normal
+GUI refresh path, then checks generation/revision rejection and successful fresh
+registration. Expired-decision coverage remains separate; neither the recognition
+policy nor application refresh behavior was changed to conceal expired evidence.
+
+Pi reproduction/regression commands (synthetic fixtures only, no training tests):
+
+```bash
+export QT_QPA_PLATFORM=offscreen PYTHONPATH=src
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+python -m unittest tests.unit.test_administration.AdministrationTests.test_concurrent_failed_attempts_are_atomic
+python -m unittest tests.unit.test_gui_attendance.GuiAttendanceTests.test_same_session_resumption_invalidates_worker_generation_and_revision_binding
+python -m unittest tests.unit.test_admin_concurrency
+python -m unittest tests.unit.test_administration tests.unit.test_gui_attendance tests.unit.test_gui_administration
+```
+
+Use the focused command above with `tests.unit.test_admin_concurrency` included
+for the complete affected regression suite. Raspberry Pi timing improvements and
+resolution of the reported hardware failures still require operator validation;
+development-machine results must not be presented as new Pi measurements.
+
+
+A Windows development run of the revised focused suite completed **205 tests in
+17.636 seconds** (204 passed, one POSIX-only skip), compared with the previous
+Windows run of 190 tests in 69.197 seconds. The complete Windows suite also passed 492 tests in 83.461 seconds (491 passed,
+one POSIX-only skip). Coverage increased by 15 tests while
+elapsed time fell about 74.5% in these runs; this is not an identical-workload
+microbenchmark or a new Raspberry Pi measurement. The supplied Pi result remains
+190 tests in 932.103 seconds before these fixes. Re-run the commands above on Pi
+to measure the improvement there; production derivation still costs the measured
+approximately 2.56 seconds per call on that device.
