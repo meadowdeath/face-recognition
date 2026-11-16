@@ -65,10 +65,17 @@ class KioskWindow(QMainWindow):
     attendance_active_changed = pyqtSignal(bool)
     session_changed = pyqtSignal(bool)
     shutdown_requested = pyqtSignal()
+    screen_changed = pyqtSignal(str)
+    session_open_requested = pyqtSignal()
+    session_close_requested = pyqtSignal()
+    simulation_requested = pyqtSignal()
 
-    def __init__(self, live_mode=False, debug=False):
+    def __init__(self, live_mode=False, debug=False, persistent_attendance=False):
         super().__init__()
         self.live_mode, self.live_debug_enabled = live_mode, debug
+        self.persistent_attendance = persistent_attendance
+        self.attendance = None
+        self.attendance_session_id = None
         self.session_open = False
         self._shutdown_finished = True
         self.lifecycle_state = None
@@ -178,10 +185,12 @@ class KioskWindow(QMainWindow):
         self.stack.addWidget(standby)
 
         col = self.page("attendance", "Asistencia")
-        self.session_indicator = label("Sin sesión temporal abierta · Demostración", "muted")
+        self.session_indicator = label("Consultando sesión de asistencia" if self.persistent_attendance else
+                                       "Sin sesión temporal abierta · Demostración", "muted")
         col.addWidget(self.session_indicator)
         preview = QFrame(objectName="preview")
-        preview.setMinimumHeight(120 if self.live_mode and self.live_debug_enabled else 155)
+        preview.setMinimumHeight(120 if (self.live_mode and self.live_debug_enabled) or
+                                 (self.persistent_attendance and not self.live_mode) else 155)
         box = QGridLayout(preview)
         self.preview_image = label("Cámara inactiva" if self.live_mode else "Vista estática · Cámara desconectada", "muted", True)
         self.preview_image.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
@@ -201,10 +210,22 @@ class KioskWindow(QMainWindow):
         col.addWidget(self.attendance_status)
         col.addWidget(self.attendance_message)
         self.state_selector = QComboBox()
-        self.state_selector.addItems([s[0] for s in ATTENDANCE_STATES])
+        if self.persistent_attendance and not self.live_mode:
+            for title, person in (("p001 · Aceptar", "p001"), ("UNKNOWN · Rechazar", None),
+                                  ("p003 · Aceptar", "p003")):
+                self.state_selector.addItem(title, person)
+        else:
+            self.state_selector.addItems([s[0] for s in ATTENDANCE_STATES])
         self.state_selector.setAccessibleName("Estado visual de demostración")
         self.state_selector.currentIndexChanged.connect(self.set_attendance_state)
-        col.addWidget(self.state_selector)
+        if self.persistent_attendance and not self.live_mode:
+            simulation = QHBoxLayout()
+            simulation.addWidget(self.state_selector, 1)
+            self.simulate_button = button("Simular decisión", lambda: self.simulation_requested.emit())
+            simulation.addWidget(self.simulate_button)
+            col.addLayout(simulation)
+        else:
+            col.addWidget(self.state_selector)
         self.presence_selector = QCheckBox("Simular rostro presente · Demostración")
         self.presence_selector.setMinimumHeight(32)
         self.presence_selector.toggled.connect(self.set_face_present)
@@ -255,30 +276,40 @@ class KioskWindow(QMainWindow):
         col.addLayout(grid, 1)
 
         col = self.page("sessions", "Sesiones", True)
-        self.session_details = label("Sin sesión abierta. No se registran asistencias reales.")
+        self.session_details = label("Consultando sesiones persistentes…" if self.persistent_attendance else
+                                     "Sin sesión abierta. No se registran asistencias reales.")
         session_card = QFrame(objectName="card")
         session_layout = QVBoxLayout(session_card)
-        session_layout.addWidget(label("Sesión temporal · Demostración", "muted"))
+        self.session_title = label("Sesión temporal · Demostración", "muted")
+        session_layout.addWidget(self.session_title)
         session_layout.addWidget(self.session_details)
         col.addWidget(session_card)
-        name = QLineEdit()
-        name.setPlaceholderText("Nombre de la sesión")
-        col.addWidget(name)
-        col.addWidget(button("Iniciar sesión de asistencia", lambda: self.set_session_open(True), primary=True))
-        col.addWidget(button("Cerrar sesión de asistencia", lambda: self.set_session_open(False)))
-        col.addWidget(label("Solo memoria; no se guardan registros de asistencia.", "muted"))
+        self.session_name = QLineEdit()
+        self.session_name.setPlaceholderText("Nombre de la sesión")
+        col.addWidget(self.session_name)
+        self.session_start = button("Iniciar sesión de asistencia", lambda: self.session_open_requested.emit()
+            if self.persistent_attendance else self.set_session_open(True), primary=True)
+        self.session_close = button("Cerrar sesión de asistencia", lambda: self.session_close_requested.emit()
+            if self.persistent_attendance else self.set_session_open(False))
+        col.addWidget(self.session_start)
+        col.addWidget(self.session_close)
+        self.session_hint = label("Solo memoria; no se guardan registros de asistencia.", "muted")
+        col.addWidget(self.session_hint)
         col.addStretch()
 
         col = self.page("records", "Registros", True)
-        col.addWidget(self.date_control())
-        col.addWidget(label("3 asistencias · Identificadores ficticios · Datos de demostración", "muted"))
-        table = QTableWidget(3, 3)
-        table.setHorizontalHeaderLabels(["Participante", "Hora", "Estado"])
+        self.records_date = self.date_control()
+        col.addWidget(self.records_date)
+        self.records_summary = label("Selecciona una fecha para consultar." if self.persistent_attendance else
+                                     "3 asistencias · Identificadores ficticios · Datos de demostración", "muted")
+        col.addWidget(self.records_summary)
+        table = self.records_table = QTableWidget(0 if self.persistent_attendance else 3, 3)
+        table.setHorizontalHeaderLabels(["Participante", "Sesión", "Hora"] if self.persistent_attendance else ["Participante", "Hora", "Estado"])
         table.verticalHeader().hide()
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        for row, person in enumerate(("p001", "p002", "p003")):
+        for row, person in enumerate(() if self.persistent_attendance else ("p001", "p002", "p003")):
             table.setRowHeight(row, 44)
             for column, value in enumerate((person, f"08:0{row}", "Presente · Demo")):
                 table.setItem(row, column, QTableWidgetItem(value))
@@ -353,6 +384,7 @@ class KioskWindow(QMainWindow):
         self._transition_state(state)
         if state is LifecycleState.ATTENDANCE:
             self.record_attendance_activity()
+        self.screen_changed.emit(name)
 
     def _transition_state(self, state):
         previous = self.lifecycle_state
@@ -464,7 +496,7 @@ class KioskWindow(QMainWindow):
             dialog.deleteLater()
 
     def set_attendance_state(self, index):
-        if self.live_mode:
+        if self.live_mode or self.persistent_attendance:
             return
         title, message, role = ATTENDANCE_STATES[index]
         self.attendance_status.setText(title)
@@ -474,6 +506,8 @@ class KioskWindow(QMainWindow):
         self.attendance_message.setText(message)
 
     def set_session_open(self, opened):
+        if self.persistent_attendance:
+            return  # Persistent state is updated only after repository operations succeed.
         if self.lifecycle_state is LifecycleState.SHUTDOWN or self.session_open == bool(opened): return
         self.session_open = bool(opened)
         text = "Sesión temporal abierta · Demostración" if self.session_open else "Sin sesión temporal abierta · Demostración"

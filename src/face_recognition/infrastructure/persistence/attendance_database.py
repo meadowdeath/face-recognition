@@ -7,13 +7,9 @@ from pathlib import Path
 import sqlite3
 
 from face_recognition.config.settings import PROJECT_ROOT
-from face_recognition.domain.models.attendance import DeviceSettings, utc_datetime
+from face_recognition.domain.models.attendance import AttendancePersistenceError, DeviceSettings, utc_datetime
 
 SCHEMA_VERSION = 1
-
-
-class AttendancePersistenceError(RuntimeError):
-    """Unavailable, locked, corrupt or incompatible attendance storage."""
 
 
 def timestamp(value: datetime) -> str:

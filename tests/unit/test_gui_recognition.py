@@ -439,7 +439,10 @@ assert not any(name in sys.modules for name in ('numpy','cv2','mediapipe','sklea
             observed = []; runs.append(observed)
             process = result.process
             def record(snapshot):
-                view = process(snapshot); observed.append(view.occupancy)
+                view = process(snapshot)
+                # Camera reads can reuse a detector timestamp (not a successful observation).
+                if not observed or view.occupancy != observed[-1]:
+                    observed.append(view.occupancy)
                 if len(observed) == 4: worker.set_active(False)
                 return view
             result.process = record

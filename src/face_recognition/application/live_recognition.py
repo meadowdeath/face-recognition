@@ -23,6 +23,9 @@ class LiveRecognitionView:
     temporal_candidate: str | None = None
     temporal_decision: str | None = None
     revision: int = 0
+    decision_sequence: int = 0
+    decision_at: float | None = None
+    decision_is_current: bool = False
 
 
 @dataclass(frozen=True)
@@ -44,15 +47,20 @@ class LiveTemporalRecognition:
         self._pending = []
         self._last = self._current = self._face = self._last_valid_at = None
         self._revision = 0
+        self._decision_sequence = 0
+        self._decision_at = None
+        self._decision_is_current = False
 
     def expire(self, now):
         if self._last_valid_at is not None and now - self._last_valid_at >= self.absence_timeout:
+            self._decision_is_current = False
             if self._pending or self._last is not None or self._current is not None or self._face is not None:
                 self._pending.clear()
                 self._last = self._current = self._face = None
                 self._revision += 1
 
     def no_face(self, now):
+        self._decision_is_current = False
         # Any observed interruption immediately separates presence segments.
         if self._pending or self._current is not None or self._face is not None:
             self._pending.clear()
@@ -68,6 +76,9 @@ class LiveTemporalRecognition:
         if len(self._pending) == self.recognizer.window_size:
             self._last = self.recognizer.decide_observations(tuple(self._pending))
             self._pending.clear()
+            self._decision_sequence += 1
+            self._decision_at = now
+            self._decision_is_current = True
         self._revision += 1
 
     def view(self):
@@ -79,7 +90,8 @@ class LiveTemporalRecognition:
             None if self._current is None else self._current.candidate_identity,
             None if self._current is None else self._current.knownness_score,
             None if self._last is None else self._last.candidate_identity,
-            None if decision is None else decision.decision.value, self._revision)
+            None if decision is None else decision.decision.value, self._revision,
+            self._decision_sequence, self._decision_at, self._decision_is_current)
 
 
 class LiveOpenSetRecognition:

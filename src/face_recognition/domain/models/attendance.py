@@ -5,6 +5,10 @@ from datetime import datetime, timezone
 import re
 
 
+class AttendancePersistenceError(RuntimeError):
+    """Unavailable, locked, corrupt or incompatible attendance storage."""
+
+
 def validate_person_id(value: str) -> str:
     if not isinstance(value, str) or not re.fullmatch(r"p[0-9]{3,}", value):
         raise ValueError("Participant identifier must be p followed by at least three ASCII digits")
