@@ -15,6 +15,8 @@ from time import monotonic
 import unittest
 from unittest.mock import patch
 
+from tests.admin_fakes import dispose_window
+
 from tests.admin_fakes import use_fast_credentials, TEST_PIN, configured_admin
 from face_recognition.application.attendance_service import AttendanceService
 from face_recognition.domain.models.attendance import AttendancePersistenceError
@@ -79,7 +81,7 @@ class GuiAttendanceTests(unittest.TestCase):
             w.administration.reauthenticate = lambda scope: self.administrator.authorize(scope, TEST_PIN)[1]
         w.show()
         def cleanup():
-            w.close()
+            dispose_window(w)
             self.app.processEvents()
         self.addCleanup(cleanup)
         return w, attendance
@@ -145,7 +147,8 @@ class GuiAttendanceTests(unittest.TestCase):
         self.assertEqual(w.attendance_status.text(), 'Participante no registrado')
         self.assertFalse(self.people.exists('p003'))
         self.assertEqual(self.records.count_for_session(session_id), 1)
-        w.close()  # Exit does not close the persistent session.
+        self.administrator.authenticate(TEST_PIN); w.navigate('dashboard')
+        with patch.object(w, '_confirm_exit_dialog', return_value=True): w.confirm_exit()  # Attendance session stays open.
         restored, restored_attendance = self.window()
         self.assertIs(restored.lifecycle_state, LifecycleState.STANDBY)
         self.assertEqual(restored.attendance_session_id, session_id)
@@ -360,7 +363,7 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
             self.assertIsNone(window.attendance.service)
             self.assertFalse(window.session_start.isEnabled())
             self.assertFalse(window.session_open)
-            window.close()
+            dispose_window(window)
             return 0
         with patch('PyQt5.QtWidgets.QApplication', return_value=self.app), \
                 patch.object(QApplication, 'exec_', side_effect=inspect):
@@ -402,7 +405,7 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
         w.session_resume.click()
         self.assertEqual(w.attendance_activation_revision, 3)
         self.assertEqual(len(self.sessions.list()), 1)
-        w.close()
+        dispose_window(w)
         restored, _ = self.window()
         self.assertIs(restored.lifecycle_state, LifecycleState.STANDBY)
         self.assertEqual(restored.attendance_session_id, identifier)

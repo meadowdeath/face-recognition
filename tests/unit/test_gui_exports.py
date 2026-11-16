@@ -5,6 +5,8 @@ from dataclasses import replace
 from threading import Event, get_ident
 from time import monotonic
 
+from tests.admin_fakes import dispose_window
+
 AVAILABLE = importlib.util.find_spec('PyQt5') is not None
 if AVAILABLE:
     from PyQt5.QtCore import QObject, QTimer, pyqtSignal
@@ -45,7 +47,7 @@ class GuiExportTests(ExportFixture):
         self.ui = AdminIntegration(self.w, self.admin, self.admin.settings, DeviceDiagnostics(self.root, platform='win32'))
         self.exports = ExportIntegration(self.w, self.service, self.provider)
         self.w.show()
-        self.addCleanup(self.w.close); self.addCleanup(self.ui.finalize); self.addCleanup(self.exports.finalize)
+        self.addCleanup(dispose_window, self.w)
         self.errors = []; self.addCleanup(lambda: self.assertEqual(self.errors, []))
         self.w.open_admin()
         for digit in TEST_PIN: self.find_button(self.w.screens['pin'], digit).click()
@@ -140,7 +142,7 @@ class GuiExportTests(ExportFixture):
         self.w.navigate('attendance'); self.wait(lambda: not self.exports.busy)
         self.assertIs(self.w.lifecycle_state, LifecycleState.ATTENDANCE)
         self.assertFalse(self.w.authenticated)
-        self.w.close(); self.exports.finalize(); self.assertFalse(self.exports.coalesce.isActive())
+        dispose_window(self.w); self.assertFalse(self.exports.coalesce.isActive())
 
     def test_device_disappearance_does_not_select_replacement_and_service_errors_are_sanitized(self):
         self.provider.current = replace(self.provider.current, identity='new-connection')
@@ -157,9 +159,12 @@ class GuiExportTests(ExportFixture):
         entered = Event()
         def blocked(cancel, progress): entered.set(); cancel.wait(5)
         self.exports.start(blocked, lambda result: None); self.wait(entered.is_set)
-        self.w.close(); self.wait(lambda: not self.exports.busy)
+        from unittest.mock import patch
+        with patch.object(self.w, '_confirm_exit_dialog', return_value=True): self.w.confirm_exit()
+        self.wait(lambda: not self.exports.busy)
         self.assertIs(self.w.lifecycle_state, LifecycleState.SHUTDOWN)
         self.assertTrue(self.w._export_shutdown_finished)
+        self.assertFalse(self.w.isVisible())
 
     def test_progress_notifications_coalesce_in_a_bounded_latest_value(self):
         from PyQt5.QtTest import QSignalSpy
@@ -171,3 +176,17 @@ class GuiExportTests(ExportFixture):
         self.assertEqual(task.take_progress(), ('Sintético', 9999))
         task.report_progress('Final', 100)
         self.assertEqual(len(spy), 2)
+
+    def test_unauthorized_close_does_not_cancel_active_export_or_change_lifecycle(self):
+        entered, release = Event(), Event()
+        def operation(cancel, progress):
+            entered.set(); release.wait(5)
+            self.assertFalse(cancel.is_set())
+        self.exports.start(operation, lambda result:None)
+        try:
+            self.wait(entered.is_set); self.admin.logout()
+            self.assertFalse(self.w.close()); self.assertFalse(self.w.confirm_exit())
+            self.assertFalse(self.exports.task.cancel.is_set()); self.assertFalse(self.exports.closing)
+            self.assertIs(self.w.lifecycle_state, LifecycleState.ADMIN); self.assertTrue(self.w.clock.isActive())
+        finally: release.set()
+        self.wait(lambda:not self.exports.busy)

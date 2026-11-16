@@ -29,7 +29,8 @@ QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui
 ```
 
 EGLFS launches fullscreen; the application does not set the platform backend.
-Escape closes the development application. Dark Amethyst is the default theme;
+Application exit requires administrator login and confirmation; Escape never closes
+the main kiosk window. Dark Amethyst is the default theme;
 Settings → Appearance (`Ajustes → Apariencia`) switches all existing widgets to
 Light Lavender immediately. Preferences remain in memory without a database and
 are persisted for authenticated administrators when a database is configured.
@@ -689,7 +690,7 @@ days spanning offset changes need not be 24 hours. Stored datetimes remain aware
 Persistence runs synchronously on explicit GUI actions/eligible decision events,
 using separate short-lived connections and a **150 ms busy timeout** in the GUI
 and participant CLI. It does not run inside camera capture, MediaPipe callbacks
-or the recognition worker. Recoverable failures leave navigation/exit available;
+or the recognition worker. Recoverable failures leave navigation available and retain authenticated exit;
 failed initialization disables persistent session controls instead of falling
 back. No database polling worker is introduced. Credential derivation alone uses
 a short Qt task; settings persist only on explicit preference changes. A busy database can briefly delay GUI delivery; camera
@@ -917,7 +918,8 @@ Configure the administrator locally **before** exposing a persistent kiosk.
 are significant. Trivial sequences and repeated digits are rejected. Repeated
 setup never replaces credentials. There is no master PIN or recovery bypass;
 forgotten-PIN recovery requires a future controlled maintenance procedure.
-An unconfigured persistent GUI denies protected navigation but allows safe exit.
+An unconfigured persistent GUI denies protected navigation and user-initiated exit.
+Configure credentials locally before exposing the kiosk; no GUI exit bypass is provided.
 Live attendance recording fails closed without configured credentials.
 
 PIN storage uses standard-library PBKDF2-HMAC-SHA256, **600,000 iterations**, a fresh
@@ -1476,3 +1478,53 @@ with ExitStack() as stack:
 print('Integridad, esquema y contenido sintético verificados; no se mostraron credenciales.')
 PY
 ```
+
+
+### Administrator-only application exit
+
+The PIN screen has no exit control. Standby, Attendance, PIN entry, failed/locked
+login, unconfigured credentials, database initialization failure and logout do not
+permit user-initiated application exit. Cancel on the PIN screen returns to
+Attendance. The dashboard exit tile remains available after authentication.
+
+All ordinary close mechanisms, including direct exit callbacks, Alt+F4 and window
+manager requests, pass through `KioskWindow.closeEvent()`. Public states are denied
+before any timer, resource or lifecycle change. Persistent administrative access is
+revalidated against `AdminService`, not a cached GUI boolean. Nonpersistent mode
+requires its existing demonstration PIN/admin navigation. Authenticated ordinary
+exit shows the existing confirmation; Cancel/Escape preserves the admin session and
+attendance state. Authorization is checked again after confirmation. There is no
+global Escape-to-close shortcut; modal Escape cancellation remains unchanged.
+
+After confirmation, an internal shutdown authorization records administrator exit
+or an already confirmed/reauthenticated power request. That terminal authorization
+permits worker-completion close callbacks after login has been cleared. Recognition,
+authentication and export cleanup still finishes cooperatively before closure;
+active persistent attendance sessions remain open and records unchanged. No fresh
+PIN is added solely for ordinary application exit. Power requests retain their
+existing separate confirmation, fresh PIN and single-use scope authorization.
+
+Tests dispose fixtures through test-only worker cleanup/widget disposal; production
+has no development exit bypass. The same focused regression command above includes
+exit-security, real keypad, worker-continuation and fake-power coverage.
+
+Manual EGLFS acceptance with the existing synthetic database (no real power actions):
+
+1. From Standby, Attendance and PIN entry, press Escape/Alt+F4 and attempt ordinary
+   window closing. The kiosk must remain operational, including its clock, standby
+   policy and active recognition where applicable. The PIN screen must have only
+   cancellation, not application exit.
+2. Verify failed PIN, lockout and logout cannot grant exit. Cancel PIN entry and
+   confirm return to Attendance. Unconfigured or failed-storage modes have no exit
+   fallback; use only controlled external process management for maintenance.
+3. Authenticate, select dashboard **Salir de la aplicación**, then Cancel or Escape.
+   Confirm the admin session, screen and attendance event remain unchanged.
+4. Repeat and select **Salir**. Verify graceful worker/camera/export cleanup and
+   process exit. Restart with the same database and verify the attendance session
+   remains open, records preserved, and administrator login is required again.
+
+This is application-level kiosk protection, not OS-level hardening. It cannot stop
+privileged process termination, virtual-terminal switching, available shells,
+unrestricted physical/OS access or power removal. Account, keyboard, terminal,
+systemd and other deployment restrictions remain Phase 9 work. No OS policies or
+permissions are changed by this correction.

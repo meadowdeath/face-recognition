@@ -5,11 +5,11 @@ from math import ceil
 from time import monotonic
 
 from PyQt5.QtCore import QDate, QDateTime, QEvent, QLocale, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen, QPixmap
+from PyQt5.QtGui import QColor, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QAbstractItemView, QCheckBox, QComboBox, QDateEdit, QDialog, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QPushButton, QScrollArea,
-    QShortcut, QSizePolicy, QStackedWidget, QStyle, QTableWidget, QTableWidgetItem,
+    QSizePolicy, QStackedWidget, QStyle, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget, QTabWidget,
 )
 
@@ -84,6 +84,7 @@ class KioskWindow(QMainWindow):
         self.session_open = False
         self._shutdown_finished = True
         self.lifecycle_state = None
+        self._shutdown_authorization = None
         self.standby_timeout_seconds = 30
         self.face_present = False
         self._inactivity_deadline = None
@@ -148,8 +149,6 @@ class KioskWindow(QMainWindow):
         self.clock.timeout.connect(self.update_clock)
         self.clock.start(1000)
         self.update_clock()
-        self.exit_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
-        self.exit_shortcut.activated.connect(self.close)
         self.apply_theme(initial_theme)
         self.navigate("standby")
         QApplication.instance().installEventFilter(self)
@@ -261,8 +260,6 @@ class KioskWindow(QMainWindow):
         col.addLayout(auth_body, 1)
         auth_actions = QHBoxLayout()
         auth_actions.addWidget(button("Cancelar", lambda: self.navigate("attendance")))
-        if self.persistent_attendance:
-            auth_actions.addWidget(button("Salir de la aplicación", self.confirm_exit))
         col.addLayout(auth_actions)
         self.update_pin()
 
@@ -584,6 +581,30 @@ class KioskWindow(QMainWindow):
             self.pin = ""; self.update_pin()
 
     def confirm_exit(self):
+        """Every ordinary close mechanism goes through the close-event boundary."""
+        if not self._exit_allowed():
+            return False
+        return self.close()
+
+    def _exit_allowed(self):
+        if self.lifecycle_state is not LifecycleState.ADMIN:
+            return False
+        if self.persistent_attendance:
+            return self.administration is not None and self.administration.allowed()
+        return self.authenticated
+
+    def _authorize_shutdown(self, reason):
+        """Internal commit after exit confirmation or a consumed power grant.
+
+        The authorization survives logout only to finish this terminal lifecycle;
+        worker completion callbacks cannot authorize an initial shutdown.
+        """
+        if reason not in ('administrator_exit', 'reboot', 'poweroff') or not self._exit_allowed():
+            return False
+        self._shutdown_authorization = reason
+        return True
+
+    def _confirm_exit_dialog(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("Salir de la aplicación")
         dialog.setStyleSheet(self.styleSheet())
@@ -599,9 +620,7 @@ class KioskWindow(QMainWindow):
         actions.addWidget(button("Salir", dialog.accept, True))
         layout.addLayout(actions)
         try:
-            if dialog.exec_() == QDialog.Accepted:
-                # Closing the last main window lets Qt end its application loop.
-                self.close()
+            return dialog.exec_() == QDialog.Accepted
         finally:
             dialog.deleteLater()
 
@@ -676,6 +695,14 @@ class KioskWindow(QMainWindow):
         self.system_time.setText('Hora del sistema: ' + now.toString('HH:mm:ss'))
 
     def closeEvent(self, event):
+        if self._shutdown_authorization is None:
+            # Reject before changing timers, lifecycle, authentication or resources.
+            if not self._exit_allowed() or not self._confirm_exit_dialog():
+                event.ignore()
+                return
+            if not self._authorize_shutdown('administrator_exit'):
+                event.ignore()
+                return
         self.clock.stop()
         self._transition_state(LifecycleState.SHUTDOWN)
         self.authenticated = False

@@ -11,6 +11,8 @@ import subprocess
 import sys
 from unittest.mock import patch
 
+from tests.admin_fakes import dispose_window, demo_exit
+
 AVAILABLE = importlib.util.find_spec("PyQt5") is not None
 if AVAILABLE:
     import os
@@ -129,7 +131,7 @@ class GuiRecognitionTests(unittest.TestCase):
                 if gate: gate.set()
             self.integration.finalize()
             self.window._shutdown_finished = True
-            self.window.close()
+            dispose_window(self.window)
             self.app.processEvents()
         self.addCleanup(cleanup)
 
@@ -392,7 +394,7 @@ assert not any(name in sys.modules for name in ('numpy','cv2','mediapipe','sklea
         self.start(d)
         self.activate()
         self.wait_for(d.read_entered.is_set)
-        self.window.close()
+        demo_exit(self.window)
         self.assertTrue(self.integration.closing)
         self.assertFalse(self.worker.active(self.integration.generation))
         self.assertEqual(self.window.lifecycle_state, LifecycleState.SHUTDOWN)
@@ -406,10 +408,20 @@ assert not any(name in sys.modules for name in ('numpy','cv2','mediapipe','sklea
         self.start(d)
         self.activate()
         self.wait_for(lambda: len(d.loads) == 1)
-        self.window.close()
+        demo_exit(self.window)
         d.load_gate.set()
         self.wait_for(lambda: not self.worker.isRunning() and not self.window.isVisible())
         self.assertEqual(d.cameras, [])
+
+    def test_unauthenticated_close_keeps_active_camera_worker_and_generation(self):
+        self.start(); self.activate()
+        self.wait_for(lambda: self.components.active_cameras == 1)
+        generation = self.integration.generation
+        self.assertFalse(self.window.close()); self.assertFalse(self.window.confirm_exit())
+        self.assertIs(self.window.lifecycle_state, LifecycleState.ATTENDANCE)
+        self.assertFalse(self.integration.closing); self.assertTrue(self.worker.isRunning())
+        self.assertTrue(self.worker.active(generation)); self.assertEqual(self.integration.generation, generation)
+        self.assertEqual(self.components.active_cameras, 1); self.assertTrue(self.window.clock.isActive())
 
     def test_qt_exit_waits_for_worker_cleanup_without_an_orphan_thread(self):
         self.start()
@@ -420,7 +432,7 @@ assert not any(name in sys.modules for name in ('numpy','cv2','mediapipe','sklea
         watchdog.setSingleShot(True)
         watchdog.timeout.connect(lambda: (expired.append(True), self.app.quit()))
         watchdog.start(2500)
-        QTimer.singleShot(0, self.window.close)
+        QTimer.singleShot(0, lambda:demo_exit(self.window))
         try:
             self.assertEqual(self.app.exec_(), 0)
         finally:

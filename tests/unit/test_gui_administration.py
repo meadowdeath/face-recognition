@@ -8,6 +8,8 @@ from time import monotonic
 import unittest
 from unittest.mock import patch, Mock
 
+from tests.admin_fakes import dispose_window
+
 AVAILABLE = importlib.util.find_spec('PyQt5') is not None
 if AVAILABLE:
     os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
@@ -55,7 +57,7 @@ class GuiAdministrationTests(unittest.TestCase):
         self.power=Mock(enabled=True)
         self.ui=AdminIntegration(self.w,self.admin,self.admin.settings,
             DeviceDiagnostics(self.temp.name,platform='win32'),power=self.power)
-        self.w.show(); self.addCleanup(self.ui.finalize); self.addCleanup(self.w.close)
+        self.w.show(); self.addCleanup(dispose_window, self.w)
 
     def wait_for(self,predicate):
         until=monotonic()+5
@@ -147,13 +149,121 @@ class GuiAdministrationTests(unittest.TestCase):
         self.w.navigate('attendance')
         self.assertFalse(self.ui.lock_timer.isActive())
 
-    def test_unconfigured_gui_no_demo_fallback_and_safe_exit(self):
+    def test_unconfigured_gui_has_no_demo_fallback_or_unauthenticated_exit(self):
         with self.db.transaction(write=True) as c:c.execute('DELETE FROM admin_credentials')
         self.ui.update_setup_state();self.w.open_admin()
         self.assertFalse(self.w.pin_confirm.isEnabled())
         for digit in '123456':self.w.enter_digit(digit)
         self.w.confirm_pin();self.assertFalse(self.ui.allowed());self.assertEqual(self.w.pin,'')
-        self.w.close();self.assertIs(self.w.lifecycle_state,LifecycleState.SHUTDOWN)
+        self.assertFalse(self.w.close());self.assertIs(self.w.lifecycle_state,LifecycleState.ADMIN_LOGIN)
+        self.assertTrue(self.w.clock.isActive());self.assertTrue(self.w.isVisible())
+
+    def test_public_screens_escape_alt_f4_close_and_callback_cannot_exit(self):
+        from PyQt5.QtTest import QSignalSpy
+        from PyQt5.QtGui import QCloseEvent
+        shutdown = QSignalSpy(self.w.shutdown_requested)
+        for page in ('standby', 'attendance', 'pin'):
+            self.w.navigate(page)
+            state = self.w.lifecycle_state
+            timers = (self.w.clock.isActive(), self.w.inactivity_timer.isActive())
+            deadline = self.w._inactivity_deadline
+            with patch.object(self.w, '_confirm_exit_dialog', side_effect=AssertionError('Unauthenticated confirmation')):
+                QTest.keyClick(self.w, Qt.Key_Escape)
+                QTest.keyClick(self.w, Qt.Key_F4, Qt.AltModifier)
+                self.assertFalse(self.w.close())
+                self.assertFalse(self.w.confirm_exit())
+                event = QCloseEvent(); self.app.sendEvent(self.w, event)
+                self.assertFalse(event.isAccepted())
+            self.assertIs(self.w.lifecycle_state, state)
+            self.assertEqual((self.w.clock.isActive(), self.w.inactivity_timer.isActive()), timers)
+            self.assertEqual(self.w._inactivity_deadline, deadline)
+            self.assertIsNone(self.w._shutdown_authorization)
+            self.assertTrue(self.w.isVisible())
+        self.assertEqual(len(shutdown), 0)
+        self.assertNotIn('Salir de la aplicación', [b.text() for b in self.w.screens['pin'].findChildren(QPushButton)])
+        cancel = next(b for b in self.w.screens['pin'].findChildren(QPushButton) if b.text() == 'Cancelar')
+        cancel.click()
+        self.assertIs(self.w.lifecycle_state, LifecycleState.ATTENDANCE)
+
+    def test_failed_pin_lockout_logout_and_stale_gui_boolean_cannot_authorize_exit(self):
+        self.login('092847')
+        self.assertFalse(self.w.close())
+        for _ in range(4): self.login('092847')
+        self.assertFalse(self.ui.allowed()); self.assertTrue(self.ui.lock_timer.isActive())
+        self.assertFalse(self.w.confirm_exit()); self.assertFalse(self.w.close())
+        self.assertTrue(self.ui.lock_timer.isActive())
+        self.now += timedelta(seconds=61)
+        self.ui.lock_deadline = 0
+        self.login()
+        self.assertIs(self.w.lifecycle_state, LifecycleState.ADMIN)
+        self.assertTrue(self.w.authenticated)
+        self.admin.logout()  # GUI state remains cached; authority must come from the service.
+        with patch.object(self.w, '_confirm_exit_dialog', side_effect=AssertionError('No authority')):
+            self.assertFalse(self.w.confirm_exit()); self.assertFalse(self.w.close())
+        self.assertIsNone(self.w._shutdown_authorization)
+        self.assertTrue(self.w.clock.isActive())
+
+    def test_authorized_exit_cancel_and_modal_escape_preserve_authentication_and_open_session(self):
+        self.login()
+        session = self.service.create_session('Synthetic exit', self.now.date()).session
+        self.attendance.refresh_session()
+        screen = self.w.stack.currentWidget()
+        for escape in (False, True):
+            self.schedule_dialog(lambda dialog: QTest.keyClick(dialog, Qt.Key_Escape) if escape else
+                                 self.dialog_button(dialog, 'Cancelar').click())
+            self.assertFalse(self.w.confirm_exit())
+            self.assertTrue(self.ui.allowed()); self.assertIs(self.w.lifecycle_state, LifecycleState.ADMIN)
+            self.assertIs(self.w.stack.currentWidget(), screen)
+            self.assertEqual(self.sessions.current(), session)
+            self.assertIsNone(self.w._shutdown_authorization); self.assertTrue(self.w.clock.isActive())
+
+    def test_dashboard_exit_confirmation_preserves_records_and_session_but_ends_login(self):
+        self.login()
+        session = self.service.create_session('Synthetic exit', self.now.date()).session
+        self.admin.participants.add('p001', self.now); self.records.add('p001', session.id, self.now)
+        self.attendance.refresh_session()
+        self.schedule_dialog(lambda dialog:self.dialog_button(dialog, 'Salir').click())
+        self.dialog_button(self.w.screens['dashboard'], 'Salir de la aplicación').click()
+        self.assertIs(self.w.lifecycle_state, LifecycleState.SHUTDOWN)
+        self.assertEqual(self.w._shutdown_authorization, 'administrator_exit')
+        self.assertFalse(self.w.isVisible()); self.assertFalse(self.ui.allowed())
+        self.assertEqual(self.sessions.current(), session)
+        self.assertEqual(self.records.count_for_session(session.id), 1)
+        self.assertFalse(self.w.clock.isActive())
+        self.assertTrue(self.w.close())  # Completion never requires an already cleared login.
+
+    def test_authority_lost_during_confirmation_prevents_initial_shutdown(self):
+        self.login()
+        def respond(dialog):
+            self.admin.logout()
+            self.dialog_button(dialog, 'Salir').click()
+        self.schedule_dialog(respond)
+        self.assertFalse(self.w.confirm_exit())
+        self.assertIs(self.w.lifecycle_state, LifecycleState.ADMIN)
+        self.assertTrue(self.w.isVisible()); self.assertTrue(self.w.clock.isActive())
+        self.assertIsNone(self.w._shutdown_authorization)
+
+    def test_authenticated_persistent_exit_finishes_qt_event_loop(self):
+        self.login()
+        expired = []
+        watchdog = QTimer(); watchdog.setSingleShot(True)
+        watchdog.timeout.connect(lambda:(expired.append(True), self.app.quit()))
+        watchdog.start(2000)
+        QTimer.singleShot(0, self.w.confirm_exit)
+        self.schedule_dialog(lambda dialog:self.dialog_button(dialog, 'Salir').click())
+        try: self.assertEqual(self.app.exec_(), 0)
+        finally: watchdog.stop()
+        self.assertFalse(expired, 'Authorized exit did not finish Qt shutdown')
+        self.assertIs(self.w.lifecycle_state, LifecycleState.SHUTDOWN)
+        self.assertFalse(self.w.isVisible()); self.assertFalse(self.ui.allowed())
+
+    def test_persistent_storage_initialization_failure_has_no_exit_fallback(self):
+        window = KioskWindow(persistent_attendance=True)
+        self.addCleanup(dispose_window, window); window.show(); window.open_admin()
+        window.authenticated = True
+        self.assertFalse(window.close()); self.assertFalse(window.confirm_exit())
+        self.assertIs(window.lifecycle_state, LifecycleState.ADMIN_LOGIN)
+        self.assertTrue(window.clock.isActive())
 
     def test_change_pin_uses_keypad_dialog_and_requires_new_login(self):
         self.login();self.w.navigate('settings')
@@ -211,12 +321,13 @@ class GuiAdministrationTests(unittest.TestCase):
         self.assertFalse(self.ui.diagnostic_timer.isActive());self.assertFalse(self.ui.lock_timer.isActive())
         self.power.execute.assert_not_called() # Executed only by entry point after event loop/worker cleanup.
 
-    def test_shutdown_during_authentication_task_leaves_no_authenticated_state(self):
+    def test_unauthenticated_close_during_login_does_not_interrupt_authentication(self):
         self.w.open_admin()
         for digit in TEST_PIN:self.w.enter_digit(digit)
         self.w.confirm_pin();self.w.close()
         self.wait_for(lambda:self.ui.job is None)
-        self.assertFalse(self.ui.allowed());self.assertFalse(self.w._admin_shutdown_finished is False)
+        self.assertTrue(self.ui.allowed());self.assertIs(self.w.lifecycle_state,LifecycleState.ADMIN)
+        self.assertTrue(self.w.clock.isActive());self.assertTrue(self.w._admin_shutdown_finished)
 
     def test_entry_point_fails_closed_for_unconfigured_live_recording_and_obsolete_flag(self):
         from contextlib import redirect_stderr
@@ -255,7 +366,7 @@ class GuiAdministrationTests(unittest.TestCase):
             self.assertEqual(code,1 if fails else 0)
             power.execute.assert_called_once_with('reboot')
             if fails:self.assertIn('cerró de forma segura',output.getvalue())
-            for item in controllers:item.window.close()
+            for item in controllers:dispose_window(item.window)
 
     def test_authentication_uses_one_worker_and_does_not_block_gui_or_survive_cancellation(self):
         from threading import Event, get_ident
@@ -305,17 +416,18 @@ class GuiAdministrationTests(unittest.TestCase):
             entered.set()
             if not release.wait(5):raise AssertionError('Authentication was not released')
             return fast_test_derive(*args)
-        self.w.open_admin()
+        self.login()
         with patch.object(admin_credentials,'derive',side_effect=derive):
             try:
-                for digit in TEST_PIN:self.w.enter_digit(digit)
-                self.w.confirm_pin();self.wait_for(entered.is_set)
-                self.w.close()
+                self.ui.start_job(lambda:self.admin.authorize('synthetic-shutdown',TEST_PIN), lambda result:None)
+                self.wait_for(entered.is_set)
+                with patch.object(self.w,'_confirm_exit_dialog',return_value=True):self.w.confirm_exit()
                 self.assertIs(self.w.lifecycle_state,LifecycleState.SHUTDOWN)
                 self.assertFalse(self.w._admin_shutdown_finished)
             finally:release.set()
             self.wait_for(lambda:self.ui.job is None)
         self.assertTrue(self.w._admin_shutdown_finished);self.assertFalse(self.ui.allowed())
+        self.assertFalse(self.w.isVisible())
 
     def test_keypad_digits_checked_signal_length_backspace_focus_and_masking(self):
         self.login_keypad()
@@ -516,7 +628,7 @@ class GuiAdministrationTests(unittest.TestCase):
     def test_disabled_power_actions_have_explanation(self):
         window=KioskWindow(persistent_attendance=True)
         ui=AdminIntegration(window,self.admin,self.admin.settings,DeviceDiagnostics(self.temp.name,platform='win32'))
-        self.addCleanup(ui.finalize);self.addCleanup(window.close)
+        self.addCleanup(dispose_window, window)
         self.assertIn('--enable-system-power-actions',window.power_notice.text())
         self.assertIn('Fase 9',window.power_notice.text())
         self.assertFalse(window.admin_actions['reboot'].isEnabled())
@@ -537,7 +649,7 @@ class GuiAdministrationTests(unittest.TestCase):
     def production_restart(self,inspect):
         """Fresh-window production composition, same synthetic DB, no main event loop."""
         from face_recognition.presentation.gui.__main__ import main
-        self.w.close();self.ui.finalize()
+        dispose_window(self.w)
         expected_theme=self.admin.settings.get().theme
         windows=[];applied=[];reads=[];writes=[]
         original_apply=KioskWindow.apply_theme
@@ -563,7 +675,7 @@ class GuiAdministrationTests(unittest.TestCase):
                 self.assertEqual(applied,[expected_theme])
                 window.administration.service.clock=lambda:self.now
                 inspect(window,applied,writes)
-            finally:window.close()
+            finally:dispose_window(window)
             return 0
         with patch('PyQt5.QtWidgets.QApplication',return_value=self.app), \
                 patch('face_recognition.presentation.gui.window.KioskWindow',side_effect=make_window), \
@@ -693,7 +805,7 @@ class GuiAdministrationTests(unittest.TestCase):
 
     def test_startup_theme_settings_read_failure_has_safe_single_dark_fallback(self):
         from face_recognition.presentation.gui.__main__ import main
-        self.w.close();self.ui.finalize();windows=[]
+        dispose_window(self.w);windows=[]
         def window(*args,**kwargs):
             result=KioskWindow(*args,**kwargs);windows.append(result);return result
         def inspect():
@@ -702,7 +814,7 @@ class GuiAdministrationTests(unittest.TestCase):
                 self.assertEqual(current.theme,'dark')
                 self.assertIn('No fue posible cargar',current.settings_message.text())
                 self.assertIs(current.lifecycle_state,LifecycleState.STANDBY)
-            finally:current.close()
+            finally:dispose_window(current)
             return 0
         with patch('PyQt5.QtWidgets.QApplication',return_value=self.app), \
                 patch('face_recognition.presentation.gui.window.KioskWindow',side_effect=window), \

@@ -5,6 +5,8 @@ import os
 import unittest
 from unittest.mock import patch
 
+from tests.admin_fakes import dispose_window, demo_exit
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 AVAILABLE = importlib.util.find_spec("PyQt5") is not None
 if AVAILABLE:
@@ -30,7 +32,7 @@ class KioskGuiTests(unittest.TestCase):
         self.window = KioskWindow()
         self.window.show()
         self.app.processEvents()
-        self.addCleanup(self.window.close)
+        self.addCleanup(dispose_window, self.window)
 
     def click(self, text):
         buttons = [b for b in self.window.stack.currentWidget().findChildren(QPushButton) if b.text() == text]
@@ -72,6 +74,16 @@ class KioskGuiTests(unittest.TestCase):
         self.assertFalse(self.window.authenticated)
         self.login()
         self.assertEqual(self.current(), "dashboard")
+
+    def test_demo_requires_pin_before_any_user_exit_and_escape_never_exits(self):
+        for page in ('standby', 'attendance', 'pin'):
+            self.window.navigate(page)
+            QTest.keyClick(self.window, Qt.Key_Escape)
+            self.assertFalse(self.window.close()); self.assertFalse(self.window.confirm_exit())
+            self.assertTrue(self.window.isVisible()); self.assertTrue(self.window.clock.isActive())
+        self.login()
+        self.window.navigate('attendance')
+        self.assertFalse(self.window.close())
 
     def test_all_admin_cards_back_and_attendance_clears_authentication(self):
         self.login()
@@ -231,7 +243,7 @@ class KioskGuiTests(unittest.TestCase):
         self.assertEqual([r[0] for r in active], [True, False] * 3)
         self.assertEqual(len(states), 6)
         self.assertEqual(set(self.window.findChildren(QTimer)), timers)
-        self.window.close()
+        demo_exit(self.window)
         self.assertIs(self.window.lifecycle_state, LifecycleState.SHUTDOWN)
         self.window.navigate("attendance")
         self.expire_attendance()
@@ -239,7 +251,7 @@ class KioskGuiTests(unittest.TestCase):
         self.assertFalse(self.window.clock.isActive())
         self.assertFalse(self.window.inactivity_timer.isActive())
 
-    def test_actual_single_shot_dispatch_and_shutdown_from_attendance(self):
+    def test_actual_single_shot_dispatch_and_unauthenticated_attendance_exit_denial(self):
         self.window.navigate("attendance")
         self.window._inactivity_deadline = 0
         states = QSignalSpy(self.window.lifecycle_changed)
@@ -251,8 +263,13 @@ class KioskGuiTests(unittest.TestCase):
         events = QSignalSpy(self.window.lifecycle_changed)
         active = QSignalSpy(self.window.attendance_active_changed)
         self.window.close()
-        self.assertEqual(events[0][0], LifecycleState.SHUTDOWN)
-        self.assertEqual(active[0][0], False)
+        self.assertEqual(len(events), 0)
+        self.assertEqual(len(active), 0)
+        self.assertIs(self.window.lifecycle_state, LifecycleState.ATTENDANCE)
+        self.assertTrue(self.window.face_present)
+        demo_exit(self.window)
+        self.assertEqual(events[-1][0], LifecycleState.SHUTDOWN)
+        self.assertEqual(active[0][0], False)  # Leaving Attendance for authenticated administration.
         self.assertFalse(self.window.face_present)
 
     def test_theme_changes_all_existing_screens_without_recreation(self):
@@ -277,6 +294,9 @@ class KioskGuiTests(unittest.TestCase):
         self.assertTrue(self.window.clock.isActive())
         QTest.keyClick(self.window, Qt.Key_Escape)
         self.app.processEvents()
+        self.assertTrue(self.window.isVisible())
+        self.assertTrue(self.window.clock.isActive())
+        demo_exit(self.window)
         self.assertFalse(self.window.isVisible())
         self.assertFalse(self.window.clock.isActive())
 
@@ -287,7 +307,7 @@ class KioskGuiTests(unittest.TestCase):
         with patch('face_recognition.presentation.gui.window.QDateTime') as clock:
             clock.currentDateTime.return_value=moment
             window=KioskWindow()
-        self.addCleanup(window.close)
+        self.addCleanup(dispose_window, window)
         self.assertEqual(window.system_date.text(),'Fecha del sistema: 16/11/2026')
         self.assertEqual(window.system_time.text(),'Hora del sistema: 11:29:00')
         self.assertEqual(window.time_label.text(),'11:29:00')
@@ -313,4 +333,4 @@ class KioskGuiTests(unittest.TestCase):
                         for area in page.findChildren(QScrollArea):
                             area.widget().ensurePolished()
                             self.assertEqual(area.widget().palette().color(QPalette.Window).name(),THEMES[theme]['background'].lower())
-                finally:window.close()
+                finally:dispose_window(window)
