@@ -151,7 +151,6 @@ class AdminIntegration:
             self.job = None
             self.window._admin_shutdown_finished = True
             result = task.result
-            self.authentication_latency_ms = task.elapsed_ms
             if self.window.live_debug_enabled:
                 print(f'Verificación administrativa: {task.elapsed_ms:.1f} ms')
             task.result = None

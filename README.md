@@ -1044,7 +1044,8 @@ fixture unchanged. Never select an operational or biometric database.
 Focused Pi regression (synthetic fixtures, no expensive model-training tests):
 
 ```bash
-QT_QPA_PLATFORM=offscreen PYTHONPATH=src python -m unittest \
+QT_QPA_PLATFORM=offscreen PYTHONPATH=src \
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m unittest \
   tests.unit.test_administration tests.unit.test_admin_concurrency tests.unit.test_device tests.unit.test_gui_administration \
   tests.unit.test_attendance_persistence tests.unit.test_attendance_sessions \
   tests.unit.test_session_dates_deletion tests.unit.test_attendance_service \
@@ -1106,21 +1107,11 @@ python -m unittest tests.unit.test_admin_concurrency
 python -m unittest tests.unit.test_administration tests.unit.test_gui_attendance tests.unit.test_gui_administration
 ```
 
-Use the focused command above with `tests.unit.test_admin_concurrency` included
-for the complete affected regression suite. Raspberry Pi timing improvements and
-resolution of the reported hardware failures still require operator validation;
-development-machine results must not be presented as new Pi measurements.
-
-
-A Windows development run of the revised focused suite completed **205 tests in
-17.636 seconds** (204 passed, one POSIX-only skip), compared with the previous
-Windows run of 190 tests in 69.197 seconds. The complete Windows suite also passed 492 tests in 83.461 seconds (491 passed,
-one POSIX-only skip). Coverage increased by 15 tests while
-elapsed time fell about 74.5% in these runs; this is not an identical-workload
-microbenchmark or a new Raspberry Pi measurement. The supplied Pi result remains
-190 tests in 932.103 seconds before these fixes. Re-run the commands above on Pi
-to measure the improvement there; production derivation still costs the measured
-approximately 2.56 seconds per call on that device.
+Use the focused command above for the complete affected regression suite. The
+operator reported **205/205 Raspberry Pi checks in 135.708 seconds** after the
+concurrency fixes, versus the earlier 190-check run in 932.103 seconds. These are
+different workloads, not an identical-workload benchmark. Production derivation
+still costs approximately 2.56 seconds per call on that device.
 
 
 ### Final Phase 6 keypad and Settings correction
@@ -1158,11 +1149,6 @@ are removed. This does **not** prove that the physical display cannot adjust its
 brightness. No software dimming, GPIO/sysfs/DDC commands, packages or permissions
 were added; verified hardware brightness/display-power support may be investigated
 in Phase 9.
-
-The operator reported that the preceding concurrency revision passed **205/205 Pi
-checks in 135.708 seconds**. Manual EGLFS testing then exposed the keypad callback
-crash. That pass is not validation of this correction. The supplied approximately
-2.56-second PBKDF2 benchmark remains applicable; production iterations stay 600,000.
 
 Run actual keypad coverage and the affected GUI checks on Pi:
 
@@ -1206,8 +1192,9 @@ QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui
    and confirm power buttons remain disabled with an explanation. Do not enable
    real system power actions for this acceptance run.
 
-These keypad/Settings changes still require operator EGLFS validation on Raspberry
-Pi; no new hardware validation or power execution was performed during development.
+The operator confirmed Raspberry Pi/EGLFS functional acceptance of the keypad and
+Settings corrections. Development tests use offscreen Qt and synthetic fixtures;
+real power execution remains unvalidated and outside ordinary acceptance testing.
 
 
 ### Startup theme restoration
@@ -1260,5 +1247,6 @@ Select Lavender in Ajustes, exit normally, restart with the same `$DB`, log in a
 visit Sesiones, Estado, Registros and Ajustes without toggling the theme. Check
 nested contents, table headers, tabs, popups and dialogs. Repeat with Amethyst and
 check runtime switching in both directions. Do not recreate the database or
-configure another PIN. This correction still requires operator Raspberry Pi/EGLFS
-validation; local offscreen results are not hardware acceptance.
+configure another PIN. The operator confirmed Raspberry Pi/EGLFS acceptance,
+including persisted-theme restoration. No additional hardware validation is
+claimed by the development-machine regression runs.
