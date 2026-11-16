@@ -20,6 +20,7 @@ from face_recognition.infrastructure.persistence.attendance_database import Atte
 from face_recognition.infrastructure.persistence.attendance_repositories import (
     SQLiteAttendanceRecordRepository, SQLiteAttendanceSessionRepository, SQLiteParticipantRepository, SQLiteDeviceSettingsRepository,
 )
+from tests.admin_fakes import configured_admin
 from tests.attendance_v1_schema import create_v1
 
 NOW = datetime(2026, 1, 2, 10, tzinfo=timezone.utc)
@@ -35,7 +36,8 @@ class SessionManagementTests(unittest.TestCase):
         self.sessions = SQLiteAttendanceSessionRepository(self.db)
         self.people = SQLiteParticipantRepository(self.db)
         self.records = SQLiteAttendanceRecordRepository(self.db)
-        self.service = AttendanceService(self.people, self.sessions, self.records, clock=lambda: NOW + timedelta(days=1))
+        self.service = AttendanceService(self.people, self.sessions, self.records, clock=lambda: NOW + timedelta(days=1),
+            administrator=configured_admin(self.db, clock=lambda: NOW))
         self.people.add('p001', NOW)
         self.people.add('p002', NOW)
 
@@ -224,7 +226,7 @@ class AttendanceMigrationTests(unittest.TestCase):
         self.assertEqual(sessions.get(7).name_key, 'optimización')
         self.assertEqual(SQLiteDeviceSettingsRepository(self.db).get().standby_timeout_seconds, 120)
         with self.db.transaction() as c:
-            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], 3)
+            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], 4)
             self.assertEqual(c.execute('PRAGMA foreign_keys').fetchone()[0], 1)
             self.assertEqual(c.execute('PRAGMA foreign_key_check').fetchall(), [])
         after = self.snapshot()

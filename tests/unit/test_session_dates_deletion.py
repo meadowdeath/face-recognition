@@ -14,18 +14,19 @@ from unittest.mock import patch
 from face_recognition.application.attendance_service import AttendanceService, RegistrationOutcome
 from face_recognition.domain.models.attendance import (
     AttendancePersistenceError, DeletionOperation as Op, DuplicateSessionNameError, SessionConflictError,
-    SessionOutcome, SyntheticDeletionAuthorization as Authorization,
+    SessionOutcome,
 )
 from face_recognition.infrastructure.persistence.attendance_database import AttendanceDatabase, V3_EXTRAS, inferred_session_date, timestamp
 from face_recognition.infrastructure.persistence.attendance_repositories import (
     SQLiteAttendanceSessionRepository, SQLiteAttendanceRecordRepository, SQLiteParticipantRepository, SQLiteDeviceSettingsRepository,
 )
+from tests.admin_fakes import configured_admin, grant
 from tests.attendance_v1_schema import create_v1
 from tests.attendance_v2_schema import create_v2
 
 NOW = datetime(2026, 11, 16, 23, 30, tzinfo=timezone.utc)
 DAY = date(2026, 11, 16)
-ALLOWED = Authorization(True, True, False, False)
+
 
 
 class DatedDeletionTests(unittest.TestCase):
@@ -39,8 +40,9 @@ class DatedDeletionTests(unittest.TestCase):
         self.records = SQLiteAttendanceRecordRepository(self.db)
         self.people = SQLiteParticipantRepository(self.db)
         self.settings = SQLiteDeviceSettingsRepository(self.db)
+        self.administrator = configured_admin(self.db, clock=lambda: NOW)
         self.service = AttendanceService(self.people, self.sessions, self.records, clock=lambda: NOW,
-                                          deletion_authorization=ALLOWED)
+                                          administrator=self.administrator)
         for person in ('p001', 'p002', 'p003'): self.people.add(person, NOW)
         self.settings.update_theme('light')
 
@@ -98,7 +100,7 @@ class DatedDeletionTests(unittest.TestCase):
         preview = self.service.prepare_deletion(Op.CLEAR, first.id)
         self.assertEqual(preview.attendance_count, 1)
         self.assertEqual(preview.deleted_session_count, 0)
-        result = self.service.execute_deletion(preview)
+        result = self.service.execute_deletion(preview, grant(self.administrator, preview))
         self.assertEqual((result.sessions_deleted, result.records_deleted), (0, 1))
         self.assertEqual(self.sessions.get(first.id), first)
         self.assertEqual(self.records.count_for_session(first.id), 0)
@@ -114,7 +116,7 @@ class DatedDeletionTests(unittest.TestCase):
     def test_delete_single_date_preserves_other_dates_and_participants(self):
         first, second, other = self.population()
         preview = self.service.prepare_deletion(Op.SESSION, first.id)
-        result = self.service.execute_deletion(preview)
+        result = self.service.execute_deletion(preview, grant(self.administrator, preview))
         self.assertEqual((result.sessions_deleted, result.records_deleted), (1, 1))
         self.assertIsNone(self.sessions.get(first.id))
         self.assertEqual(self.sessions.dates_for_name('Optimización'), (second,))
@@ -125,7 +127,7 @@ class DatedDeletionTests(unittest.TestCase):
         preview = self.service.prepare_deletion(Op.NAME, second.id)
         self.assertEqual([s.id for s, _ in preview.sessions], [first.id, second.id])
         self.assertEqual((preview.deleted_session_count, preview.attendance_count), (2, 2))
-        result = self.service.execute_deletion(preview)
+        result = self.service.execute_deletion(preview, grant(self.administrator, preview))
         self.assertEqual((result.sessions_deleted, result.records_deleted), (2, 2))
         self.assertEqual(self.sessions.list(), (other,))
         self.assert_preserved(other)
@@ -134,14 +136,14 @@ class DatedDeletionTests(unittest.TestCase):
         first = self.event()
         preview = self.service.prepare_deletion(Op.NAME, first.id)
         second = self.event('OPTIMIZACIÓN', DAY+timedelta(days=7), 'p002')
-        with self.assertRaisesRegex(ValueError, 'changed'): self.service.execute_deletion(preview)
+        with self.assertRaisesRegex(ValueError, 'changed'): self.service.execute_deletion(preview, grant(self.administrator, preview))
         self.assertEqual(len(self.sessions.list()), 2)
         preview = self.service.prepare_deletion(Op.CLEAR, first.id)
         for altered in (replace(preview, operation=Op.SESSION), replace(preview, target_session_id=second.id)):
-            with self.assertRaisesRegex(ValueError, 'changed'): self.service.execute_deletion(altered)
+            with self.assertRaisesRegex(ValueError, 'changed'): self.service.execute_deletion(altered, grant(self.administrator, preview))
         preview = self.service.prepare_deletion(Op.SESSION, first.id)
         self.sessions.edit(first.id, 'Edited', DAY)
-        with self.assertRaisesRegex(ValueError, 'changed'): self.service.execute_deletion(preview)
+        with self.assertRaisesRegex(ValueError, 'changed'): self.service.execute_deletion(preview, grant(self.administrator, preview))
         self.assertEqual(self.records.count_for_session(first.id), 1)
         self.assertEqual(self.records.count_for_session(second.id), 1)
 
@@ -155,13 +157,13 @@ class DatedDeletionTests(unittest.TestCase):
                       ('p001', first.id, timestamp(original.registered_at)))
         self.assertEqual(self.records.count_for_session(first.id), preview.attendance_count)
         self.assertGreater(self.records.get(first.id, 'p001').id, original.id)
-        with self.assertRaisesRegex(ValueError, 'changed'): self.service.execute_deletion(preview)
+        with self.assertRaisesRegex(ValueError, 'changed'): self.service.execute_deletion(preview, grant(self.administrator, preview))
         self.assertEqual(self.records.count_for_session(first.id), 1)
 
     def test_deleted_ids_never_reuse_even_after_all_sessions_are_deleted(self):
         old = self.event()
         preview = self.service.prepare_deletion(Op.SESSION, old.id)
-        self.service.execute_deletion(preview)
+        self.service.execute_deletion(preview, grant(self.administrator, preview))
         replacement = self.service.create_session(old.name, old.session_date).session
         self.assertGreater(replacement.id, old.id)
         self.assertIs(self.service.register('p001', old.id, 1).outcome, RegistrationOutcome.NO_SESSION)
@@ -170,7 +172,7 @@ class DatedDeletionTests(unittest.TestCase):
             with self.db.transaction(write=True) as c:
                 c.execute('INSERT INTO attendance_sessions (id,name,name_key,session_date,opened_at,closed_at) VALUES (?,?,?,?,?,?)',
                           (old.id, 'Forced', 'forced', DAY.isoformat(), timestamp(NOW), timestamp(NOW)))
-        with self.assertRaises((ValueError, LookupError)): self.service.execute_deletion(preview)
+        with self.assertRaises((ValueError, LookupError)): self.service.execute_deletion(preview, grant(self.administrator, preview))
 
     def test_any_active_session_blocks_prepare_execute_and_direct_repository_calls(self):
         first = self.event()
@@ -179,20 +181,20 @@ class DatedDeletionTests(unittest.TestCase):
         for op in Op:
             with self.subTest(operation=op), self.assertRaises(SessionConflictError):
                 self.service.prepare_deletion(op, first.id)
-        with self.assertRaises(SessionConflictError): self.service.execute_deletion(preview)
-        with self.assertRaises(SessionConflictError): self.sessions.execute_deletion(preview, ALLOWED)
+        with self.assertRaises(SessionConflictError): self.service.execute_deletion(preview, grant(self.administrator, preview))
+        with self.assertRaises(SessionConflictError): self.sessions.execute_deletion(preview, grant(self.administrator, preview))
         self.assertEqual(self.records.count_for_session(first.id), 1)
         self.service.close_session(active.id)
-        self.assertEqual(self.service.execute_deletion(preview).sessions_deleted, 1)
+        self.assertEqual(self.service.execute_deletion(preview, grant(self.administrator, preview)).sessions_deleted, 1)
 
     def test_authorization_is_enforced_by_service_and_repository(self):
         first = self.event()
         preview = self.service.prepare_deletion(Op.SESSION, first.id)
-        for auth in (Authorization(), Authorization(True, False), Authorization(True, True, True), Authorization(True, True, False, True)):
-            self.service.deletion_authorization = auth
-            with self.subTest(auth=auth), self.assertRaises(PermissionError): self.service.prepare_deletion(Op.SESSION, first.id)
-            with self.assertRaises(PermissionError): self.service.execute_deletion(preview)
-            with self.assertRaises(PermissionError): self.sessions.execute_deletion(preview, auth)
+        permit = grant(self.administrator, preview)
+        self.administrator.logout()
+        with self.assertRaises(PermissionError): self.service.prepare_deletion(Op.SESSION, first.id)
+        with self.assertRaises(PermissionError): self.service.execute_deletion(preview, permit)
+        with self.assertRaises(PermissionError): self.sessions.execute_deletion(preview, permit)
         self.assertEqual(self.records.count_for_session(first.id), 1)
 
     def test_failure_after_record_deletion_rolls_back_both_tables(self):
@@ -207,7 +209,7 @@ class DatedDeletionTests(unittest.TestCase):
                     if action == sqlite3.SQLITE_DELETE and table == 'attendance_sessions' else sqlite3.SQLITE_OK)
                 yield c
         with patch.object(self.db, '_connection', deny_session_delete):
-            with self.assertRaises(AttendancePersistenceError): self.service.execute_deletion(preview)
+            with self.assertRaises(AttendancePersistenceError): self.service.execute_deletion(preview, grant(self.administrator, preview))
         self.assertEqual(self.sessions.get(first.id), first)
         self.assertEqual(self.records.count_for_session(first.id), 1)
 
@@ -226,7 +228,7 @@ class DatedDeletionTests(unittest.TestCase):
         barrier = Barrier(2)
         def delete():
             barrier.wait(timeout=3)
-            try: return self.service.execute_deletion(preview)
+            try: return self.service.execute_deletion(preview, grant(self.administrator, preview))
             except (ValueError, LookupError): return None
         def resume():
             barrier.wait(timeout=3)
@@ -278,7 +280,7 @@ class SchemaThreeMigrationTests(unittest.TestCase):
             self.assertEqual(SQLiteAttendanceRecordRepository(db).get(7, 'p001').id, 23)
             self.assertEqual(SQLiteDeviceSettingsRepository(db).get().standby_timeout_seconds, 120)
             with db.transaction() as c:
-                self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], 3)
+                self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], 4)
                 self.assertEqual(c.execute('PRAGMA foreign_keys').fetchone()[0], 1)
                 self.assertFalse(c.execute('PRAGMA foreign_key_check').fetchall())
                 self.assertEqual(dict(c.execute('SELECT name,seq FROM sqlite_sequence')),

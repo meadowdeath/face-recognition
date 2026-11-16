@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+from tests.admin_fakes import configured_admin
 from face_recognition.application.attendance_service import AttendanceService, RegistrationOutcome as Outcome
 from face_recognition.domain.models.attendance import AttendancePersistenceError
 from face_recognition.infrastructure.persistence.attendance_database import AttendanceDatabase
@@ -27,7 +28,8 @@ class AttendanceServiceTests(unittest.TestCase):
         self.sessions = SQLiteAttendanceSessionRepository(self.db)
         self.records = SQLiteAttendanceRecordRepository(self.db)
         self.now = datetime(2026, 1, 2, 10, tzinfo=timezone.utc)
-        self.service = AttendanceService(self.people, self.sessions, self.records, clock=lambda: self.now)
+        self.service = AttendanceService(self.people, self.sessions, self.records, clock=lambda: self.now,
+            administrator=configured_admin(self.db, clock=lambda: self.now))
 
     def test_sessions_registration_duplicate_counts_and_restart(self):
         self.people.add('p001', self.now)

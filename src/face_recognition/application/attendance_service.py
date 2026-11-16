@@ -6,7 +6,7 @@ from enum import Enum
 
 from face_recognition.domain.models.attendance import (
     AttendancePersistenceError, AttendanceRecord, DuplicateSessionNameError, SessionConflictError,
-    SessionOutcome, SessionResult, SyntheticDeletionAuthorization, calendar_date, positive_id, utc_datetime, validate_person_id,
+    SessionOutcome, SessionResult, calendar_date, positive_id, utc_datetime, validate_person_id,
 )
 
 
@@ -25,10 +25,15 @@ class RegistrationResult:
 
 
 class AttendanceService:
-    def __init__(self, participants, sessions, records, *, clock=None, deletion_authorization=None):
+    def __init__(self, participants, sessions, records, *, clock=None, administrator=None):
         self.participants, self.sessions, self.records = participants, sessions, records
         self.clock = clock or (lambda: datetime.now(timezone.utc))
-        self.deletion_authorization = deletion_authorization or SyntheticDeletionAuthorization()
+        self.administrator = administrator
+
+    def _require_management(self):
+        if self.administrator is None:
+            raise PermissionError('Administrator authentication is required')
+        self.administrator.require_authenticated()
 
     def active_session(self):
         return self.sessions.current()
@@ -38,9 +43,11 @@ class AttendanceService:
         return sessions[-1] if sessions else None
 
     def open_session(self, name, session_date=None):
+        self._require_management()
         return self.sessions.open(name, utc_datetime(self.clock()), session_date)
 
     def close_session(self, expected_session_id, expected_activation_revision=None):
+        self._require_management()
         return self.sessions.close(expected_session_id, utc_datetime(self.clock()),
                                    expected_activation_revision=expected_activation_revision)
 
@@ -77,31 +84,39 @@ class AttendanceService:
             return SessionResult(SessionOutcome.FAILED)
 
     def create_session(self, name, session_date):
+        self._require_management()
         day = calendar_date(session_date)
         return self._session_operation(self.sessions.open, name, utc_datetime(self.clock()), day,
                                        outcome=SessionOutcome.CREATED)
 
     def resume_session(self, session_id):
+        self._require_management()
         return self._session_operation(self.sessions.resume, session_id)
 
     def rename_session(self, session_id, name):
+        self._require_management()
         return self._session_operation(self.sessions.rename, session_id, name, outcome=SessionOutcome.RENAMED)
 
     def edit_session(self, session_id, name, session_date):
+        self._require_management()
         return self._session_operation(self.sessions.edit, session_id, name, calendar_date(session_date),
                                        outcome=SessionOutcome.RENAMED)
 
     def prepare_deletion(self, operation, session_id):
-        self.deletion_authorization.require()
+        self._require_management()
         if self.active_session() is not None:
             raise SessionConflictError('Close the active session before deleting attendance data')
-        return self.sessions.prepare_deletion(operation, session_id, self.deletion_authorization)
+        return self.sessions.prepare_deletion(operation, session_id)
 
-    def execute_deletion(self, preview):
-        self.deletion_authorization.require()
-        if self.active_session() is not None:
-            raise SessionConflictError('Close the active session before deleting attendance data')
-        return self.sessions.execute_deletion(preview, self.deletion_authorization)
+    def execute_deletion(self, preview, authorization):
+        try:
+            self._require_management()
+            if self.active_session() is not None:
+                raise SessionConflictError('Close the active session before deleting attendance data')
+            return self.sessions.execute_deletion(preview, authorization)
+        finally:
+            if self.administrator is not None:
+                self.administrator.invalidate_authorizations()
 
     def session_count(self, session_id):
         return self.records.count_for_session(session_id)

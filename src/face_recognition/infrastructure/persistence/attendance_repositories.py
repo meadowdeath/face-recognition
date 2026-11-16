@@ -8,9 +8,10 @@ import json
 from face_recognition.domain.models.attendance import (
     AttendanceRecord, AttendanceSession, DeviceSettings, Participant,
     DuplicateSessionNameError, SessionConflictError, SessionOutcome, SessionResult, StaleSessionActivationError,
-    DeletionOperation, DeletionPreview, DeletionResult, SyntheticDeletionAuthorization, calendar_date,
+    DeletionOperation, DeletionPreview, DeletionResult, calendar_date,
     normalize_session_name, positive_id, utc_datetime, validate_person_id,
 )
+from face_recognition.domain.models.administration import MaintenanceOperation, MaintenancePreview, OperationAuthorization
 from .attendance_database import AttendanceDatabase, AttendancePersistenceError, read_timestamp, timestamp
 
 
@@ -202,20 +203,17 @@ class SQLiteAttendanceSessionRepository:
         digest = sha256(json.dumps(payload, ensure_ascii=True, separators=(',', ':')).encode()).hexdigest()
         return DeletionPreview(operation, session_id, tuple((_session(row), counts[row['id']]) for row in rows), digest)
 
-    def prepare_deletion(self, operation, session_id, authorization):
-        if not isinstance(authorization, SyntheticDeletionAuthorization):
-            raise PermissionError('Synthetic deletion authorization is required')
-        authorization.require()
+    def prepare_deletion(self, operation, session_id):
         with self.database.transaction() as connection:
             return self._deletion_preview(connection, operation, session_id)
 
     def execute_deletion(self, preview, authorization):
-        if not isinstance(authorization, SyntheticDeletionAuthorization):
-            raise PermissionError('Synthetic deletion authorization is required')
-        authorization.require()
+        if not isinstance(authorization, OperationAuthorization):
+            raise PermissionError('Fresh administrator authorization is required')
         if not isinstance(preview, DeletionPreview):
             raise ValueError('A confirmed deletion preview is required')
         with self.database.transaction(write=True) as connection:
+            authorization.require(preview.fingerprint)
             actual = self._deletion_preview(connection, preview.operation, preview.target_session_id)
             if actual != preview:
                 raise ValueError('The affected data changed; prepare a new confirmation')
@@ -338,3 +336,51 @@ class SQLiteDeviceSettingsRepository:
         with self.database.transaction(write=True) as connection:
             connection.execute("UPDATE device_settings SET standby_timeout_seconds=? WHERE id=1", (seconds,))
             return self._get(connection)
+
+
+class SQLiteAdministrationRepository:
+    """Exact global scopes; credentials and ID sequences are never reset."""
+    def __init__(self, database):
+        self.database = database
+
+    def summary(self):
+        with self.database.transaction() as c:
+            counts = {table: c.execute('SELECT count(*) FROM ' + table).fetchone()[0]
+                      for table in ('participants', 'attendance_sessions', 'attendance_records')}
+            counts['schema_version'] = c.execute('PRAGMA user_version').fetchone()[0]
+            return counts
+
+    def _preview(self, c, operation):
+        if not isinstance(operation, MaintenanceOperation):
+            raise ValueError('Unknown maintenance operation')
+        if operation is not MaintenanceOperation.PREFERENCES and c.execute(
+                'SELECT 1 FROM attendance_sessions WHERE closed_at IS NULL').fetchone():
+            raise SessionConflictError('Close the active session before resetting attendance data')
+        tables = ('device_settings',) if operation is MaintenanceOperation.PREFERENCES else (
+            'participants', 'attendance_sessions', 'attendance_records')
+        rows = {table: tuple(tuple(r) for r in c.execute('SELECT * FROM '+table+' ORDER BY 1')) for table in tables}
+        digest = sha256(json.dumps((str(self.database.path), operation.value, rows),
+                        ensure_ascii=True, separators=(',', ':')).encode()).hexdigest()
+        return MaintenancePreview(operation, len(rows.get('attendance_sessions', ())),
+            len(rows.get('attendance_records', ())), len(rows.get('participants', ())), digest)
+
+    def prepare(self, operation):
+        with self.database.transaction() as c:
+            return self._preview(c, operation)
+
+    def execute(self, preview, authorization):
+        if not isinstance(preview, MaintenancePreview) or not isinstance(authorization, OperationAuthorization):
+            raise PermissionError('Confirmed scope and fresh administrator authorization are required')
+        with self.database.transaction(write=True) as c:
+            authorization.require(preview.fingerprint)
+            actual = self._preview(c, preview.operation)
+            if actual != preview:
+                raise ValueError('The affected data changed; prepare a new confirmation')
+            if preview.operation is MaintenanceOperation.PREFERENCES:
+                c.execute("UPDATE device_settings SET theme='dark',standby_timeout_seconds=30 WHERE id=1")
+                return DeviceSettings()
+            records = c.execute('DELETE FROM attendance_records').rowcount
+            sessions = c.execute('DELETE FROM attendance_sessions').rowcount
+            if preview.operation is MaintenanceOperation.ADMIN_DATA:
+                c.execute('DELETE FROM participants')
+            return DeletionResult(sessions, records)

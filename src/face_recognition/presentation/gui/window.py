@@ -75,6 +75,8 @@ class KioskWindow(QMainWindow):
         self.live_mode, self.live_debug_enabled = live_mode, debug
         self.persistent_attendance = persistent_attendance
         self.attendance = None
+        self.administration = None
+        self._admin_shutdown_finished = True
         self.attendance_session_id = None
         self.attendance_activation_revision = None
         self.session_open = False
@@ -246,7 +248,9 @@ class KioskWindow(QMainWindow):
         info.addWidget(label("Introduce el PIN de administrador", center=True))
         self.pin_display = label("", "brand", True)
         info.addWidget(self.pin_display)
-        info.addWidget(label("PIN DE DEMOSTRACIÓN: 123456", "muted", True))
+        self.pin_hint = label("Configura el administrador mediante la herramienta local." if self.persistent_attendance else
+                              "PIN DE DEMOSTRACIÓN: 123456", "muted", True)
+        info.addWidget(self.pin_hint)
         self.pin_message = label("Solo navegación de prueba. No es autenticación real.", "muted", True)
         info.addWidget(self.pin_message)
         auth_body.addLayout(info, 1)
@@ -256,14 +260,19 @@ class KioskWindow(QMainWindow):
             grid.addWidget(button(digit, lambda checked=False, d=digit: self.enter_digit(d)), index // 3, index % 3)
         grid.addWidget(button("Borrar", self.delete_digit), 3, 0)
         grid.addWidget(button("0", lambda: self.enter_digit("0")), 3, 1)
-        grid.addWidget(button("Confirmar", self.confirm_pin, True), 3, 2)
+        self.pin_confirm = button("Confirmar", self.confirm_pin, True)
+        grid.addWidget(self.pin_confirm, 3, 2)
         auth_body.addLayout(grid, 2)
         col.addLayout(auth_body, 1)
-        col.addWidget(button("Cancelar", lambda: self.navigate("attendance")))
+        auth_actions = QHBoxLayout()
+        auth_actions.addWidget(button("Cancelar", lambda: self.navigate("attendance")))
+        if self.persistent_attendance:
+            auth_actions.addWidget(button("Salir de la aplicación", self.confirm_exit))
+        col.addLayout(auth_actions)
         self.update_pin()
 
         col = self.page("dashboard", "Administración")
-        col.addWidget(label("Panel de demostración", "muted"))
+        col.addWidget(label("Administración local" if self.persistent_attendance else "Panel de demostración", "muted"))
         grid = QGridLayout()
         for i, (text, target) in enumerate((("▦\nSesiones", "sessions"), ("≡\nRegistros", "records"),
                 ("⇩\nExportar registros", "export"), ("◉\nEstado", "system"), ("⚙\nAjustes", "settings"), ("↪\nSalir de la aplicación", "exit"))):
@@ -275,6 +284,8 @@ class KioskWindow(QMainWindow):
             tile.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             grid.addWidget(tile, i // 3, i % 3)
         col.addLayout(grid, 1)
+
+        col.addWidget(button("Cerrar sesión administrativa", lambda: self.navigate("attendance")))
 
         col = self.page("sessions", "Sesiones", True)
         if self.persistent_attendance:
@@ -392,18 +403,30 @@ class KioskWindow(QMainWindow):
         col.addWidget(label("Acción visual: no se crean ni transfieren archivos.", "muted"))
 
         col = self.page("system", "Estado del sistema", True)
-        col.addWidget(label("Todos los valores son datos de demostración.", "warning"))
-        grid = QGridLayout()
-        for i, (title, value) in enumerate((("Cámara", "Desconectada"), ("Modelo", "Sin cargar"), ("Temperatura CPU", "45 °C"),
-                ("Uso de RAM", "320 / 1024 MB"), ("Almacenamiento", "8 / 32 GB"), ("Inferencia", "7.5 FPS"), ("Latencia", "125 ms"))):
-            grid.addWidget(self.card(title, value), i // 3, i % 3)
-        col.addLayout(grid, 1)
+        diagnostic_scroll = QScrollArea()
+        diagnostic_scroll.setWidgetResizable(True)
+        diagnostic_body = QWidget()
+        grid = QGridLayout(diagnostic_body)
+        self.diagnostics = {}
+        for i, title in enumerate(('CPU', 'Temperatura CPU', 'RAM', 'Almacenamiento', 'Base de datos',
+                                  'Administrador', 'Reconocimiento', 'Cámara', 'Sesión activa', 'Participantes',
+                                  'Sesiones', 'Asistencias')):
+            card = QFrame(objectName='card')
+            card_layout = QVBoxLayout(card)
+            card_layout.addWidget(label(title, 'muted'))
+            self.diagnostics[title] = label('No disponible')
+            card_layout.addWidget(self.diagnostics[title])
+            grid.addWidget(card, i // 3, i % 3)
+        diagnostic_scroll.setWidget(diagnostic_body)
+        col.addWidget(diagnostic_scroll)
+        self.participants_button = button('Ver participantes')
+        col.addWidget(self.participants_button)
 
         col = self.page("settings", "Ajustes", True)
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         contents = QWidget(); options = QVBoxLayout(contents)
         self.appearance = QComboBox(); self.appearance.addItems(["Oscuro", "Claro"])
-        self.appearance.currentIndexChanged.connect(lambda i: self.apply_theme("light" if i else "dark"))
+        self.appearance.currentIndexChanged.connect(self._appearance_changed)
         self.timeout_selector = QComboBox()
         for seconds in (30, 60, 120):
             self.timeout_selector.addItem(f"{seconds} segundos", seconds)
@@ -413,10 +436,22 @@ class KioskWindow(QMainWindow):
         time_control.setDisplayFormat("HH:mm")
         for title, control in (("Apariencia", self.appearance), ("Espera", self.timeout_selector), ("Brillo · Solo visual", brightness),
                 ("Fecha · Solo visual", self.date_control()), ("Hora · Solo visual", time_control)):
+            if control not in (self.appearance, self.timeout_selector): control.setEnabled(False)
             row = QHBoxLayout(); row.addWidget(label(title), 1); row.addWidget(control, 1); options.addLayout(row)
-        for title in ("Cambiar PIN", "Reiniciar dispositivo", "Apagar dispositivo"):
-            options.addWidget(button(title))
-        options.addWidget(label("Apariencia y Espera aplican cambios. Los demás controles son visuales.", "muted"))
+        self.admin_actions = {}
+        for section, actions in (
+            ('Seguridad', (('pin', 'Cambiar PIN'),)),
+            ('Almacenamiento y datos', (('history', 'Eliminar historial de asistencias'),
+                ('admin_data', 'Restablecer datos administrativos'), ('preferences', 'Restablecer preferencias'))),
+            ('Alimentación', (('reboot', 'Reiniciar dispositivo'), ('poweroff', 'Apagar dispositivo')))):
+            options.addWidget(label(section, 'title'))
+            for key, title in actions:
+                action = button(title)
+                action.setEnabled(False)
+                self.admin_actions[key] = action
+                options.addWidget(action)
+        self.settings_message = label('Apariencia y Espera aplican cambios. Brillo, fecha y hora no disponibles.', 'muted')
+        options.addWidget(self.settings_message)
         scroll.setWidget(contents); col.addWidget(scroll)
 
     def date_control(self):
@@ -428,6 +463,10 @@ class KioskWindow(QMainWindow):
     def navigate(self, name):
         if self.lifecycle_state is LifecycleState.SHUTDOWN:
             return
+        if self.administration is not None:
+            self.administration.before_navigation(name)
+        if self.persistent_attendance:
+            self.authenticated = self.administration is not None and self.administration.allowed()
         if name in ("attendance", "standby"):
             self.authenticated = False
             self.pin = ""; self.update_pin()
@@ -435,7 +474,8 @@ class KioskWindow(QMainWindow):
             name = "pin"
         if name == "pin":
             self.pin = ""; self.update_pin()
-            self.pin_message.setText("Solo navegación de prueba. No es autenticación real.")
+            self.pin_message.setText("Introduce tu PIN administrativo." if self.persistent_attendance else
+                                     "Solo navegación de prueba. No es autenticación real.")
         self.stack.setCurrentWidget(self.screens[name])
         self.attendance_nav.setChecked(name in ("standby", "attendance"))
         self.admin_nav.setChecked(name not in ("standby", "attendance"))
@@ -491,7 +531,16 @@ class KioskWindow(QMainWindow):
         else:
             self.record_attendance_activity()
 
+    def _appearance_changed(self, index):
+        if self.administration is not None:
+            self.administration.save_theme("light" if index else "dark")
+        else:
+            self.apply_theme("light" if index else "dark")
+
     def _timeout_setting_changed(self):
+        if self.administration is not None:
+            self.administration.save_timeout(self.timeout_selector.currentData())
+            return
         self.standby_timeout_seconds = self.timeout_selector.currentData()
         self.record_attendance_activity()
 
@@ -528,6 +577,13 @@ class KioskWindow(QMainWindow):
         self.pin_display.setText(" ".join("●" if i < len(self.pin) else "○" for i in range(6)))
 
     def confirm_pin(self):
+        if self.persistent_attendance:
+            if self.administration is not None:
+                self.administration.submit_login()
+            else:
+                self.pin = ''; self.update_pin()
+                self.pin_message.setText('Configuración administrativa requerida. Usa la herramienta local.')
+            return
         if self.pin == DEMO_PIN:
             self.authenticated = True
             self.pin = ""; self.update_pin(); self.navigate("dashboard")
@@ -630,7 +686,9 @@ class KioskWindow(QMainWindow):
         self._transition_state(LifecycleState.SHUTDOWN)
         self.authenticated = False
         self.pin = ""; self.update_pin()
-        if not self._shutdown_finished:
+        if self.administration is not None:
+            self.administration.shutdown()
+        if not self._shutdown_finished or not self._admin_shutdown_finished:
             event.ignore()
             self.centralWidget().setEnabled(False)
             self.system_status.setText("Finalizando reconocimiento…")

@@ -52,12 +52,12 @@ class AttendancePersistenceTests(unittest.TestCase):
     def test_schema_version_tables_foreign_keys_and_default_journal(self):
         for _ in range(2):
             with self.db.transaction() as connection:
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
                 self.assertEqual(connection.execute("PRAGMA foreign_keys").fetchone()[0], 1)
                 self.assertEqual(connection.execute("PRAGMA busy_timeout").fetchone()[0], 5000)
                 self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "delete")
                 tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
-                self.assertEqual(tables, {"participants", "attendance_sessions", "attendance_records", "device_settings"})
+                self.assertEqual(tables, {"participants", "attendance_sessions", "attendance_records", "device_settings", "admin_credentials"})
         self.assertEqual(self.settings.get(), DeviceSettings("dark", 30))
 
     def test_reinitialization_preserves_all_data_and_settings(self):
@@ -75,10 +75,10 @@ class AttendancePersistenceTests(unittest.TestCase):
     def test_future_version_is_rejected_without_erasing_content(self):
         self.participants.add("p001", NOW)
         with closing(sqlite3.connect(self.path)) as connection:
-            connection.execute("PRAGMA user_version=4")
-        with self.assertRaisesRegex(ValueError, "schema version 4"):
+            connection.execute("PRAGMA user_version=5")
+        with self.assertRaisesRegex(ValueError, "schema version 5"):
             self.db.initialize()
-        with self.assertRaisesRegex(ValueError, "schema version 4"):
+        with self.assertRaisesRegex(ValueError, "schema version 5"):
             self.participants.list()
         with closing(sqlite3.connect(self.path)) as connection:
             self.assertEqual(connection.execute("SELECT person_id FROM participants").fetchone()[0], "p001")
