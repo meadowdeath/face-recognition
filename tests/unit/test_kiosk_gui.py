@@ -46,6 +46,8 @@ class KioskGuiTests(unittest.TestCase):
         return next(name for name, page in self.window.screens.items() if page is self.window.stack.currentWidget())
 
     def test_startup_standby_click_and_sidebar_navigation(self):
+        self.assertEqual(self.window.mode_label.text(), "DEMOSTRACIÓN\nSin cámara ni registros reales")
+        self.assertEqual(self.window.system_status.text(), "● Interfaz lista · Demo")
         self.assertEqual(self.current(), "standby")
         self.assertIs(self.window.lifecycle_state, LifecycleState.STANDBY)
         self.assertFalse(self.window.inactivity_timer.isActive())
@@ -239,8 +241,9 @@ class KioskGuiTests(unittest.TestCase):
     def test_actual_single_shot_dispatch_and_shutdown_from_attendance(self):
         self.window.navigate("attendance")
         self.window._inactivity_deadline = 0
+        states = QSignalSpy(self.window.lifecycle_changed)
         self.window.inactivity_timer.start(1)
-        QTest.qWait(20)
+        self.assertTrue(states.wait(1000), "Inactivity timer did not dispatch a lifecycle transition")
         self.assertIs(self.window.lifecycle_state, LifecycleState.STANDBY)
         self.window.navigate("attendance")
         self.window.set_face_present(True)

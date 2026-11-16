@@ -1,7 +1,6 @@
 """One shared V3 live recognition path with isolated OpenCV/Picamera2 acquisition."""
 
 import argparse
-from math import isfinite
 from pathlib import Path
 import sys
 from time import monotonic
@@ -9,7 +8,8 @@ from time import monotonic
 from face_recognition.application.live_recognition import LiveOpenSetRecognition
 from face_recognition.application.performance import PerformanceTracker
 from face_recognition.application.recognize_face import LandmarkPreview
-from face_recognition.config.settings import CAMERA_ORIENTATIONS, Settings
+from face_recognition.config.settings import Settings
+from face_recognition.presentation.cli.live_options import add_live_arguments, validate_live_arguments
 from face_recognition.domain.models.rejection import RejectionError
 from face_recognition.infrastructure.camera.live_camera import create_live_camera
 from face_recognition.infrastructure.features.landmark_feature_extractor import LandmarkFeatureExtractor
@@ -18,18 +18,6 @@ from face_recognition.infrastructure.mediapipe.face_landmarker import MediaPipeF
 from face_recognition.infrastructure.persistence.recognition_model import load_recognition_bundle, RuntimeCompatibilityError
 from face_recognition.presentation.visualization.display import DRMDisplay, OpenCVDisplay
 from face_recognition.presentation.visualization.live_open_set_renderer import LiveOpenSetRenderer
-
-
-def _positive(value):
-    number = int(value)
-    if number <= 0: raise argparse.ArgumentTypeError("Dimension must be positive")
-    return number
-
-
-def _timeout(value):
-    number = float(value)
-    if not isfinite(number) or number <= 0: raise argparse.ArgumentTypeError("Timeout must be finite and positive")
-    return number
 
 
 def run_live_recognition(model_dir, *, camera_backend="opencv", camera_index=0, display_backend="auto", debug=False,
@@ -86,30 +74,12 @@ def run_live_recognition(model_dir, *, camera_backend="opencv", camera_index=0, 
 
 
 def main(argv=None):
-    settings = Settings()
     parser = argparse.ArgumentParser(description="Live frozen V3 single-face open-set recognition; no training or calibration")
-    parser.add_argument("--camera-backend", choices=("opencv", "picamera2"), default="opencv")
-    parser.add_argument("--camera-index", type=int, default=settings.camera_index)
-    parser.add_argument("--model-dir", type=Path, required=True)
-    parser.add_argument("--landmarker-model", type=Path, default=settings.landmarker_model_path)
+    add_live_arguments(parser, model_required=True)
     parser.add_argument("--display", choices=("auto", "opencv", "drm"), default="auto")
-    parser.add_argument("--inference-width", type=_positive, default=settings.inference_width)
-    parser.add_argument("--inference-height", type=_positive, default=settings.inference_height)
-    parser.add_argument("--preview-width", type=_positive, help="Optional camera/main-stream width; laptop default is native")
-    parser.add_argument("--preview-height", type=_positive, help="Optional camera/main-stream height; laptop default is native")
-    parser.add_argument("--orientation", choices=CAMERA_ORIENTATIONS, default=settings.camera_orientation)
-    parser.add_argument("--absence-timeout", type=_timeout, default=2.0)
-    parser.add_argument("--debug", action="store_true")
     args = parser.parse_args(argv)
-    if args.camera_index < 0: parser.error("--camera-index must be nonnegative")
-    if (args.preview_width is None) != (args.preview_height is None): parser.error("Supply both preview dimensions together")
+    validate_live_arguments(parser, args)
     if args.display == "drm" and args.camera_backend != "picamera2": parser.error("DRM requires Picamera2")
-    if args.camera_backend == "picamera2":
-        width = settings.display_width if args.preview_width is None else args.preview_width
-        height = settings.display_height if args.preview_height is None else args.preview_height
-        if (any(v % 2 for v in (width, height, args.inference_width, args.inference_height))
-                or args.inference_width > width or args.inference_height > height):
-            parser.error("Picamera2 requires even dimensions and inference dimensions no larger than preview")
     try:
         run_live_recognition(args.model_dir, camera_backend=args.camera_backend, camera_index=args.camera_index,
             display_backend=args.display, debug=args.debug, landmarker_model=args.landmarker_model,

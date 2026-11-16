@@ -63,9 +63,14 @@ class Standby(QWidget):
 class KioskWindow(QMainWindow):
     lifecycle_changed = pyqtSignal(object)
     attendance_active_changed = pyqtSignal(bool)
+    session_changed = pyqtSignal(bool)
+    shutdown_requested = pyqtSignal()
 
-    def __init__(self):
+    def __init__(self, live_mode=False, debug=False):
         super().__init__()
+        self.live_mode, self.live_debug_enabled = live_mode, debug
+        self.session_open = False
+        self._shutdown_finished = True
         self.lifecycle_state = None
         self.standby_timeout_seconds = 30
         self.face_present = False
@@ -107,7 +112,9 @@ class KioskWindow(QMainWindow):
             nav.setObjectName("nav")
             side.addWidget(nav)
         side.addStretch()
-        side.addWidget(label("DEMOSTRACIÓN\nSin cámara ni registros reales", "muted", True))
+        self.mode_label = label("MODO EN VIVO\nSin registro de asistencia" if self.live_mode else
+                                "DEMOSTRACIÓN\nSin cámara ni registros reales", "muted", True)
+        side.addWidget(self.mode_label)
         body.addWidget(sidebar)
         self.stack = QStackedWidget()
         body.addWidget(self.stack, 1)
@@ -115,7 +122,9 @@ class KioskWindow(QMainWindow):
         status.setFixedHeight(36)
         row = QHBoxLayout(status)
         row.setContentsMargins(16, 0, 16, 0)
-        row.addWidget(label("● Interfaz lista · Demo", "success"))
+        self.system_status = label("● Interfaz lista · En vivo" if self.live_mode else
+                                   "● Interfaz lista · Demo", "success")
+        row.addWidget(self.system_status)
         row.addStretch()
         self.date_label, self.time_label = QLabel(), QLabel()
         row.addWidget(self.date_label)
@@ -169,13 +178,23 @@ class KioskWindow(QMainWindow):
         self.stack.addWidget(standby)
 
         col = self.page("attendance", "Asistencia")
-        col.addWidget(label("Sesión actual: Prueba de interfaz · Simulada", "muted"))
+        self.session_indicator = label("Sin sesión temporal abierta · Demostración", "muted")
+        col.addWidget(self.session_indicator)
         preview = QFrame(objectName="preview")
-        preview.setMinimumHeight(155)
-        box = QVBoxLayout(preview)
-        box.addWidget(label("⌜     ◯     ⌝", "scan", True))
-        box.addWidget(label("Coloca tu rostro frente a la cámara", center=True))
-        box.addWidget(label("Vista estática · Cámara desconectada", "muted", True))
+        preview.setMinimumHeight(120 if self.live_mode and self.live_debug_enabled else 155)
+        box = QGridLayout(preview)
+        self.preview_image = label("Cámara inactiva" if self.live_mode else "Vista estática · Cámara desconectada", "muted", True)
+        self.preview_image.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.preview_image.setMinimumSize(0, 0)
+        if self.live_mode:
+            box.addWidget(self.preview_image, 0, 0)
+            guide = label("⌜     ◯     ⌝", "scan", True)
+            guide.setAttribute(Qt.WA_TransparentForMouseEvents)
+            box.addWidget(guide, 0, 0, Qt.AlignCenter)
+        else:
+            box.addWidget(label("⌜     ◯     ⌝", "scan", True), 0, 0)
+            box.addWidget(label("Coloca tu rostro frente a la cámara", center=True), 1, 0)
+            box.addWidget(self.preview_image, 2, 0)
         col.addWidget(preview, 1)
         self.attendance_status = label("")
         self.attendance_message = label("", "muted")
@@ -190,6 +209,12 @@ class KioskWindow(QMainWindow):
         self.presence_selector.setMinimumHeight(32)
         self.presence_selector.toggled.connect(self.set_face_present)
         col.addWidget(self.presence_selector)
+        self.state_selector.setVisible(not self.live_mode)
+        self.presence_selector.setVisible(not self.live_mode)
+        self.live_debug = label("", "muted")
+        self.live_debug.setFixedHeight(62)
+        self.live_debug.setVisible(self.live_mode and self.live_debug_enabled)
+        col.addWidget(self.live_debug)
         self.set_attendance_state(0)
 
         col = self.page("pin", "Acceso administrativo")
@@ -230,13 +255,18 @@ class KioskWindow(QMainWindow):
         col.addLayout(grid, 1)
 
         col = self.page("sessions", "Sesiones", True)
-        col.addWidget(self.card("Sesión simulada · Abierta", "Prueba de interfaz\nFecha: 15/11/2026 · Apertura: 08:00 · Asistencias: 3"))
+        self.session_details = label("Sin sesión abierta. No se registran asistencias reales.")
+        session_card = QFrame(objectName="card")
+        session_layout = QVBoxLayout(session_card)
+        session_layout.addWidget(label("Sesión temporal · Demostración", "muted"))
+        session_layout.addWidget(self.session_details)
+        col.addWidget(session_card)
         name = QLineEdit()
         name.setPlaceholderText("Nombre de la sesión")
         col.addWidget(name)
-        col.addWidget(button("Iniciar sesión de asistencia", primary=True))
-        col.addWidget(button("Cerrar sesión de asistencia"))
-        col.addWidget(label("Controles visuales; no se abre ni cierra ninguna sesión.", "muted"))
+        col.addWidget(button("Iniciar sesión de asistencia", lambda: self.set_session_open(True), primary=True))
+        col.addWidget(button("Cerrar sesión de asistencia", lambda: self.set_session_open(False)))
+        col.addWidget(label("Solo memoria; no se guardan registros de asistencia.", "muted"))
         col.addStretch()
 
         col = self.page("records", "Registros", True)
@@ -351,10 +381,13 @@ class KioskWindow(QMainWindow):
             self.inactivity_timer.start(self.standby_timeout_seconds * 1000)
 
     def set_face_present(self, present):
-        """Explicit presence input for simulation and future recognition events."""
+        """Explicit presence input from demonstration controls or live recognition."""
         if self.lifecycle_state is not LifecycleState.ATTENDANCE:
             return
-        self.face_present = bool(present)
+        present = bool(present)
+        if self.face_present == present:
+            return
+        self.face_present = present
         previous = self.presence_selector.blockSignals(True)
         self.presence_selector.setChecked(self.face_present)
         self.presence_selector.blockSignals(previous)
@@ -431,11 +464,34 @@ class KioskWindow(QMainWindow):
             dialog.deleteLater()
 
     def set_attendance_state(self, index):
+        if self.live_mode:
+            return
         title, message, role = ATTENDANCE_STATES[index]
         self.attendance_status.setText(title)
         self.attendance_status.setObjectName(role)
         self.attendance_status.style().unpolish(self.attendance_status)
         self.attendance_status.style().polish(self.attendance_status)
+        self.attendance_message.setText(message)
+
+    def set_session_open(self, opened):
+        if self.lifecycle_state is LifecycleState.SHUTDOWN or self.session_open == bool(opened): return
+        self.session_open = bool(opened)
+        text = "Sesión temporal abierta · Demostración" if self.session_open else "Sin sesión temporal abierta · Demostración"
+        self.session_indicator.setText(text)
+        self.session_details.setText(text + "\nSin registros persistentes.")
+        self.session_changed.emit(self.session_open)
+
+    def clear_live_preview(self):
+        self.preview_image.clear()
+        self.preview_image.setText("Cámara inactiva")
+        self.live_debug.clear()
+
+    def show_live_status(self, title, message, role="information"):
+        self.attendance_status.setText(title)
+        if self.attendance_status.objectName() != role:
+            self.attendance_status.setObjectName(role)
+            self.attendance_status.style().unpolish(self.attendance_status)
+            self.attendance_status.style().polish(self.attendance_status)
         self.attendance_message.setText(message)
 
     def apply_theme(self, name):
@@ -478,5 +534,11 @@ class KioskWindow(QMainWindow):
         self._transition_state(LifecycleState.SHUTDOWN)
         self.authenticated = False
         self.pin = ""; self.update_pin()
+        if not self._shutdown_finished:
+            event.ignore()
+            self.centralWidget().setEnabled(False)
+            self.system_status.setText("Finalizando reconocimiento…")
+            self.shutdown_requested.emit()
+            return
         QApplication.instance().removeEventFilter(self)
         super().closeEvent(event)
