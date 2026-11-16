@@ -10,7 +10,8 @@ from PyQt5.QtGui import QImage, QPixmap
 
 from .window import LifecycleState
 
-PREVIEW_INTERVAL = .067
+# Status/presence delivery stays independent of the optional image rate.
+RESULT_INTERVAL = .067
 
 
 def live_components():
@@ -123,6 +124,7 @@ class RecognitionWorker(QThread):
         camera = detector = preview = None
         o, settings = self.options, d.settings
         size = o.inference_width, o.inference_height
+        image_interval = 1 / o.preview_fps if o.preview_fps > 0 else None
         try:
             if not self.active(generation): return
             detector = d.detector(model_path=o.landmarker_model, max_faces=1,
@@ -154,10 +156,10 @@ class RecognitionWorker(QThread):
                 # faces. Reused snapshots age out; they are never new recognition evidence.
                 presence = bool(result is not None and result.faces and
                     0 <= now - result.timestamp_ms / 1000 < o.absence_timeout)
-                if now >= next_image:
+                if image_interval is not None and now >= next_image:
                     image = owned_preview(frame.frame, d.rgb, size)
                     sequence += 1
-                    next_image = now + PREVIEW_INTERVAL
+                    next_image = now + image_interval
                 self.publish(LivePacket(generation, replace(view, face=None), presence, image, sequence,
                     performance.snapshot(frame.detector_snapshot), pipeline.metrics()))
         finally:
@@ -182,6 +184,7 @@ class RecognitionIntegration(QObject):
         self._shown = 0
         self._rate_start = monotonic()
         self.preview_fps = 0.
+        self._next_image = 0.
         self.refresh = QTimer(self)
         self.refresh.setSingleShot(True)
         self.refresh.timeout.connect(self.drain)
@@ -214,7 +217,10 @@ class RecognitionIntegration(QObject):
             self.image_sequence = self._shown = 0
             self._rate_start = monotonic()
             self.preview_fps = 0.
+            self._next_image = 0.
             w.clear_live_preview()
+            if self.active and self.options.preview_fps == 0:
+                w.preview_image.setText("Vista previa desactivada")
             w.set_face_present(False)
         if not attendance: return
         if not w.session_open:
@@ -228,7 +234,7 @@ class RecognitionIntegration(QObject):
 
     def schedule_refresh(self):
         if self.active and not self.closing and not self.refresh.isActive():
-            self.refresh.start(round(PREVIEW_INTERVAL * 1000))
+            self.refresh.start(round(RESULT_INTERVAL * 1000))
 
     def drain(self):
         packet = self.worker.take_latest()
@@ -250,13 +256,15 @@ class RecognitionIntegration(QObject):
             w.show_live_status("Reconocimiento en curso", "Mantén el rostro dentro de la guía.")
         else:
             w.show_live_status("Esperando un rostro", "Coloca tu rostro frente a la cámara.")
-        if packet.image is not None and packet.image_sequence != self.image_sequence:
+        now = monotonic()
+        if (self.options.preview_fps > 0 and now >= self._next_image
+                and packet.image is not None and packet.image_sequence != self.image_sequence):
             self.image_sequence = packet.image_sequence
             w.preview_image.setText("")
             w.preview_image.setPixmap(QPixmap.fromImage(packet.image).scaled(
                 w.preview_image.size(), Qt.KeepAspectRatio, Qt.FastTransformation))
             self._shown += 1
-        now = monotonic()
+            self._next_image = now + 1 / self.options.preview_fps
         if now - self._rate_start >= 1:
             self.preview_fps = self._shown / (now - self._rate_start)
             self._shown, self._rate_start = 0, now

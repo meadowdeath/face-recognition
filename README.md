@@ -116,12 +116,22 @@ The Qt preview deliberately reuses the **low-resolution inference frame**, not a
 second camera read. Picamera2 keeps its existing RGB888 main/YUV420 lores
 configuration; only lores is consumed here. Existing stride-aware YUV420-to-RGB
 conversion crops padding; OpenCV BGR frames resize/convert to RGB using the same
-preprocessing helper. At most about 15 images/s are converted for preview. Each
+preprocessing helper. `--preview-fps` limits image generation and rendering
+(default 15 FPS; actual display rate also depends on the existing coalesced GUI
+refresh cadence). Each
 published QImage copies its pixels into Qt-owned storage; QPixmap creation and
 aspect-preserving scaling occur only on the GUI thread. There is no DRM preview,
 OpenCV window, zero-copy assumption or extra preview backend inside EGLFS.
 `--preview-width/height` configure acquisition/main stream; the embedded preview
 still uses the inference resolution. The static positioning guide remains visible.
+
+For CPU diagnosis, compare otherwise identical live runs with `--preview-fps 0`,
+`--preview-fps 5` and `--preview-fps 15`. Zero displays `Vista previa desactivada`
+and skips preview RGB conversion, QImage copying, QPixmap creation, scaling and
+image updates. Camera acquisition, MediaPipe, recognition, facial presence,
+status/debug delivery and lifecycle handling continue unchanged. This switch
+isolates preview work; it does not establish the cause of high CPU usage or
+promise a performance improvement. The standalone CLI and demo mode are unchanged.
 
 A single replaceable packet holds the latest preview/result, with coalesced Qt
 notifications and a single-shot refresh timer. Slow rendering drops intermediate

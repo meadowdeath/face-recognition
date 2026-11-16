@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import unittest
 import subprocess
 import sys
+from unittest.mock import patch
 
 AVAILABLE = importlib.util.find_spec("PyQt5") is not None
 if AVAILABLE:
@@ -21,6 +22,7 @@ if AVAILABLE:
     from face_recognition.presentation.gui.window import KioskWindow, LifecycleState
     from face_recognition.presentation.gui.recognition import RecognitionIntegration, RecognitionWorker, LivePacket, owned_preview
     from face_recognition.presentation.cli.live_options import add_live_arguments, validate_live_arguments
+    from face_recognition.presentation.gui.__main__ import preview_fps
     from face_recognition.domain.models.frame import Frame, PixelFormat
     from face_recognition.domain.models.landmark_result import DetectorSnapshot, LandmarkResult
     from tests.live_open_set_fakes import face, loaded_recognizer, observation
@@ -30,6 +32,7 @@ def options(**changes):
     import argparse
     parser = argparse.ArgumentParser()
     add_live_arguments(parser)
+    parser.add_argument("--preview-fps", type=preview_fps, default=15.)
     result = parser.parse_args(["--model-dir", "synthetic_bundle"])
     validate_live_arguments(parser, result)
     for key, value in changes.items(): setattr(result, key, value)
@@ -234,6 +237,85 @@ class GuiRecognitionTests(unittest.TestCase):
         pixels.fill(0)
         self.assertEqual(image.pixelColor(0, 0).red(), 200)
         self.assertEqual((image.width(), image.height()), (8, 8))
+
+    def test_disabled_preview_skips_image_work_but_recognition_presence_and_metrics_continue(self):
+        with patch('face_recognition.presentation.gui.recognition.owned_preview') as convert, \
+                patch('face_recognition.presentation.gui.recognition.QPixmap') as pixmap:
+            self.start(preview_fps=0, debug=True)
+            self.activate()
+            self.wait_for(lambda: self.window.attendance_status.text() == "Identidad reconocida")
+            self.assertTrue(self.window.face_present)
+            self.assertEqual(self.window.preview_image.text(), "Vista previa desactivada")
+            self.assertIn("MP", self.window.live_debug.text())
+            previous = self.components.runner.infer_calls
+            self.wait_for(lambda: self.components.runner.infer_calls > previous + 7)
+            self.components.has_face = False
+            self.wait_for(lambda: not self.window.face_present)
+            self.assertTrue(self.window.inactivity_timer.isActive())
+            convert.assert_not_called()
+            pixmap.fromImage.assert_not_called()
+            self.assertEqual(self.integration.image_sequence, 0)
+            self.assertEqual(self.integration.preview_fps, 0)
+
+    def test_preview_generation_frequency_does_not_throttle_capture_or_processing(self):
+        for fps, expected in ((2, [1/64, 33/64, 65/64]),
+                              (4, [1/64, 17/64, 33/64, 49/64, 65/64])):
+            with self.subTest(fps=fps):
+                d = Components()
+                worker = RecognitionWorker(options(preview_fps=fps), components=d)
+                original, processed, clock, generated = d.pipeline, [], [0.], []
+                def pipeline(*args, **kwargs):
+                    result = original(*args, **kwargs)
+                    process = result.process
+                    def record(snapshot):
+                        view = process(snapshot)
+                        processed.append(snapshot)
+                        clock[0] += 1/64
+                        if len(processed) == 65: worker.set_active(False)
+                        return view
+                    result.process = record
+                    return result
+                d.pipeline = pipeline
+                with patch('face_recognition.presentation.gui.recognition.monotonic', side_effect=lambda: clock[0]), \
+                        patch('face_recognition.presentation.gui.recognition.owned_preview',
+                              side_effect=lambda *_: generated.append(clock[0])):
+                    generation = worker.set_active(True)
+                    worker.capture(d, d.model, generation)
+                self.assertEqual(generated, expected)
+                self.assertEqual(len(processed), 65)
+                self.assertEqual(d.detectors[0].count, 65)
+                self.assertEqual(d.active_cameras, 0)
+
+    def test_render_limit_keeps_presence_and_status_delivery_independent(self):
+        d = Components(); d.read_gate = Event()
+        self.start(d, preview_fps=2)
+        self.activate()
+        self.wait_for(d.read_entered.is_set)
+        image = owned_preview(None, lambda *_: np.zeros((8, 8, 3), dtype=np.uint8), (8, 8))
+        from PyQt5.QtGui import QPixmap
+        base = monotonic()
+        with patch('face_recognition.presentation.gui.recognition.monotonic') as clock, \
+                patch('face_recognition.presentation.gui.recognition.QPixmap.fromImage',
+                      wraps=QPixmap.fromImage) as render:
+            for sequence, elapsed, presence, count in ((1, 0., True, 1), (2, .125, False, 1), (3, .5, True, 2)):
+                clock.return_value = base + elapsed
+                self.worker.publish(LivePacket(self.integration.generation,
+                    view=SimpleNamespace(label="NO FACE", last_score=None), presence=presence,
+                    image=image, image_sequence=sequence))
+                self.integration.drain()
+                self.assertEqual(render.call_count, count)
+                self.assertEqual(self.window.face_present, presence)
+                self.assertEqual(self.window.attendance_status.text(),
+                    "Reconocimiento en curso" if presence else "Esperando un rostro")
+
+    def test_preview_fps_argument_accepts_zero_and_positive_and_rejects_invalid_values(self):
+        from face_recognition.presentation.gui.__main__ import main
+        self.assertEqual(options().preview_fps, 15)
+        for value in ("0", "1", "2.5", "15", "30"):
+            self.assertEqual(preview_fps(value), float(value))
+        for value in ("-1", "nan", "inf", "-inf", "invalid"):
+            with self.subTest(value=value), redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+                main(["--preview-fps", value])
 
     def test_model_failure_never_opens_camera_and_keeps_admin_available(self):
         self.start(Components(fail_load=True))
