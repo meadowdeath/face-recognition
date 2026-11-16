@@ -2,6 +2,7 @@
 from dataclasses import dataclass, field
 from enum import Enum
 import re
+from .attendance import DeviceSettings
 
 
 class AuthOutcome(Enum):
@@ -51,3 +52,4 @@ class MaintenancePreview:
     records: int
     participants: int
     fingerprint: str
+    preferences: DeviceSettings | None = None

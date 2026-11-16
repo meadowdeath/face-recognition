@@ -1,5 +1,5 @@
 """Offscreen administrator workflows; synthetic SQLite, no camera or power commands."""
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import importlib.util
 import os
 from pathlib import Path
@@ -11,9 +11,9 @@ from unittest.mock import patch, Mock
 AVAILABLE = importlib.util.find_spec('PyQt5') is not None
 if AVAILABLE:
     os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
-    from PyQt5.QtCore import QTimer
+    from PyQt5.QtCore import QTimer, Qt, QDate, QTime, QDateTime, QPoint
     from PyQt5.QtTest import QTest
-    from PyQt5.QtWidgets import QApplication, QLineEdit, QPushButton
+    from PyQt5.QtWidgets import QApplication, QLineEdit, QPushButton, QLabel, QDateEdit, QTimeEdit, QSlider
     from face_recognition.application.attendance_service import AttendanceService
     from face_recognition.domain.models.attendance import AttendancePersistenceError
     from face_recognition.infrastructure.device import DeviceDiagnostics
@@ -37,6 +37,8 @@ class GuiAdministrationTests(unittest.TestCase):
 
     def setUp(self):
         use_fast_credentials(self)
+        self.dialog_errors=[]
+        self.addCleanup(lambda:self.assertEqual(self.dialog_errors,[]))
         self.temp=TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.db=AttendanceDatabase(Path(self.temp.name)/'synthetic.sqlite3'); self.db.initialize()
         self.now=datetime(2026,11,16,tzinfo=timezone.utc)
@@ -60,12 +62,38 @@ class GuiAdministrationTests(unittest.TestCase):
         for digit in pin:self.w.enter_digit(digit)
         self.w.confirm_pin(); self.wait_for(lambda:self.ui.job is None)
 
-    def respond_pin(self,values):
+    def schedule_dialog(self, callback):
         def respond():
             dialog=self.app.activeModalWidget()
-            for field,value in zip(dialog.findChildren(QLineEdit),values):field.setText(value)
-            next(b for b in dialog.findChildren(QPushButton) if b.text()=='Confirmar').click()
+            try:callback(dialog)
+            except Exception as exc:
+                self.dialog_errors.append(f'{type(exc).__name__}: {exc}')
+                dialog.busy=False
+                dialog.reject()
         QTimer.singleShot(0,respond)
+
+    @staticmethod
+    def dialog_button(dialog,text):
+        return next(b for b in dialog.findChildren(QPushButton) if b.text()==text)
+
+    def type_pin(self,dialog,field,value):
+        QTest.mouseClick(field,Qt.LeftButton)
+        self.app.processEvents()
+        for digit in value:self.dialog_button(dialog,digit).click()
+
+    def respond_pin(self,values):
+        def respond(dialog):
+            for field,value in zip(dialog.findChildren(QLineEdit),values):
+                self.type_pin(dialog,field,value)
+            self.dialog_button(dialog,'Confirmar').click()
+        self.schedule_dialog(respond)
+
+    def login_keypad(self,pin=TEST_PIN):
+        self.w.open_admin()
+        page=self.w.screens['pin']
+        for digit in pin:self.dialog_button(page,digit).click()
+        self.dialog_button(page,'Confirmar').click()
+        self.wait_for(lambda:self.ui.job is None)
 
     def test_persistent_navigation_login_mask_clear_logout_preserves_session(self):
         self.w.authenticated=True; self.w.navigate('settings')
@@ -283,3 +311,220 @@ class GuiAdministrationTests(unittest.TestCase):
             finally:release.set()
             self.wait_for(lambda:self.ui.job is None)
         self.assertTrue(self.w._admin_shutdown_finished);self.assertFalse(self.ui.allowed())
+
+    def test_keypad_digits_checked_signal_length_backspace_focus_and_masking(self):
+        self.login_keypad()
+        for theme in ('dark','light'):
+            self.w.apply_theme(theme)
+            before=self.admin.credentials.stamp()
+            def interact(dialog):
+                fields=dialog.findChildren(QLineEdit)
+                self.assertEqual(len(fields),3)
+                self.assertLessEqual(dialog.width(),800);self.assertLessEqual(dialog.height(),480)
+                for index,field in enumerate(fields):
+                    self.assertEqual(field.echoMode(),QLineEdit.Password)
+                    self.assertEqual(field.maxLength(),6)
+                    self.type_pin(dialog,field,('012345','678901','098765')[index])
+                    self.assertEqual(field.text(),('012345','678901','098765')[index])
+                    self.assertIs(dialog.active_field,field)
+                    self.assertTrue(field.property('pinActive'),'Active field marker missing')
+                    self.assertTrue(all(not f.property('pinActive') for f in fields if f is not field))
+                    self.dialog_button(dialog,'8').click();self.assertEqual(len(field.text()),6)
+                    self.dialog_button(dialog,'Borrar').click();self.assertEqual(len(field.text()),5)
+                    # Explicitly emit the checked-state overload. It must never become the digit.
+                    self.dialog_button(dialog,'2').clicked.emit(True)
+                    self.assertEqual(field.text()[-1],'2')
+                    self.assertTrue(field.hasFocus(),'Keypad changed Qt focus')
+                    self.assertEqual(field.validator().validate('１２３４５６',0)[0],0)
+                    self.assertEqual(field.validator().validate('12a456',0)[0],0)
+                QTest.mouseClick(fields[1],Qt.LeftButton,pos=QPoint(fields[1].width()-8,fields[1].height()//2))
+                self.app.processEvents()
+                self.dialog_button(dialog,'Confirmar').setFocus()
+                self.dialog_button(dialog,'Borrar').click()
+                self.dialog_button(dialog,'3').click()
+                self.assertEqual(fields[1].text()[-1],'3')
+                self.assertIs(dialog.active_field,fields[1])
+                self.dialog_button(dialog,'Cancelar').click()
+            self.schedule_dialog(interact)
+            self.assertIsNone(self.ui.pin_dialog(changing=True))
+            self.assertEqual(self.admin.credentials.stamp(),before)
+
+    def test_keypad_pin_change_logs_out_rejects_old_and_accepts_replacement(self):
+        self.login_keypad();self.w.navigate('settings')
+        before=self.admin.credentials.stamp()
+        self.respond_pin((TEST_PIN,'092847','092847'))
+        self.w.admin_actions['pin'].click()
+        self.assertIs(self.w.lifecycle_state,LifecycleState.ADMIN_LOGIN)
+        self.assertFalse(self.ui.allowed())
+        self.assertNotEqual(self.admin.credentials.stamp()[1],before[1])
+        self.login_keypad(TEST_PIN);self.assertFalse(self.ui.allowed())
+        self.login_keypad('092847');self.assertTrue(self.ui.allowed())
+
+    def test_keypad_wrong_current_and_mismatch_do_not_change_credentials(self):
+        self.login_keypad();before=self.admin.credentials.stamp()
+        for values,expected in ((('817263','092847','092847'),'PIN incorrecto'),
+                                ((TEST_PIN,'092847','193847'),'confirmación')):
+            def reject_after_response(dialog):
+                for field,value in zip(dialog.findChildren(QLineEdit),values):self.type_pin(dialog,field,value)
+                self.dialog_button(dialog,'Confirmar').click()
+                self.wait_for(lambda:self.ui.job is None)
+                self.assertTrue(all(f.text()=='' for f in dialog.findChildren(QLineEdit)))
+                self.assertTrue(any(expected in label.text() for label in dialog.findChildren(QLabel)))
+                self.dialog_button(dialog,'Cancelar').click()
+            self.schedule_dialog(reject_after_response)
+            self.assertIsNone(self.ui.pin_dialog(changing=True))
+            self.assertEqual(self.admin.credentials.stamp(),before)
+
+    def test_keypad_reauthentication_is_single_use_and_cancel_clears_inputs(self):
+        self.login_keypad()
+        self.respond_pin((TEST_PIN,))
+        token=self.ui.reauthenticate('keypad-scope')
+        self.assertIsNotNone(token);token.require('keypad-scope')
+        with self.assertRaises(PermissionError):token.require('keypad-scope')
+        with patch.object(self.admin,'authorize',wraps=self.admin.authorize) as authorize:
+            def cancel(dialog):
+                self.type_pin(dialog,dialog.findChildren(QLineEdit)[0],'012')
+                self.dialog_button(dialog,'Cancelar').click()
+            self.schedule_dialog(cancel)
+            self.assertIsNone(self.ui.reauthenticate('cancelled-scope'))
+            authorize.assert_not_called()
+
+    def test_keypad_inputs_and_duplicate_submissions_disabled_while_verifying(self):
+        from threading import Event
+        from tests.admin_fakes import fast_test_derive
+        from face_recognition.infrastructure.persistence import admin_credentials
+        self.login_keypad();entered,release=Event(),Event()
+        def derive(*args):
+            entered.set()
+            if not release.wait(5):raise AssertionError('Verification was not released')
+            return fast_test_derive(*args)
+        def interact(dialog):
+            try:
+                self.type_pin(dialog,dialog.findChildren(QLineEdit)[0],TEST_PIN)
+                confirm=self.dialog_button(dialog,'Confirmar');confirm.click()
+                self.wait_for(entered.is_set);job=self.ui.job
+                self.assertTrue(dialog.busy)
+                self.assertTrue(all(not f.isEnabled() and f.text()=='' for f in dialog.findChildren(QLineEdit)))
+                for digit in '0123456789':
+                    self.assertFalse(self.dialog_button(dialog,digit).isEnabled())
+                    self.dialog_button(dialog,digit).click()
+                confirm.clicked.emit(False)
+                self.assertIs(self.ui.job,job)
+                self.assertTrue(any('Verificando' in label.text() for label in dialog.findChildren(QLabel)))
+            finally:release.set()
+        self.schedule_dialog(interact)
+        with patch.object(admin_credentials,'derive',side_effect=derive),patch.object(self.admin,'authorize',wraps=self.admin.authorize) as authorize:
+            token=self.ui.reauthenticate('busy-scope')
+            self.assertIsNotNone(token);authorize.assert_called_once()
+
+    def seed_keypad_events(self):
+        self.login_keypad()
+        for person in ('p001','p002'):self.admin.participants.add(person,self.now)
+        events=[]
+        for name,day,person in (('Synthetic',self.now.date(),'p001'),
+                               ('Synthetic',self.now.date()+timedelta(days=7),'p002'),
+                               ('Other',self.now.date(),'p001')):
+            session=self.service.create_session(name,day).session
+            self.service.register(person,session.id);self.service.close_session(session.id)
+            events.append(self.sessions.get(session.id))
+        self.attendance.refresh_session()
+        return events
+
+    def confirm_then_keypad(self,check):
+        def confirm(dialog):
+            check(dialog)
+            self.dialog_button(dialog,next(b.text() for b in dialog.findChildren(QPushButton) if b.objectName()=='destructive')).click()
+            self.respond_pin((TEST_PIN,))
+        self.schedule_dialog(confirm)
+
+    def targeted_keypad_deletion(self,index):
+        first,second,other=self.seed_keypad_events()
+        self.w.navigate('sessions')
+        self.w.stored_names.setCurrentIndex(self.w.stored_names.findData(first.name_key))
+        self.w.stored_sessions.setCurrentIndex(self.w.stored_sessions.findData(first.id))
+        self.w.session_tabs.setCurrentIndex(2)
+        def check(dialog):
+            text=dialog.findChild(QLabel,'deletion_summary').text()
+            self.assertIn(first.session_date.strftime('%d/%m/%Y'),text)
+            if index==2:self.assertIn(second.session_date.strftime('%d/%m/%Y'),text)
+            self.assertTrue(self.dialog_button(dialog,'Cancelar').isDefault())
+        self.confirm_then_keypad(check)
+        self.w.deletion_buttons[index].click()
+        self.assertEqual(self.records.count_for_session(first.id),0)
+        self.assertEqual(self.sessions.get(first.id) is None,index!=0)
+        self.assertEqual(self.sessions.get(second.id) is None,index==2)
+        self.assertEqual(self.records.count_for_session(other.id),1)
+        self.assertEqual(len(self.admin.participants.list()),2)
+
+    def test_keypad_authorizes_clearing_targeted_attendance(self):
+        self.targeted_keypad_deletion(0)
+
+    def test_keypad_authorizes_deleting_one_session(self):
+        self.targeted_keypad_deletion(1)
+
+    def test_keypad_authorizes_deleting_all_dates_for_one_name(self):
+        self.targeted_keypad_deletion(2)
+
+    def global_keypad_reset(self,key):
+        self.seed_keypad_events();self.w.navigate('settings')
+        self.confirm_then_keypad(lambda dialog:self.assertTrue(any('Sesiones: 3' in item.text() for item in dialog.findChildren(QLabel))))
+        self.w.admin_actions[key].click()
+        self.assertEqual(len(self.sessions.list()),0)
+        self.assertEqual(len(self.admin.participants.list()),0 if key=='admin_data' else 2)
+        self.assertTrue(self.admin.configured())
+
+    def test_keypad_authorizes_global_history_deletion(self):
+        self.global_keypad_reset('history')
+
+    def test_keypad_authorizes_global_administrative_data_reset(self):
+        self.global_keypad_reset('admin_data')
+
+    def test_preference_reset_shows_snapshot_values_and_uses_keypad(self):
+        events=self.seed_keypad_events();self.w.navigate('settings')
+        self.w.appearance.setCurrentIndex(1);self.w.timeout_selector.setCurrentIndex(2)
+        def check(dialog):
+            text=' '.join(label.text() for label in dialog.findChildren(QLabel))
+            for value in ('Lavender (Claro)','120 segundos','Amethyst (Oscuro)','30 segundos'):
+                self.assertIn(value,text)
+        self.confirm_then_keypad(check)
+        self.w.admin_actions['preferences'].click()
+        self.assertEqual(self.admin.settings.get().theme,'dark')
+        self.assertEqual(self.admin.settings.get().standby_timeout_seconds,30)
+        self.assertEqual(len(self.sessions.list()),len(events));self.assertEqual(len(self.admin.participants.list()),2)
+
+    def test_settings_clock_is_read_only_uses_footer_timer_and_does_not_touch_sqlite(self):
+        before=QDateTime(QDate(2026,11,16),QTime(23,59,59),Qt.LocalTime)
+        after=QDateTime(QDate(2026,11,17),QTime(0,0,0),Qt.LocalTime)
+        with patch('face_recognition.presentation.gui.window.QDateTime') as clock,patch.object(self.db,'transaction',side_effect=AssertionError('Clock must not access SQLite')):
+            for instant in (before,after):
+                clock.currentDateTime.return_value=instant
+                self.w.clock.timeout.emit()
+                self.assertEqual(self.w.system_date.text(),'Fecha del sistema: '+instant.toString('dd/MM/yyyy'))
+                self.assertEqual(self.w.system_time.text(),'Hora del sistema: '+self.w.time_label.text())
+                self.assertEqual(self.w.date_label.text(),self.w.locale().toString(instant.date(),'ddd d MMM yyyy'))
+        page=self.w.screens['settings']
+        self.assertFalse(page.findChildren(QSlider));self.assertFalse(page.findChildren(QDateEdit));self.assertFalse(page.findChildren(QTimeEdit))
+        self.assertIsInstance(self.w.system_date,QLabel);self.assertIsInstance(self.w.system_time,QLabel)
+        self.assertTrue(self.w.session_create_date.isEnabled());self.assertTrue(self.w.records_date.isEnabled())
+        self.assertFalse(self.w.session_create_date.isReadOnly());self.assertFalse(self.w.records_date.isReadOnly())
+
+    def test_disabled_power_actions_have_explanation(self):
+        window=KioskWindow(persistent_attendance=True)
+        ui=AdminIntegration(window,self.admin,self.admin.settings,DeviceDiagnostics(self.temp.name,platform='win32'))
+        self.addCleanup(ui.finalize);self.addCleanup(window.close)
+        self.assertIn('--enable-system-power-actions',window.power_notice.text())
+        self.assertIn('Fase 9',window.power_notice.text())
+        self.assertFalse(window.admin_actions['reboot'].isEnabled())
+        self.assertFalse(window.admin_actions['poweroff'].isEnabled())
+        self.power.execute.assert_not_called()
+
+    def test_preference_reset_rejects_changed_snapshot_after_confirmation(self):
+        self.login_keypad();self.w.navigate('settings')
+        self.w.appearance.setCurrentIndex(1);self.w.timeout_selector.setCurrentIndex(2)
+        def change_settings(dialog):
+            self.admin.settings.update_standby_timeout(60)
+        self.confirm_then_keypad(change_settings)
+        self.w.admin_actions['preferences'].click()
+        self.assertEqual(self.admin.settings.get().theme,'light')
+        self.assertEqual(self.admin.settings.get().standby_timeout_seconds,60)
+        self.assertIn('No se completó',self.w.settings_message.text())

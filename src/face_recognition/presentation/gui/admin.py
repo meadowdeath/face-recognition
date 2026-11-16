@@ -1,6 +1,6 @@
 """Qt administration binding; one short authentication task, no recognition work."""
 from time import monotonic
-from PyQt5.QtCore import QThread, QTimer, Qt, QRegExp
+from PyQt5.QtCore import QThread, QTimer, Qt, QRegExp, QEvent
 from PyQt5.QtGui import QRegExpValidator
 from PyQt5.QtWidgets import QDialog, QGridLayout, QHBoxLayout, QLineEdit, QScrollArea, QVBoxLayout
 
@@ -40,6 +40,30 @@ class CredentialDialog(QDialog):
     """An explicitly submitted credential change cannot be cancelled mid-transaction."""
     busy = False
 
+    def track_field(self, field):
+        if not hasattr(self, 'pin_fields'):
+            self.pin_fields = []
+        self.pin_fields.append(field)
+        field.installEventFilter(self)
+        if len(self.pin_fields) == 1:
+            self.select_field(field)
+
+    def select_field(self, field):
+        self.active_field = field
+        for candidate in self.pin_fields:
+            active = candidate is field
+            if candidate.property('pinActive') != active:
+                candidate.setProperty('pinActive', active)
+                candidate.style().unpolish(candidate)
+                candidate.style().polish(candidate)
+                candidate.update()
+
+    def eventFilter(self, watched, event):
+        if (not self.busy and watched in self.pin_fields
+                and event.type() in (QEvent.FocusIn, QEvent.MouseButtonPress, QEvent.TouchBegin)):
+            self.select_field(watched)
+        return super().eventFilter(watched, event)
+
     def reject(self):
         if not self.busy: super().reject()
 
@@ -70,6 +94,8 @@ class AdminIntegration:
         for key, action in window.admin_actions.items():
             action.clicked.connect(lambda checked=False, k=key: self.action(k))
             action.setEnabled(service is not None and (key not in ('reboot', 'poweroff') or bool(power and power.enabled)))
+        if power and power.enabled:
+            window.power_notice.setText('Requiere confirmación y PIN. La sesión de asistencia se conservará.')
         window.pin_hint.setText('PIN administrativo local · Sin recuperación automática')
         self.current_settings = DeviceSettings()
         try:
@@ -181,6 +207,9 @@ class AdminIntegration:
         for title in (('PIN actual', 'Nuevo PIN', 'Confirmar nuevo PIN') if changing else ('PIN administrativo',)):
             fields_layout.addWidget(label(title))
             field = QLineEdit()
+            field.setObjectName(f'admin_pin_{len(fields)}')
+            field.setAccessibleName(title)
+            dialog.track_field(field)
             field.setEchoMode(QLineEdit.Password)
             field.setMaxLength(6)
             field.setValidator(QRegExpValidator(QRegExp('[0-9]{0,6}'), field))
@@ -189,19 +218,21 @@ class AdminIntegration:
         fields_layout.addWidget(message)
         body.addLayout(fields_layout, 1)
         keypad = QGridLayout()
+        input_buttons = []
         for index, digit in enumerate('123456789'):
-            def insert(d=digit):
-                target = next((f for f in fields if f.hasFocus()), fields[0])
-                target.insert(d)
+            def insert(checked=False, d=digit):
+                dialog.active_field.insert(d)
             key = button(digit, insert); key.setFocusPolicy(Qt.NoFocus)
+            input_buttons.append(key)
             keypad.addWidget(key, index//3, index%3)
-        erase = button('Borrar', lambda: next((f for f in fields if f.hasFocus()), fields[0]).backspace())
+        erase = button('Borrar', lambda checked=False: dialog.active_field.backspace())
         erase.setFocusPolicy(Qt.NoFocus)
         keypad.addWidget(erase, 3, 0)
-        zero = button('0', lambda: next((f for f in fields if f.hasFocus()), fields[0]).insert('0'))
+        zero = button('0', lambda checked=False: dialog.active_field.insert('0'))
         zero.setFocusPolicy(Qt.NoFocus); keypad.addWidget(zero, 3, 1)
         confirm = button('Confirmar', primary=True)
         keypad.addWidget(confirm, 3, 2)
+        input_controls = fields + input_buttons + [erase, zero]
         cancel = button('Cancelar', dialog.reject); cancel.setDefault(True)
         keypad.addWidget(cancel, 4, 0, 1, 3)
         body.addLayout(keypad, 2)
@@ -216,13 +247,20 @@ class AdminIntegration:
                 if message.text().startswith('Acceso bloqueado'):
                     message.setText('Introduce el PIN para continuar.')
         def submit():
+            if dialog.busy or self.job is not None or monotonic() < state['deadline']:
+                return
             values = tuple(f.text() for f in fields)
             for field in fields: field.clear()
             confirm.setEnabled(False)
             dialog.busy = True
+            for control in input_controls: control.setEnabled(False)
+            message.setText('Actualizando PIN…' if changing else 'Verificando PIN…')
             def completed(answer):
                 dialog.busy = False
                 if not dialog.isVisible(): return
+                for control in input_controls: control.setEnabled(True)
+                dialog.select_field(fields[0])
+                fields[0].setFocus()
                 result, permit = (answer, None) if changing else (answer if answer else (None, None))
                 if result is not None and result.outcome is AuthOutcome.AUTHENTICATED:
                     state['permit'], state['changed'] = permit, changing
@@ -316,13 +354,20 @@ class AdminIntegration:
                          'preferences': MaintenanceOperation.PREFERENCES}[key]
             preview = self.service.prepare_maintenance(operation)
             title = self.window.admin_actions[key].text()
-            text = ((f'Sesiones: {preview.sessions} · Asistencias: {preview.records} · Participantes: {preview.participants}\n'
-                     if key != 'preferences' else '')
-                    + ('Se eliminarán las sesiones y asistencias. ' if key != 'preferences' else 'Se restaurarán Oscuro y 30 segundos. ')
-                    + ('Se eliminarán los participantes; deberán registrarse de nuevo. ' if key == 'admin_data' else 'Se conservarán los participantes. ')
-                    + 'Se conservarán el PIN administrativo, el esquema, los identificadores y los archivos biométricos. '
-                    + ('Se conservarán las preferencias. Esta eliminación no se puede deshacer desde la aplicación.'
-                       if key != 'preferences' else 'Se conservarán las sesiones y asistencias.'))
+            if key == 'preferences':
+                current = preview.preferences
+                names = {'dark': 'Amethyst (Oscuro)', 'light': 'Lavender (Claro)'}
+                text = (f'Preferencias actuales:\nApariencia: {names[current.theme]}'
+                        f'\nTiempo de standby: {current.standby_timeout_seconds} segundos'
+                        '\n\nValores predeterminados:\nApariencia: Amethyst (Oscuro)'
+                        '\nTiempo de standby: 30 segundos'
+                        '\n\nSe conservarán participantes, sesiones, asistencias, PIN administrativo y archivos biométricos.')
+            else:
+                text = (f'Sesiones: {preview.sessions} · Asistencias: {preview.records} · Participantes: {preview.participants}\n'
+                        'Se eliminarán las sesiones y asistencias. '
+                        + ('Se eliminarán los participantes; deberán registrarse de nuevo. ' if key == 'admin_data' else 'Se conservarán los participantes. ')
+                        + 'Se conservarán el PIN administrativo, el esquema, los identificadores y los archivos biométricos. '
+                        'Se conservarán las preferencias. Esta eliminación no se puede deshacer desde la aplicación.')
             if not self.confirmation(title, text, title): return
             permit = self.reauthenticate(preview.fingerprint)
             if permit is None: return

@@ -9,8 +9,8 @@ from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QAbstractItemView, QCheckBox, QComboBox, QDateEdit, QDialog, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QPushButton, QScrollArea,
-    QShortcut, QSizePolicy, QSlider, QStackedWidget, QStyle, QTableWidget, QTableWidgetItem,
-    QTimeEdit, QVBoxLayout, QWidget, QTabWidget,
+    QShortcut, QSizePolicy, QStackedWidget, QStyle, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget, QTabWidget,
 )
 
 from .themes import THEMES, stylesheet
@@ -425,22 +425,23 @@ class KioskWindow(QMainWindow):
         col = self.page("settings", "Ajustes", True)
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         contents = QWidget(); options = QVBoxLayout(contents)
+        options.addWidget(label('Pantalla y dispositivo', 'title'))
         self.appearance = QComboBox(); self.appearance.addItems(["Oscuro", "Claro"])
         self.appearance.currentIndexChanged.connect(self._appearance_changed)
         self.timeout_selector = QComboBox()
         for seconds in (30, 60, 120):
             self.timeout_selector.addItem(f"{seconds} segundos", seconds)
         self.timeout_selector.currentIndexChanged.connect(self._timeout_setting_changed)
-        brightness = QSlider(Qt.Horizontal); brightness.setRange(0, 100); brightness.setValue(70); brightness.setMinimumHeight(44)
-        time_control = QTimeEdit()
-        time_control.setDisplayFormat("HH:mm")
-        for title, control in (("Apariencia", self.appearance), ("Espera", self.timeout_selector), ("Brillo · Solo visual", brightness),
-                ("Fecha · Solo visual", self.date_control()), ("Hora · Solo visual", time_control)):
-            if control not in (self.appearance, self.timeout_selector): control.setEnabled(False)
+        for title, control in (('Apariencia', self.appearance), ('Tiempo de standby', self.timeout_selector)):
             row = QHBoxLayout(); row.addWidget(label(title), 1); row.addWidget(control, 1); options.addLayout(row)
+        options.addWidget(label('Fecha y hora del sistema', 'title'))
+        self.system_date = label('')
+        self.system_time = label('')
+        options.addWidget(self.system_date)
+        options.addWidget(self.system_time)
         self.admin_actions = {}
         for section, actions in (
-            ('Seguridad', (('pin', 'Cambiar PIN'),)),
+            ('Seguridad', (('pin', 'Cambiar PIN administrativo'),)),
             ('Almacenamiento y datos', (('history', 'Eliminar historial de asistencias'),
                 ('admin_data', 'Restablecer datos administrativos'), ('preferences', 'Restablecer preferencias'))),
             ('Alimentación', (('reboot', 'Reiniciar dispositivo'), ('poweroff', 'Apagar dispositivo')))):
@@ -450,7 +451,10 @@ class KioskWindow(QMainWindow):
                 action.setEnabled(False)
                 self.admin_actions[key] = action
                 options.addWidget(action)
-        self.settings_message = label('Apariencia y Espera aplican cambios. Brillo, fecha y hora no disponibles.', 'muted')
+        self.power_notice = label('Alimentación deshabilitada: requiere Linux, base persistente, administrador configurado, '
+                                  '--enable-system-power-actions y permisos del sistema (Fase 9).', 'muted')
+        options.addWidget(self.power_notice)
+        self.settings_message = label('Apariencia y standby aplican cambios. El sistema operativo administra fecha y hora.', 'muted')
         options.addWidget(self.settings_message)
         scroll.setWidget(contents); col.addWidget(scroll)
 
@@ -680,6 +684,8 @@ class KioskWindow(QMainWindow):
         now = QDateTime.currentDateTime()
         self.date_label.setText(self.locale().toString(now.date(), "ddd d MMM yyyy"))
         self.time_label.setText(now.toString("HH:mm:ss"))
+        self.system_date.setText('Fecha del sistema: ' + now.toString('dd/MM/yyyy'))
+        self.system_time.setText('Hora del sistema: ' + now.toString('HH:mm:ss'))
 
     def closeEvent(self, event):
         self.clock.stop()

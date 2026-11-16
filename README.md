@@ -57,8 +57,8 @@ announce lifecycle changes. Presence enters through `window.set_face_present(boo
 on the GUI thread; repeated absence is idempotent and cannot postpone standby.
 Without `--attendance-db`, the session page opens/closes an explicitly temporary,
 in-memory session. With an explicit database it restores and manages persistent
-sessions, while startup still enters Standby. Export remains visual; brightness
-and clock controls are disabled. Persistent modes add PIN change, preferences,
+sessions, while startup still enters Standby. Export remains visual. Settings
+show read-only system date/time; no brightness adjustment is offered. Persistent modes add PIN change, preferences,
 authorized maintenance and disabled-by-default Linux power requests (Phase 6).
 
 Optional offscreen checks (skip automatically if PyQt5 is absent):
@@ -965,7 +965,8 @@ navigation and cannot perform persistent maintenance or power operations.
 
 Appearance and 30/60/120-second standby preferences load without startup writes.
 Explicit updates preserve unrelated settings; failures restore the previous GUI
-selection. Brillo, date/time controls remain disabled. USB export remains visual.
+selection. System date/time are read-only and share the footer clock; no brightness
+control is presented. USB export remains visual.
 
 A normal login is insufficient for a destructive action. Confirmation comes first,
 then fresh PIN verification issues a 60-second, operation/snapshot-bound, single-use
@@ -1120,3 +1121,90 @@ microbenchmark or a new Raspberry Pi measurement. The supplied Pi result remains
 190 tests in 932.103 seconds before these fixes. Re-run the commands above on Pi
 to measure the improvement there; production derivation still costs the measured
 approximately 2.56 seconds per call on that device.
+
+
+### Final Phase 6 keypad and Settings correction
+
+The shared credential dialog now consumes `clicked(bool)` separately from captured
+digits. PIN change and sensitive-operation verification use the same on-screen
+keypad. Clicking a masked field selects it explicitly; its existing-theme accent
+border marks the active field. Digits/backspace keep targeting that field even
+when keyboard focus leaves it. Leading zeroes and the six-ASCII-digit limit remain.
+No physical keyboard is needed. During asynchronous verification, fields and
+keypad edits/submissions are disabled, progress is shown, and input is cleared.
+Credential hashing, short SQLite transactions, lockouts and scope-bound grants
+are unchanged. Successful PIN change still ends administrative login.
+
+Ajustes retains its compact scrollable layout with:
+
+- **Pantalla y dispositivo:** Apariencia and Tiempo de standby (30/60/120 seconds),
+  persisted in database modes and memory-only without a database.
+- **Fecha y hora del sistema:** read-only device-local date/time labels, updated
+  by the existing one-second footer timer, including midnight rollover. Session
+  and Records calendars remain editable; no OS clock/timezone editing is provided.
+- **Seguridad:** Cambiar PIN administrativo.
+- **Almacenamiento y datos:** existing history/data/preference reset operations.
+  Preference confirmation shows actual current appearance/timeout from the same
+  transactional preview as the authorization scope, plus Amethyst/30-second
+  defaults. Changed data still abort instead of resetting a different scope.
+- **Alimentación:** restart/shutdown stay disabled by default, with an explanation
+  of Linux, persistent credentials, opt-in and OS permission requirements. Real
+  permission configuration and controlled hardware testing belong to Phase 9.
+
+The Steren 5-inch 800×480 HDMI/XPT2046 target currently exposes no confirmed usable
+brightness-control interface: the operator found no backlight device or exposed
+I²C device, and no installed `ddcutil`. The obsolete brightness slider and styling
+are removed. This does **not** prove that the physical display cannot adjust its
+brightness. No software dimming, GPIO/sysfs/DDC commands, packages or permissions
+were added; verified hardware brightness/display-power support may be investigated
+in Phase 9.
+
+The operator reported that the preceding concurrency revision passed **205/205 Pi
+checks in 135.708 seconds**. Manual EGLFS testing then exposed the keypad callback
+crash. That pass is not validation of this correction. The supplied approximately
+2.56-second PBKDF2 benchmark remains applicable; production iterations stay 600,000.
+
+Run actual keypad coverage and the affected GUI checks on Pi:
+
+```bash
+export QT_QPA_PLATFORM=offscreen PYTHONPATH=src
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+python -m unittest -k keypad tests.unit.test_gui_administration
+python -m unittest tests.unit.test_gui_administration tests.unit.test_kiosk_gui
+python -m unittest tests.unit.test_administration tests.unit.test_admin_concurrency
+```
+
+The complete focused command above still covers attendance/recognition without
+model-training tests. New regressions click actual digit/confirm/cancel buttons,
+including three-field selection, checked-state signal arguments, PIN changes,
+all three targeted deletion scopes and global maintenance, busy-task input guards,
+preference snapshots and read-only clocks. Non-cryptographic cases retain their
+scoped test derivation substitute; real PBKDF2/concurrency coverage is preserved.
+
+For manual EGLFS acceptance, reuse the valid Phase 6 **synthetic** `$DB`; do not
+rerun setup or reset data merely to launch this revision:
+
+```bash
+QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
+  --attendance-db "$DB" --debug
+```
+
+1. Log in, open Cambiar PIN administrativo, select each field by mouse/stylus and
+   enter current/new/confirmation using only the keypad. Check masking, zeroes,
+   backspace and visible active-field marking. Submit, then verify forced login,
+   old-PIN rejection and replacement-PIN acceptance. Do not disclose the PIN.
+2. Use a clearly identified disposable synthetic event to verify targeted deletion
+   confirmation and keypad reauthentication. Cancel a separate deletion and check
+   counts remain unchanged. Never select operational data.
+3. Use Restablecer preferencias as the non-attendance global-reset check: verify
+   actual current values/defaults, cancellation, and fresh PIN verification. It
+   preserves participants and attendance. Do not execute history/admin-data reset
+   on a synthetic database whose history you want to keep.
+4. Compare displayed date/time with the device clock, observe seconds advancing,
+   and check footer consistency. No clock-editing or brightness slider should exist.
+5. Verify both themes and standby preferences, close/reopen to check persistence,
+   and confirm power buttons remain disabled with an explanation. Do not enable
+   real system power actions for this acceptance run.
+
+These keypad/Settings changes still require operator EGLFS validation on Raspberry
+Pi; no new hardware validation or power execution was performed during development.

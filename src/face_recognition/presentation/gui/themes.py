@@ -34,11 +34,10 @@ def stylesheet(name):
     QPushButton#destructive {{ color: {c['error']}; border-color: {c['error']}; }}
     QPushButton#nav {{ text-align: left; padding-left: 16px; }}
     QPushButton#nav:checked {{ background: {c['accent']}; color: {c['sidebar']}; }}
-    QLineEdit, QComboBox, QDateEdit, QTimeEdit {{ background: {c['card']}; border: 1px solid {c['border']}; border-radius: 6px; padding: 5px; min-height: 30px; }}
+    QLineEdit, QComboBox, QDateEdit {{ background: {c['card']}; border: 1px solid {c['border']}; border-radius: 6px; padding: 5px; min-height: 30px; }}
+    QLineEdit[pinActive="true"] {{ border: 2px solid {c['accent']}; }}
     QTableWidget {{ background: {c['card']}; gridline-color: {c['border']}; border: 1px solid {c['border']}; selection-background-color: {c['button']}; selection-color: white; }}
     QTableWidget::item {{ padding: 5px; }}
     QHeaderView::section {{ background: {c['sidebar']}; color: {c['secondary']}; border: none; padding: 8px; }}
     QScrollArea {{ border: none; }}
-    QSlider::groove:horizontal {{ background: {c['border']}; height: 6px; }}
-    QSlider::handle:horizontal {{ background: {c['accent']}; width: 22px; margin: -8px 0; border-radius: 10px; }}
     """

@@ -361,8 +361,13 @@ class SQLiteAdministrationRepository:
         rows = {table: tuple(tuple(r) for r in c.execute('SELECT * FROM '+table+' ORDER BY 1')) for table in tables}
         digest = sha256(json.dumps((str(self.database.path), operation.value, rows),
                         ensure_ascii=True, separators=(',', ':')).encode()).hexdigest()
+        preferences = None
+        if operation is MaintenanceOperation.PREFERENCES:
+            if len(rows['device_settings']) != 1:
+                raise AttendancePersistenceError('Missing singleton device settings')
+            preferences = DeviceSettings(*rows['device_settings'][0][1:])
         return MaintenancePreview(operation, len(rows.get('attendance_sessions', ())),
-            len(rows.get('attendance_records', ())), len(rows.get('participants', ())), digest)
+            len(rows.get('attendance_records', ())), len(rows.get('participants', ())), digest, preferences)
 
     def prepare(self, operation):
         with self.database.transaction() as c:
