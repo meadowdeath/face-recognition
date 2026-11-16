@@ -337,9 +337,12 @@ class GuiAttendanceTests(unittest.TestCase):
         script = '''
 import sys
 from PyQt5.QtWidgets import QApplication
+from unittest.mock import patch
+from tests.export_fakes import unavailable_usb
 from face_recognition.presentation.gui.__main__ import main
 QApplication.exec_ = lambda self: 0
-assert main(['--windowed', '--attendance-db', sys.argv[1]]) == 0
+with patch('face_recognition.infrastructure.udisks.UDisksProvider', new=unavailable_usb):
+    assert main(['--windowed', '--attendance-db', sys.argv[1]]) == 0
 assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sklearn',
     'face_recognition.presentation.gui.recognition'))
 '''

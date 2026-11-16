@@ -40,6 +40,8 @@ class GuiAdministrationTests(unittest.TestCase):
 
     def setUp(self):
         use_fast_credentials(self)
+        from tests.export_fakes import unavailable_usb
+        self.enterContext(patch('face_recognition.infrastructure.udisks.UDisksProvider', new=unavailable_usb))
         self.dialog_errors=[]
         self.addCleanup(lambda:self.assertEqual(self.dialog_errors,[]))
         self.temp=TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
@@ -587,6 +589,8 @@ class GuiAdministrationTests(unittest.TestCase):
             self.assertEqual(widget.palette().color(role).name(),colors[token].lower(),type(widget).__name__)
         for page_name in ('dashboard','sessions','system','records','settings','export','sessions'):
             window.navigate(page_name);self.app.processEvents()
+            if window.exports is not None:
+                self.wait_for(lambda:not window.exports.busy)
             page=window.screens[page_name]
             palette(page,QPalette.Window,'background')
             self.assertEqual(page.grab().toImage().pixelColor(page.width()-3,page.height()-3).name(),colors['background'].lower())

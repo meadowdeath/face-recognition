@@ -20,7 +20,7 @@ dependencies = [
 face-landmarks = "face_recognition.presentation.cli.recognize:main"
 
 [project.optional-dependencies]
-gui = ["PyQt5==5.15.11"]
+gui = ["PyQt5==5.15.11", "openpyxl==3.1.5"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

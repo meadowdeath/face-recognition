@@ -6,8 +6,8 @@ The optional PyQt5 Widgets interface defaults to a demonstration independent of
 camera, model and dataset assets. It provides nine persistent screens: standby, attendance,
 PIN access, administrator dashboard, sessions, records, export,
 system status and settings. Without a database, records remain fictional. Export
-controls remain visual placeholders; authenticated persistent mode provides real
-system diagnostics. Live recognition debug metrics describe the running pipeline.
+requires a persistent database and a verified Linux USB destination; authenticated
+persistent mode also provides real system diagnostics. Live recognition debug metrics describe the running pipeline.
 Only modes **without a database** use demonstration PIN **123456** for navigation;
 persistent modes require locally configured credentials, never this fallback.
 
@@ -57,7 +57,7 @@ announce lifecycle changes. Presence enters through `window.set_face_present(boo
 on the GUI thread; repeated absence is idempotent and cannot postpone standby.
 Without `--attendance-db`, the session page opens/closes an explicitly temporary,
 in-memory session. With an explicit database it restores and manages persistent
-sessions, while startup still enters Standby. Export remains visual. Settings
+sessions, while startup still enters Standby. Persistent USB export is described below. Settings
 show read-only system date/time; no brightness adjustment is offered. Persistent modes add PIN change, preferences,
 authorized maintenance and disabled-by-default Linux power requests (Phase 6).
 
@@ -878,13 +878,13 @@ PYTHONPATH=src python -m unittest tests.unit.test_attendance_persistence
 
 Pseudonymous attendance data is not anonymous and a participant row does not prove
 consent. The schema stores no names, identity mappings, biometric payloads, scores,
-unknown-face events or credentials. Before real collection, review authorization,
+unknown-face events or plaintext credentials; schema v4 stores administrator hashes and lockout metadata separately. Before real collection, review authorization,
 retention, withdrawal and deletion obligations, including the project's
 **December 31, 2026 biometric-processing deadline**. This foundation does not
 authorize indefinite retention of participant-related records or trained artifacts.
 SQL deletion is not secure erasure of storage pages, journals, backups or flash.
 Real participant collection is not authorized by this implementation. Withdrawal
-workflows, production access control, retention jobs and export remain unimplemented.
+workflows, deployment hardening and scheduled retention jobs remain unimplemented.
 
 ## Privacy
 
@@ -954,7 +954,7 @@ lockout; moving the clock forward can shorten it. A time earlier than credential
 change is rejected conservatively. Reliable device time and privileged OS access
 remain deployment responsibilities.
 
-Protected navigation includes Dashboard, Sesiones, Registros, Exportar registros,
+Protected navigation includes Dashboard, Sesiones, Registros, Exportar a USB,
 Estado and Ajustes. `Cerrar sesión administrativa`, public Attendance, Standby and
 application exit invalidate login and outstanding operation grants, without closing
 the attendance event. No administrator inactivity timeout is added. `Cambiar PIN`
@@ -966,7 +966,7 @@ navigation and cannot perform persistent maintenance or power operations.
 Appearance and 30/60/120-second standby preferences load without startup writes.
 Explicit updates preserve unrelated settings; failures restore the previous GUI
 selection. System date/time are read-only and share the footer clock; no brightness
-control is presented. USB export remains visual.
+control is presented. USB reports and complete backups require separate confirmation and fresh PIN verification.
 
 A normal login is insufficient for a destructive action. Confirmation comes first,
 then fresh PIN verification issues a 60-second, operation/snapshot-bound, single-use
@@ -1250,3 +1250,229 @@ check runtime switching in both directions. Do not recreate the database or
 configure another PIN. The operator confirmed Raspberry Pi/EGLFS acceptance,
 including persisted-theme restoration. No additional hardware validation is
 claimed by the development-machine regression runs.
+
+
+## USB reports and complete SQLite backups (Phase 7)
+
+**Exportar a USB** has two independent tabs, **Exportar registros** and
+**Respaldo SQLite**, sharing an explicitly selected USB. No destination is selected
+or substituted automatically. Nonpersistent demonstration and identity-only modes
+without a database cannot export. Windows retains portable report/backup tests;
+native Windows USB discovery is outside scope. No unrestricted output-path CLI is
+provided. Existing recognition, schema v4, migrations and attendance modes are unchanged.
+
+### Installation and USB adapter
+
+Keep the working Raspberry Pi virtual environment and system Qt/EGLFS installation:
+
+```bash
+python -m pip install openpyxl==3.1.5
+python -c "from PyQt5 import QtDBus; import openpyxl; print(openpyxl.__version__)"
+```
+
+The desktop `[gui]` extra includes the same openpyxl pin. Its pure-Python,
+platform-independent wheel supports Python 3.11, including ARM64; it adds no native
+extension. See [openpyxl 3.1.5 metadata](https://pypi.org/project/openpyxl/3.1.5/).
+No additional OS packages or policy changes are required by the already verified
+physical local execution context.
+
+`infrastructure/udisks.py` uses only the UDisks2 system D-Bus service through
+PyQt5.QtDBus. Bounded async calls run in the export worker's event loop; managed
+object/property/owner signals coalesce discovery refreshes while Export is visible.
+There is no device polling, mounting subprocess, sudo, alternate backend or Linux
+password prompt. PyQt5 recursively converts nested D-Bus maps, object paths, byte
+arrays and variants. Options are explicitly typed `a{sv}` with
+`auth.no_user_interaction=true`. A private-bus GIO fixture tests the real wire
+signatures when existing Linux GIO/dbus-daemon tools are available; portable tests
+otherwise skip that fixture. Mock dictionaries alone are not hardware acceptance.
+
+Eligibility joins Block → Drive → Filesystem and cross-checks kernel mountinfo,
+device numbers and mount identity. It supports verified USB filesystems without
+requiring `MediaRemovable=true`, and rejects system/ignored/internal/optical/swap,
+ambiguous mounts, and the drives containing the application or attendance database.
+Connection generations, drive identity, timestamps, filesystem identity and mount
+identity bind a destination. Reconnection requires selection and authorization again.
+Unmounted eligible devices can be selected and explicitly mounted. After mounting,
+refresh and select the verified mounted destination. Spaces/Unicode in labels and
+mount points are supported. Unsupported/unverifiable filesystems are excluded.
+
+The operator's prior physical test used a Kingston FAT32 USB with a spaced label:
+local terminal mount/unmount/power-off succeeded noninteractively without sudo or
+policy modifications. SSH mounting required interactive authorization; its
+noninteractive mount and power-off were denied. The new adapter must still pass
+hardware acceptance. SSH denial is reported in Spanish. A future systemd service
+must revalidate its own seat/Polkit context in Phase 9.
+
+Read-only adapter inspection (no mount, unmount or power-off):
+
+```bash
+PYTHONPATH=src python -m face_recognition.infrastructure.udisks --inspect
+```
+
+UDisks semantics: [Filesystem methods](https://storaged.org/udisks/docs/gdbus-org.freedesktop.UDisks2.Filesystem.html)
+and [Drive PowerOff / SiblingId](https://storaged.org/udisks/docs/gdbus-org.freedesktop.UDisks2.Drive.html).
+
+### Report filters, formats and snapshots
+
+Choose all sessions or one stable dated-session ID. Optional Desde/Hasta dates
+are inclusive local calendar days; both local midnights are calculated independently
+and converted to a half-open UTC range. Filtering uses actual registration time,
+not scheduled session date. With dates disabled, full matching session/history can
+be exported. Invalid ranges and empty results fail explicitly. Preview counts are
+estimates; actual output comes from a consistent local SQLite online snapshot.
+The source connection closes before report generation and slow USB writing.
+Open attendance sessions remain open. Rows stream in registration-time/ID order.
+
+Both formats have eight columns:
+`ID de asistencia`, `ID del participante`, `ID de sesión`, `Nombre de sesión`,
+`Fecha de sesión`, `Fecha de registro`, `Hora de registro`, `Registro UTC`.
+IDs remain pseudonymous; local date/time and canonical UTC are preserved. No
+inferred absences, biometric data, credentials or settings enter reports.
+
+CSV uses comma delimiters, standard quoting and UTF-8 BOM. Operator strings whose
+whitespace/control-stripped NFKC probe begins with `=`, `+`, `-` or `@` receive an
+apostrophe prefix; original database strings are never modified. This includes
+full-width variants and is spreadsheet-oriented mitigation, not universal formula
+protection across every CSV reader. XLSX uses a write-only `Asistencias` sheet,
+literal text cells for names/participant IDs, typed numeric IDs and dates/times,
+formatted headers, widths, frozen headers and filtering. UTC stays explicit text.
+The 1,048,575-data-row limit fails instead of truncating. The pinned openpyxl writer
+uses a private XML spool beside job staging files, with cleanup on failure; it does
+not modify process-global tempfile settings. Generated XLSX ZIP integrity is checked.
+
+### Full backup and confidentiality
+
+Backup ignores report filters and uses `Connection.backup`, never a raw file copy
+or SQL dump. It preserves all five business tables, credentials/hashes/salts,
+attempt counters/lockouts, preferences, original IDs/timestamps, activation revisions,
+foreign keys, schema version and SQLite sequences. The source is read-only and
+thread-owned; progress callbacks enforce cancellation and a 120-second deadline.
+The standalone result is reopened and checked with `integrity_check`,
+`foreign_key_check`, `user_version` and the expected schema before publication.
+No restore/import feature is provided.
+
+**A backup is confidential and unencrypted.** It includes attendance data,
+preferences and hashed administrative credentials and may contain residual database
+information. It is not sanitized. Private local staging is outside the repository,
+uses restrictive permissions and is cleaned on success/failure/cancellation; deletion
+is not physical erasure. FAT32/exFAT cannot provide equivalent POSIX per-file
+confidentiality. Authorization, consent, retention and the December 31, 2026
+biometric deadline still require review before real attendance/export is enabled.
+
+### Authorization, publication and removal
+
+An authenticated administrator previews and explicitly confirms before entering a
+fresh PIN on the existing keypad. Single-use, 60-second grants bind operation,
+format, filters, configured database identity, USB identity and planned filename.
+They are consumed at execution start; expiry does not interrupt a legitimately
+started export. Cancellation/navigation/logout/credential changes invalidate pending
+authorization. One worker operation runs at a time. Navigation waits for cooperative
+cancellation; shutdown joins workers. Conflicting GUI maintenance and device changes
+are blocked while work runs. Progress is indeterminate until measurable work begins.
+No recognition worker or recognition policy is changed.
+
+Outputs are collision-safe UTC/unique-suffix names under:
+
+```text
+FaceID/registros/asistencias_<UTC>_<suffix>.csv
+FaceID/registros/asistencias_<UTC>_<suffix>.xlsx
+FaceID/respaldos/faceid_backup_<UTC>_<suffix>.sqlite3
+```
+
+Publication checks space and FAT32's 4 GiB-minus-one-byte limit, rejects unsafe
+paths/symlinks, creates an exclusive temporary file, flushes/fsyncs it, revalidates
+the mount and publishes without overwrite. Linux uses directory-descriptor-anchored
+operations and `renameat2(RENAME_NOREPLACE)`; unsupported filesystems fail explicitly,
+without a check-then-overwrite or hard-link fallback. An open USB directory descriptor
+cannot redirect writes into a replacement local mount-point directory. Windows
+synthetic tests use Windows' no-overwrite rename. Failed copies clean their temporary
+files where possible; uncertain post-publication synchronization identifies the final
+filename instead of claiming durable success. Partial-file cleanup failure is reported.
+FAT32 rename/directory-sync behavior must be validated on the disposable physical USB.
+
+Exports leave USB mounted. **Expulsar USB** normally unmounts the selected filesystem,
+checks remaining mounted partitions/related SiblingId drives and requests PowerOff
+only when verified and safe. It never force/lazy-unmounts other filesystems. Messages
+distinguish unmounted, powered off, unsupported, busy and denied/failed power-off;
+unmount success is not reported as successful power-off. Devices are never remounted
+automatically. No formatting, repair, partitioning, network transfer or policy edits.
+
+### Synthetic validation and benchmarks
+
+```bash
+export QT_QPA_PLATFORM=offscreen PYTHONPATH=src
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+python -m unittest tests.unit.test_export_storage tests.unit.test_udisks_contract \
+  tests.unit.test_attendance_exports tests.unit.test_gui_exports
+python -m unittest tests.unit.test_export_storage tests.unit.test_udisks_contract \
+  tests.unit.test_attendance_exports tests.unit.test_gui_exports \
+  tests.unit.test_administration tests.unit.test_admin_concurrency tests.unit.test_device \
+  tests.unit.test_gui_administration tests.unit.test_attendance_persistence \
+  tests.unit.test_attendance_service tests.unit.test_attendance_sessions \
+  tests.unit.test_session_dates_deletion tests.unit.test_gui_attendance \
+  tests.unit.test_kiosk_gui tests.unit.test_gui_recognition \
+  tests.unit.test_live_open_set_recognition tests.integration.test_live_open_set_cli
+python -m tests.benchmark_exports --records 10000
+```
+
+These tests use synthetic temporary databases/directories, no physical USB, models
+or cameras. The focused command excludes model-training tests. The existing
+intermittent recognition-worker timeout remains documented above, unchanged.
+The benchmark prints record count, generation seconds, bytes and peak traced Python
+allocations (not RSS/native allocations). It includes no USB speed measurement.
+Record separate Pi results; desktop numbers are not embedded-hardware acceptance.
+
+Manual EGLFS acceptance, using the existing verified synthetic `$DB` and a disposable
+USB (the earlier Kingston drive has unrelated files and is not disposable by default):
+
+```bash
+QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
+  --attendance-db "$DB" --debug
+```
+
+1. Launch from the physical local terminal. Log in; open Exportar a USB with no USB.
+2. Insert a disposable USB; verify event-driven discovery, label/filesystem/capacity,
+   select it, mount, refresh and select its verified mounted identity. No Linux PIN.
+3. Export a dated-session/date-filtered CSV and XLSX through confirmation and the
+   administrative keypad. Disable dates to export complete history. Check actual
+   counts and filenames; open both on Windows and verify Unicode/literal text.
+4. Repeat exports and verify existing files survive. Cancel confirmation and a
+   running operation; reject an incorrect PIN. Check unrelated files remain intact.
+5. Create a full backup while a synthetic attendance session is open. Close the app
+   normally (the attendance event stays open). Reopen the standalone backup read-only
+   with sqlite3 and run integrity/foreign-key/version checks. Compare all five table
+   contents and sqlite_sequence against the unchanged synthetic source; print only
+   equality results, never credential values. No restoration/import is supported.
+6. Test insufficient/read-only storage and disconnect/reconnect only on disposable
+   media. Verify no success or writes into the former local mount directory; a new
+   connection must require fresh selection/confirmation/PIN.
+7. Expulsar USB: verify unmount and power-off separately. A mounted sibling must
+   prevent power-off; do not unmount unrelated data. Reinsert and discover afresh.
+8. Check both themes, 800×480 access, navigation/cancellation and normal shutdown.
+   Repeat from SSH to verify clear authorization-denial feedback, not fake success.
+
+Do not enable real system reboot/shutdown for export validation. Hardware acceptance,
+actual FAT32 durability, QtDBus/system-service compatibility and future systemd
+permissions remain operator/deployment validation, not claims from desktop tests.
+
+Read-only comparison of an unchanged **synthetic** source and its backup (close the
+kiosk first, and set `BACKUP` to the exact exported synthetic filename):
+
+```bash
+python - "$DB" "$BACKUP" <<'PY'
+from contextlib import ExitStack, closing
+from pathlib import Path
+import sqlite3, sys
+with ExitStack() as stack:
+    source, backup = [stack.enter_context(closing(sqlite3.connect(
+        Path(p).resolve(strict=True).as_uri() + '?mode=ro', uri=True))) for p in sys.argv[1:]]
+    assert backup.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
+    assert backup.execute('PRAGMA foreign_key_check').fetchall() == []
+    assert backup.execute('PRAGMA user_version').fetchone()[0] == 4
+    for table in ('participants', 'attendance_sessions', 'attendance_records',
+                  'device_settings', 'admin_credentials', 'sqlite_sequence'):
+        assert source.execute('SELECT * FROM '+table+' ORDER BY 1').fetchall() == backup.execute(
+            'SELECT * FROM '+table+' ORDER BY 1').fetchall(), 'Synthetic snapshot differs'
+print('Integridad, esquema y contenido sintético verificados; no se mostraron credenciales.')
+PY
+```

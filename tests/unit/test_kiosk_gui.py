@@ -75,7 +75,7 @@ class KioskGuiTests(unittest.TestCase):
 
     def test_all_admin_cards_back_and_attendance_clears_authentication(self):
         self.login()
-        for title, target in (("Sesiones", "sessions"), ("Registros", "records"), ("Exportar registros", "export"),
+        for title, target in (("Sesiones", "sessions"), ("Registros", "records"), ("Exportar a USB", "export"),
                               ("Estado", "system"), ("Ajustes", "settings")):
             self.click(title)
             self.assertEqual(self.current(), target)

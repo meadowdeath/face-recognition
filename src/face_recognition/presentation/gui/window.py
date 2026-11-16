@@ -77,6 +77,8 @@ class KioskWindow(QMainWindow):
         self.attendance = None
         self.administration = None
         self._admin_shutdown_finished = True
+        self._export_shutdown_finished = True
+        self.exports = None
         self.attendance_session_id = None
         self.attendance_activation_revision = None
         self.session_open = False
@@ -165,13 +167,6 @@ class KioskWindow(QMainWindow):
         self.screens[name] = page
         self.stack.addWidget(page)
         return column
-
-    def card(self, title, value):
-        card = QFrame(objectName="card")
-        layout = QVBoxLayout(card)
-        layout.addWidget(label(title, "muted"))
-        layout.addWidget(label(value))
-        return card
 
     def build_screens(self):
         standby = Standby()
@@ -275,7 +270,7 @@ class KioskWindow(QMainWindow):
         col.addWidget(label("Administración local" if self.persistent_attendance else "Panel de demostración", "muted"))
         grid = QGridLayout()
         for i, (text, target) in enumerate((("▦\nSesiones", "sessions"), ("≡\nRegistros", "records"),
-                ("⇩\nExportar registros", "export"), ("◉\nEstado", "system"), ("⚙\nAjustes", "settings"), ("↪\nSalir de la aplicación", "exit"))):
+                ("⇩\nExportar a USB", "export"), ("◉\nEstado", "system"), ("⚙\nAjustes", "settings"), ("↪\nSalir de la aplicación", "exit"))):
             tile = button(text, lambda checked=False, t=target: self.confirm_exit() if t == "exit" else self.navigate(t))
             tile.setText(text.split("\n")[-1])
             tile.setIcon(self.style().standardIcon((QStyle.SP_DirIcon, QStyle.SP_FileDialogListView,
@@ -388,19 +383,10 @@ class KioskWindow(QMainWindow):
                 table.setItem(row, column, QTableWidgetItem(value))
         col.addWidget(table, 1)
 
-        col = self.page("export", "Exportar registros", True)
-        self.usb = QComboBox()
-        self.usb.addItems(["USB desconectado · Simulado", "USB conectado · Simulado"])
-        col.addWidget(self.card("Dispositivo USB", "Sin detección real de dispositivos"))
-        col.addWidget(self.usb)
-        dates = QHBoxLayout()
-        for title in ("Desde", "Hasta"):
-            dates.addWidget(label(title)); dates.addWidget(self.date_control())
-        col.addLayout(dates)
-        formats = QComboBox(); formats.addItems(["CSV", "XLSX"])
-        col.addWidget(formats)
-        col.addWidget(button("Exportar a USB", primary=True))
-        col.addWidget(label("Acción visual: no se crean ni transfieren archivos.", "muted"))
+        col = self.page("export", "Exportar a USB", True)
+        from .export import ExportPanel
+        self.export_panel = ExportPanel(self)
+        col.addWidget(self.export_panel)
 
         col = self.page("system", "Estado del sistema", True)
         diagnostic_scroll = QScrollArea()
@@ -466,6 +452,8 @@ class KioskWindow(QMainWindow):
 
     def navigate(self, name):
         if self.lifecycle_state is LifecycleState.SHUTDOWN:
+            return
+        if self.exports is not None and not self.exports.allow_navigation(name):
             return
         if self.administration is not None:
             self.administration.before_navigation(name)
@@ -694,7 +682,9 @@ class KioskWindow(QMainWindow):
         self.pin = ""; self.update_pin()
         if self.administration is not None:
             self.administration.shutdown()
-        if not self._shutdown_finished or not self._admin_shutdown_finished:
+        if self.exports is not None:
+            self.exports.shutdown()
+        if not self._shutdown_finished or not self._admin_shutdown_finished or not self._export_shutdown_finished:
             event.ignore()
             self.centralWidget().setEnabled(False)
             self.system_status.setText("Finalizando reconocimiento…")

@@ -347,6 +347,9 @@ class AdminIntegration:
         finally: dialog.deleteLater()
 
     def action(self, key):
+        if self.window.exports is not None and self.window.exports.busy:
+            self.window.settings_message.setText('Espera a que termine la exportación.')
+            return
         if not self.allowed(): return
         try:
             if key == 'pin':
