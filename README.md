@@ -22,13 +22,20 @@ python -m face_recognition.presentation.gui --windowed
 The GUI extra pins the PyQt5 binding to 5.15.11 for desktop development; it is
 not a recognition-core dependency. On Raspberry Pi use the already installed
 system PyQt5 / Qt 5.15.8 through a `--system-site-packages` environment. Do not
-replace the working system Qt/EGLFS installation with desktop wheels.
+replace the working system Qt installation with desktop wheels. LinuxFB is the
+recommended backend for this Pi configuration; EGLFS has an observed intermittent
+native startup crash. See [startup stability and local launchers](docs/kiosk_startup_stability.md)
+for the incident evidence, validated workaround and controlled pilot command.
+Launch from the physical local console; desktop and offscreen configurations remain unchanged.
 
 ```bash
-QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui
+QT_QPA_PLATFORM=linuxfb:fb=/dev/fb0 QT_QPA_FB_DRM=0 PYTHONPATH=src \
+python -m face_recognition.presentation.gui
 ```
 
-EGLFS launches fullscreen; the application does not set the platform backend.
+The kiosk keeps its 800 × 480 geometry; the application does not select the Qt
+platform backend. EGLFS is retained only as a historical/experimental alternative
+with the startup-crash warning above.
 Application exit requires administrator login and confirmation; Escape never closes
 the main kiosk window. Dark Amethyst is the default theme;
 Settings → Appearance (`Ajustes → Apariencia`) switches all existing widgets to
@@ -91,10 +98,11 @@ python -m face_recognition.presentation.gui --windowed `
   --model-dir "..\face-recognition-data\v3\models\open_set_model_v3" --debug
 ```
 
-Raspberry Pi (existing system Qt/EGLFS):
+Raspberry Pi (existing system Qt, recommended LinuxFB; recognition without recording):
 
 ```bash
-QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
+QT_QPA_PLATFORM=linuxfb:fb=/dev/fb0 QT_QPA_FB_DRM=0 PYTHONPATH=src \
+python -m face_recognition.presentation.gui \
   --camera-backend picamera2 \
   --model-dir "../face-recognition-data/v3/models/open_set_model_v3" \
   --orientation rotate180 --debug
@@ -131,7 +139,7 @@ preprocessing helper. `--preview-fps` limits image generation and rendering
 (default 15 FPS; actual display rate also depends on the existing coalesced GUI
 refresh cadence). Each published QImage copies its pixels into Qt-owned storage;
 QPixmap creation and aspect-preserving scaling occur only on the GUI thread. There is no DRM preview,
-OpenCV window, zero-copy assumption or extra preview backend inside EGLFS.
+OpenCV window, zero-copy assumption or extra preview backend inside the Qt kiosk.
 `--preview-width/height` configure acquisition/main stream; the embedded preview
 still uses the inference resolution. The static positioning guide remains visible.
 
@@ -527,7 +535,8 @@ PYTHONPATH=src python -m face_recognition.presentation.cli.attendance_participan
   --attendance-db "$HOME/.local/share/face-recognition/synthetic-attendance.sqlite3" add p001
 PYTHONPATH=src python -m face_recognition.presentation.cli.attendance_participants \
   --attendance-db "$HOME/.local/share/face-recognition/synthetic-attendance.sqlite3" list
-QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
+QT_QPA_PLATFORM=linuxfb:fb=/dev/fb0 QT_QPA_FB_DRM=0 PYTHONPATH=src \
+python -m face_recognition.presentation.gui \
   --attendance-db "$HOME/.local/share/face-recognition/synthetic-attendance.sqlite3"
 ```
 
@@ -700,7 +709,8 @@ Live recording capability example only, after privacy/access-control review and
 with a separate reviewed database (do not execute against real data for testing):
 
 ```bash
-QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
+QT_QPA_PLATFORM=linuxfb:fb=/dev/fb0 QT_QPA_FB_DRM=0 PYTHONPATH=src \
+python -m face_recognition.presentation.gui \
   --camera-backend picamera2 --orientation rotate180 \
   --model-dir "../face-recognition-data/v3/models/open_set_model_v3" \
   --attendance-db "/path/to/reviewed-attendance.sqlite3" \
@@ -1022,7 +1032,8 @@ TEST_DIR=$(mktemp -d -t face-id-phase6-XXXXXX)
 DB="$TEST_DIR/attendance.sqlite3"
 PYTHONPATH=src python -m face_recognition.presentation.cli.admin --attendance-db "$DB" setup
 PYTHONPATH=src python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$DB" add p001
-QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui --attendance-db "$DB"
+QT_QPA_PLATFORM=linuxfb:fb=/dev/fb0 QT_QPA_FB_DRM=0 PYTHONPATH=src \
+python -m face_recognition.presentation.gui --attendance-db "$DB"
 ```
 
 Windows PowerShell (native Qt):
@@ -1169,8 +1180,9 @@ all three targeted deletion scopes and global maintenance, busy-task input guard
 preference snapshots and read-only clocks. Non-cryptographic cases retain their
 scoped test derivation substitute; real PBKDF2/concurrency coverage is preserved.
 
-For manual EGLFS acceptance, reuse the valid Phase 6 **synthetic** `$DB`; do not
-rerun setup or reset data merely to launch this revision:
+Historical Phase 6 EGLFS acceptance command (not the current recommendation;
+see the [LinuxFB startup workaround](docs/kiosk_startup_stability.md)). The original
+procedure reused the valid Phase 6 **synthetic** `$DB` without setup or data reset:
 
 ```bash
 QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
@@ -1238,7 +1250,9 @@ recognition module passed 21 tests. No confirmed recognition regression is known
 this theme correction changes neither recognition behavior nor its test timeouts.
 Report any recurrence separately.
 
-For EGLFS acceptance, reuse the existing valid synthetic `$DB` and existing PIN:
+Historical Phase 6 EGLFS theme-acceptance command (not the current recommendation).
+The original procedure reused the existing synthetic `$DB` and PIN; use
+[LinuxFB](docs/kiosk_startup_stability.md) for current launches:
 
 ```bash
 QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
@@ -1265,7 +1279,7 @@ provided. Existing recognition, schema v4, migrations and attendance modes are u
 
 ### Installation and USB adapter
 
-Keep the working Raspberry Pi virtual environment and system Qt/EGLFS installation:
+Keep the working Raspberry Pi virtual environment and system Qt installation:
 
 ```bash
 python -m pip install openpyxl==3.1.5
@@ -1425,11 +1439,12 @@ The benchmark prints record count, generation seconds, bytes and peak traced Pyt
 allocations (not RSS/native allocations). It includes no USB speed measurement.
 Record separate Pi results; desktop numbers are not embedded-hardware acceptance.
 
-Manual EGLFS acceptance, using the existing verified synthetic `$DB` and a disposable
+Current LinuxFB manual acceptance procedure, using the existing verified synthetic `$DB` and a disposable
 USB (the earlier Kingston drive has unrelated files and is not disposable by default):
 
 ```bash
-QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
+QT_QPA_PLATFORM=linuxfb:fb=/dev/fb0 QT_QPA_FB_DRM=0 PYTHONPATH=src \
+python -m face_recognition.presentation.gui \
   --attendance-db "$DB" --debug
 ```
 
@@ -1509,7 +1524,8 @@ Tests dispose fixtures through test-only worker cleanup/widget disposal; product
 has no development exit bypass. The same focused regression command above includes
 exit-security, real keypad, worker-continuation and fake-power coverage.
 
-Manual EGLFS acceptance with the existing synthetic database (no real power actions):
+Current LinuxFB manual acceptance procedure with the existing synthetic database
+(no real power actions; these steps do not claim new LinuxFB validation):
 
 1. From Standby, Attendance and PIN entry, press Escape/Alt+F4 and attempt ordinary
    window closing. The kiosk must remain operational, including its clock, standby
