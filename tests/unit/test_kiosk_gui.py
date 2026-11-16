@@ -296,3 +296,21 @@ class KioskGuiTests(unittest.TestCase):
         self.assertEqual(page.findChildren(QDateEdit),[]);self.assertEqual(page.findChildren(QTimeEdit),[])
         self.assertEqual(page.findChildren(QSlider),[])
         self.assertEqual(window.clock.interval(),1000)
+
+    def test_initial_theme_effective_palette_is_correct_before_first_show(self):
+        from PyQt5.QtGui import QPalette
+        from PyQt5.QtWidgets import QScrollArea
+        from face_recognition.presentation.gui.themes import THEMES
+        for theme in ('light','dark'):
+            with self.subTest(theme=theme):
+                window=KioskWindow(initial_theme=theme)
+                try:
+                    self.assertIs(window.lifecycle_state,LifecycleState.STANDBY)
+                    self.assertFalse(window.isVisible())
+                    for page in window.screens.values():
+                        page.ensurePolished()
+                        self.assertEqual(page.palette().color(QPalette.Window).name(),THEMES[theme]['background'].lower())
+                        for area in page.findChildren(QScrollArea):
+                            area.widget().ensurePolished()
+                            self.assertEqual(area.widget().palette().color(QPalette.Window).name(),THEMES[theme]['background'].lower())
+                finally:window.close()

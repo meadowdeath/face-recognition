@@ -43,9 +43,8 @@ def main(argv=None):
     except ImportError:
         parser.exit(1, "PyQt5 is required for the GUI. Install the optional [gui] dependencies.\n")
     app = QApplication(sys.argv[:1])
-    window = KioskWindow(live_mode=args.model_dir is not None, debug=args.debug,
-                         persistent_attendance=args.attendance_db is not None)
     administration = None
+    initial_settings = None
     if args.attendance_db is not None:
         from face_recognition.application.attendance_service import AttendanceService
         from face_recognition.domain.models.attendance import AttendancePersistenceError
@@ -79,11 +78,21 @@ def main(argv=None):
             error = "No fue posible migrar. Revisa nombres, fechas e integridad mediante mantenimiento administrativo."
         except (ValueError, AttendancePersistenceError, OSError):
             error = "No fue posible abrir la base de datos. Revisa su disponibilidad y versión."
+        if service is not None:
+            try:
+                initial_settings = settings.get()
+            except (ValueError, AttendancePersistenceError, OSError):
+                pass  # Safe dark fallback; AdminIntegration reports the failed read.
+    window = KioskWindow(live_mode=args.model_dir is not None, debug=args.debug,
+                         persistent_attendance=args.attendance_db is not None,
+                         initial_theme=initial_settings.theme if initial_settings is not None else "dark")
+    if args.attendance_db is not None:
         AttendanceIntegration(window, service,
             recording_enabled=args.enable_attendance_recording or args.model_dir is None, initialization_error=error)
         administration = AdminIntegration(window, administrator if service else None,
             settings if service else None, DeviceDiagnostics(args.attendance_db.parent),
-            power=SystemPowerController(enabled=args.enable_system_power_actions and service is not None))
+            power=SystemPowerController(enabled=args.enable_system_power_actions and service is not None),
+            initial_settings=initial_settings)
     integration = None
     if args.model_dir is not None:
         from .recognition import RecognitionIntegration

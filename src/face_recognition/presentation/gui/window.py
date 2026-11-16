@@ -70,7 +70,7 @@ class KioskWindow(QMainWindow):
     session_close_requested = pyqtSignal()
     simulation_requested = pyqtSignal()
 
-    def __init__(self, live_mode=False, debug=False, persistent_attendance=False):
+    def __init__(self, live_mode=False, debug=False, persistent_attendance=False, *, initial_theme="dark"):
         super().__init__()
         self.live_mode, self.live_debug_enabled = live_mode, debug
         self.persistent_attendance = persistent_attendance
@@ -94,7 +94,7 @@ class KioskWindow(QMainWindow):
         self.setLocale(QLocale(QLocale.Spanish, QLocale.Mexico))
         self.authenticated = False
         self.pin = ""
-        self.theme = "dark"
+        self.theme = initial_theme
         self.screens = {}
         root = QWidget()
         self.setCentralWidget(root)
@@ -148,7 +148,7 @@ class KioskWindow(QMainWindow):
         self.update_clock()
         self.exit_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
         self.exit_shortcut.activated.connect(self.close)
-        self.apply_theme("dark")
+        self.apply_theme(initial_theme)
         self.navigate("standby")
         QApplication.instance().installEventFilter(self)
 

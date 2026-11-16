@@ -1208,3 +1208,57 @@ QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui
 
 These keypad/Settings changes still require operator EGLFS validation on Raspberry
 Pi; no new hardware validation or power execution was performed during development.
+
+
+### Startup theme restoration
+
+The persisted theme is loaded before constructing `KioskWindow`. Its
+`initial_theme` is applied once after screen construction and before first show;
+`AdminIntegration` consumes the same loaded settings and does not reapply an
+unchanged theme. Nonpersistent mode still defaults to Amethyst. A failed settings
+read uses a single dark fallback and reports the error, without writing preferences
+or repeating the read. Existing storage initialization/migration failures retain
+their separate error handling.
+
+This fixes a reproduced Qt pre-show styling problem: applying dark and then light
+before first show left hidden scroll contents/tab pages and table-header styling
+with dark state even though the outer pages and theme metadata were light. Runtime
+switching after show was correct. No palette/viewport overrides, delayed toggles,
+periodic repolish, new stylesheet colors or screen rebuilding were needed.
+
+Startup appearance regressions launch a fresh window through the production GUI
+entry point using an existing synthetic database, authenticate and visit all pages.
+They inspect effective Qt palettes and rendered background pixels for nested scroll
+contents, viewports, tables/headers, tabs, popups, calendars, cards, labels, inputs,
+sidebar/footer and new dialogs. Tests also cover repeated switching, preference
+rollback/reset and restart, a single startup settings load, no preference writes,
+and safe read-failure fallback.
+
+```bash
+export QT_QPA_PLATFORM=offscreen PYTHONPATH=src
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+python -m unittest -k startup_theme tests.unit.test_gui_administration
+python -m unittest tests.unit.test_gui_administration tests.unit.test_kiosk_gui tests.unit.test_gui_attendance
+```
+
+Run the complete focused regression command above for attendance/recognition
+coverage without model-training tests. The operator observed an intermittent Pi
+timeout in `test_disabled_preview_skips_image_work_but_recognition_presence_and_metrics_continue`;
+the individual test subsequently passed three times and its complete GUI
+recognition module passed 21 tests. No confirmed recognition regression is known;
+this theme correction changes neither recognition behavior nor its test timeouts.
+Report any recurrence separately.
+
+For EGLFS acceptance, reuse the existing valid synthetic `$DB` and existing PIN:
+
+```bash
+QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
+  --attendance-db "$DB" --debug
+```
+
+Select Lavender in Ajustes, exit normally, restart with the same `$DB`, log in and
+visit Sesiones, Estado, Registros and Ajustes without toggling the theme. Check
+nested contents, table headers, tabs, popups and dialogs. Repeat with Amethyst and
+check runtime switching in both directions. Do not recreate the database or
+configure another PIN. This correction still requires operator Raspberry Pi/EGLFS
+validation; local offscreen results are not hardware acceptance.

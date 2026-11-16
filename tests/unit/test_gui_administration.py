@@ -12,8 +12,9 @@ AVAILABLE = importlib.util.find_spec('PyQt5') is not None
 if AVAILABLE:
     os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
     from PyQt5.QtCore import QTimer, Qt, QDate, QTime, QDateTime, QPoint
+    from PyQt5.QtGui import QPalette
     from PyQt5.QtTest import QTest
-    from PyQt5.QtWidgets import QApplication, QLineEdit, QPushButton, QLabel, QDateEdit, QTimeEdit, QSlider
+    from PyQt5.QtWidgets import QApplication, QLineEdit, QPushButton, QLabel, QDateEdit, QTimeEdit, QSlider, QScrollArea, QTableWidget, QTabWidget, QComboBox, QFrame, QTableWidgetItem
     from face_recognition.application.attendance_service import AttendanceService
     from face_recognition.domain.models.attendance import AttendancePersistenceError
     from face_recognition.infrastructure.device import DeviceDiagnostics
@@ -22,6 +23,8 @@ if AVAILABLE:
     from face_recognition.presentation.gui.admin import AdminIntegration
     from face_recognition.presentation.gui.attendance import AttendanceIntegration
     from face_recognition.presentation.gui.window import KioskWindow, LifecycleState
+    from face_recognition.presentation.gui.themes import THEMES
+    from face_recognition.infrastructure.persistence.attendance_repositories import SQLiteDeviceSettingsRepository
     from tests.admin_fakes import use_fast_credentials, configured_admin, TEST_PIN
 
 
@@ -528,3 +531,178 @@ class GuiAdministrationTests(unittest.TestCase):
         self.assertEqual(self.admin.settings.get().theme,'light')
         self.assertEqual(self.admin.settings.get().standby_timeout_seconds,60)
         self.assertIn('No se completó',self.w.settings_message.text())
+
+    def production_restart(self,inspect):
+        """Fresh-window production composition, same synthetic DB, no main event loop."""
+        from face_recognition.presentation.gui.__main__ import main
+        self.w.close();self.ui.finalize()
+        expected_theme=self.admin.settings.get().theme
+        windows=[];applied=[];reads=[];writes=[]
+        original_apply=KioskWindow.apply_theme
+        original_get=SQLiteDeviceSettingsRepository.get
+        original_theme=SQLiteDeviceSettingsRepository.update_theme
+        original_timeout=SQLiteDeviceSettingsRepository.update_standby_timeout
+        def make_window(*args,**kwargs):
+            result=KioskWindow(*args,**kwargs);windows.append(result);return result
+        def apply(window,name):
+            applied.append(name);return original_apply(window,name)
+        def get(repo):
+            reads.append(True);return original_get(repo)
+        def theme(repo,value):
+            writes.append(('theme',value));return original_theme(repo,value)
+        def timeout(repo,value):
+            writes.append(('timeout',value));return original_timeout(repo,value)
+        def run():
+            window=windows[-1]
+            try:
+                self.assertIs(window.lifecycle_state,LifecycleState.STANDBY)
+                self.assertEqual(len(reads),1)
+                self.assertEqual(writes,[])
+                self.assertEqual(applied,[expected_theme])
+                window.administration.service.clock=lambda:self.now
+                inspect(window,applied,writes)
+            finally:window.close()
+            return 0
+        with patch('PyQt5.QtWidgets.QApplication',return_value=self.app), \
+                patch('face_recognition.presentation.gui.window.KioskWindow',side_effect=make_window), \
+                patch.object(KioskWindow,'apply_theme',new=apply), \
+                patch.object(SQLiteDeviceSettingsRepository,'get',new=get), \
+                patch.object(SQLiteDeviceSettingsRepository,'update_theme',new=theme), \
+                patch.object(SQLiteDeviceSettingsRepository,'update_standby_timeout',new=timeout), \
+                patch.object(QApplication,'exec_',side_effect=run):
+            self.assertEqual(main(['--windowed','--attendance-db',str(self.db.path)]),0)
+
+    def login_window_keypad(self,window):
+        window.open_admin()
+        for digit in TEST_PIN:self.dialog_button(window.screens['pin'],digit).click()
+        self.dialog_button(window.screens['pin'],'Confirmar').click()
+        self.wait_for(lambda:window.administration.job is None)
+        self.assertIs(window.lifecycle_state,LifecycleState.ADMIN)
+
+    def assert_theme_appearance(self,window,name):
+        """Check effective palettes AND rendered backgrounds, not theme metadata."""
+        colors=THEMES[name]
+        def palette(widget,role,token):
+            widget.ensurePolished()
+            self.assertEqual(widget.palette().color(role).name(),colors[token].lower(),type(widget).__name__)
+        for page_name in ('dashboard','sessions','system','records','settings','export','sessions'):
+            window.navigate(page_name);self.app.processEvents()
+            page=window.screens[page_name]
+            palette(page,QPalette.Window,'background')
+            self.assertEqual(page.grab().toImage().pixelColor(page.width()-3,page.height()-3).name(),colors['background'].lower())
+            for scroll in page.findChildren(QScrollArea):
+                for widget in (scroll.viewport(),scroll.widget()):palette(widget,QPalette.Window,'background')
+                image=scroll.widget().grab().toImage()
+                self.assertEqual(image.pixelColor(image.width()-4,image.height()-4).name(),colors['background'].lower())
+            for tabs in page.findChildren(QTabWidget):
+                palette(tabs.tabBar(),QPalette.Window,'background')
+                for index in range(tabs.count()):palette(tabs.widget(index),QPalette.Window,'background')
+            for table in page.findChildren(QTableWidget):
+                palette(table,QPalette.Base,'card');palette(table.viewport(),QPalette.Base,'card')
+                table.setRowCount(1);table.setItem(0,0,QTableWidgetItem('p001'))
+                image=table.viewport().grab().toImage()
+                self.assertEqual(image.pixelColor(image.width()-4,image.height()-4).name(),colors['card'].lower())
+                self.assertEqual(table.horizontalHeader().grab().toImage().pixelColor(3,3).name(),colors['sidebar'].lower())
+            for combo in page.findChildren(QComboBox):
+                palette(combo,QPalette.Base,'card')
+                combo.showPopup();self.app.processEvents()
+                palette(combo.view(),QPalette.Base,'background');combo.hidePopup()
+            for calendar in page.findChildren(QDateEdit):palette(calendar.calendarWidget(),QPalette.Window,'background')
+            for frame in page.findChildren(QFrame):
+                if frame.objectName()=='card':palette(frame,QPalette.Window,'card')
+            for text in page.findChildren(QLabel):
+                if text.objectName() in ('title','brand',''):
+                    palette(text,QPalette.WindowText,'text')
+            dynamic=QPushButton('Prueba',page);palette(dynamic,QPalette.Button,'card');dynamic.deleteLater()
+        for page_name in ('standby','attendance','pin'):
+            page=window.screens[page_name]
+            palette(page,QPalette.Window,'background')
+            image=page.grab().toImage()
+            self.assertEqual(image.pixelColor(image.width()-3,image.height()-3).name(),colors['background'].lower())
+        for widget in window.findChildren(QFrame):
+            if widget.objectName() in ('sidebar','status'):palette(widget,QPalette.Window,'sidebar')
+        def pin(dialog):
+            field=dialog.findChildren(QLineEdit)[0]
+            palette(field,QPalette.Base,'card')
+            self.assertEqual(field.grab().toImage().pixelColor(field.width()//2,field.height()//2).name(),colors['card'].lower())
+            self.dialog_button(dialog,'Cancelar').click()
+        self.schedule_dialog(pin);self.assertIsNone(window.administration.reauthenticate('theme-visual-only'))
+        def confirmation(dialog):
+            palette(dialog,QPalette.Window,'background')
+            palette(self.dialog_button(dialog,'Cancelar'),QPalette.Button,'card')
+            self.dialog_button(dialog,'Cancelar').click()
+        self.schedule_dialog(confirmation)
+        self.assertFalse(window.administration.confirmation('Prueba de tema','Solo presentación','Continuar'))
+
+    def test_startup_theme_light_effective_nested_appearance(self):
+        self.admin.settings.update_theme('light')
+        def check(window,applied,writes):
+            self.assertEqual(window.appearance.currentIndex(),1)
+            self.assertEqual(window.screens['standby'].palette().color(QPalette.Window).name(),THEMES['light']['background'].lower())
+            window.navigate('attendance');self.app.processEvents()
+            self.assertEqual(window.screens['attendance'].palette().color(QPalette.Window).name(),THEMES['light']['background'].lower())
+            self.login_window_keypad(window);self.assert_theme_appearance(window,'light')
+            self.assertEqual(applied,['light']);self.assertEqual(writes,[])
+        self.production_restart(check)
+
+    def test_startup_theme_dark_effective_nested_appearance(self):
+        self.admin.settings.update_theme('dark')
+        def check(window,applied,writes):
+            self.login_window_keypad(window);self.assert_theme_appearance(window,'dark')
+            self.assertEqual(applied,['dark']);self.assertEqual(writes,[])
+        self.production_restart(check)
+
+    def test_startup_theme_runtime_switching_keeps_hidden_pages_consistent(self):
+        def check(window,applied,writes):
+            self.login_window_keypad(window)
+            for name in ('light','dark','light','dark'):
+                window.appearance.setCurrentIndex(1 if name=='light' else 0)
+                self.assert_theme_appearance(window,name)
+        self.production_restart(check)
+
+    def test_startup_theme_failed_preference_write_restores_effective_appearance(self):
+        self.admin.settings.update_theme('light')
+        def check(window,applied,writes):
+            self.login_window_keypad(window)
+            with patch.object(window.administration.service,'update_theme',side_effect=AttendancePersistenceError('Synthetic failure')):
+                window.appearance.setCurrentIndex(0)
+            self.assertEqual(window.appearance.currentIndex(),1)
+            self.assertEqual(self.admin.settings.get().theme,'light')
+            self.assert_theme_appearance(window,'light')
+        self.production_restart(check)
+
+    def test_startup_theme_authorized_preference_reset_and_restart_are_visually_dark(self):
+        self.admin.settings.update_theme('light');self.admin.settings.update_standby_timeout(120)
+        def reset(window,applied,writes):
+            self.login_window_keypad(window);window.navigate('settings')
+            self.confirm_then_keypad(lambda dialog:None)
+            window.admin_actions['preferences'].click()
+            self.assertEqual(window.standby_timeout_seconds,30)
+            self.assertEqual(window.appearance.currentIndex(),0)
+            self.assert_theme_appearance(window,'dark')
+        self.production_restart(reset)
+        def restored(window,applied,writes):
+            self.assertEqual(window.standby_timeout_seconds,30)
+            self.login_window_keypad(window);self.assert_theme_appearance(window,'dark')
+            self.assertEqual(applied,['dark']);self.assertEqual(writes,[])
+        self.production_restart(restored)
+
+    def test_startup_theme_settings_read_failure_has_safe_single_dark_fallback(self):
+        from face_recognition.presentation.gui.__main__ import main
+        self.w.close();self.ui.finalize();windows=[]
+        def window(*args,**kwargs):
+            result=KioskWindow(*args,**kwargs);windows.append(result);return result
+        def inspect():
+            current=windows[-1]
+            try:
+                self.assertEqual(current.theme,'dark')
+                self.assertIn('No fue posible cargar',current.settings_message.text())
+                self.assertIs(current.lifecycle_state,LifecycleState.STANDBY)
+            finally:current.close()
+            return 0
+        with patch('PyQt5.QtWidgets.QApplication',return_value=self.app), \
+                patch('face_recognition.presentation.gui.window.KioskWindow',side_effect=window), \
+                patch.object(SQLiteDeviceSettingsRepository,'get',side_effect=AttendancePersistenceError('Synthetic read failure')) as read, \
+                patch.object(QApplication,'exec_',side_effect=inspect):
+            self.assertEqual(main(['--windowed','--attendance-db',str(self.db.path)]),0)
+            read.assert_called_once()

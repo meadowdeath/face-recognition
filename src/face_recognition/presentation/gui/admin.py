@@ -8,6 +8,8 @@ from face_recognition.domain.models.administration import AuthOutcome, Maintenan
 from face_recognition.domain.models.attendance import AttendancePersistenceError, DeviceSettings
 from .window import LifecycleState, button, label
 
+_UNLOADED_SETTINGS = object()
+
 ERRORS = (AttendancePersistenceError, ValueError, LookupError, PermissionError, OSError)
 AUTH_MESSAGES = {
     AuthOutcome.AUTHENTICATED: 'PIN verificado.', AuthOutcome.INCORRECT: 'PIN incorrecto.',
@@ -73,7 +75,7 @@ class CredentialDialog(QDialog):
 
 
 class AdminIntegration:
-    def __init__(self, window, service, settings, diagnostics, *, power=None):
+    def __init__(self, window, service, settings, diagnostics, *, power=None, initial_settings=_UNLOADED_SETTINGS):
         self.window, self.service = window, service
         self.settings, self.diagnostics, self.power = settings, diagnostics, power
         self.job = None
@@ -99,7 +101,12 @@ class AdminIntegration:
         window.pin_hint.setText('PIN administrativo local · Sin recuperación automática')
         self.current_settings = DeviceSettings()
         try:
-            if settings is not None: self.apply_settings(settings.get())
+            if initial_settings is _UNLOADED_SETTINGS:
+                initial_settings = settings.get() if settings is not None else None
+            if initial_settings is not None:
+                self.apply_settings(initial_settings)
+            elif settings is not None:
+                window.settings_message.setText('No fue posible cargar las preferencias.')
         except ERRORS:
             window.settings_message.setText('No fue posible cargar las preferencias.')
         self.update_setup_state()
@@ -303,7 +310,8 @@ class AdminIntegration:
         for widget, index in ((w.appearance, 1 if settings.theme == 'light' else 0),
                               (w.timeout_selector, w.timeout_selector.findData(settings.standby_timeout_seconds))):
             old = widget.blockSignals(True); widget.setCurrentIndex(index); widget.blockSignals(old)
-        w.apply_theme(settings.theme)
+        if w.theme != settings.theme:
+            w.apply_theme(settings.theme)
         w.standby_timeout_seconds = settings.standby_timeout_seconds
         w.record_attendance_activity()
         self.current_settings = settings
