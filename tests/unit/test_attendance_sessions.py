@@ -50,10 +50,8 @@ class SessionManagementTests(unittest.TestCase):
             with self.subTest(bad=repr(bad)), self.assertRaises(ValueError):
                 normalize_session_name(bad)
 
-    def test_open_resume_by_name_id_and_already_active_preserve_history(self):
-        created = self.sessions.open_or_resume('Original', NOW)
-        self.assertIs(created.outcome, SessionOutcome.CREATED)
-        first = created.session
+    def test_explicit_creation_resumption_and_already_active_preserve_history(self):
+        first = self.sessions.open('Original', NOW)
         record, _ = self.records.add('p001', first.id, NOW)
         for _ in range(2):
             active = self.sessions.resume(first.id)
@@ -84,8 +82,7 @@ class SessionManagementTests(unittest.TestCase):
         first = self.sessions.open('First', NOW)
         self.sessions.close(first.id, NOW)
         other = self.sessions.open('Other', NOW)
-        for operation in (lambda: self.sessions.resume(first.id), lambda: self.sessions.resume(first.id),
-                          lambda: self.sessions.open_or_resume('Third', NOW)):
+        for operation in (lambda: self.sessions.resume(first.id), lambda: self.sessions.open('Third', NOW)):
             with self.assertRaises(SessionConflictError): operation()
         with self.assertRaises(DuplicateSessionNameError): self.sessions.open(' FIRST ', NOW)
         with self.assertRaises(LookupError): self.sessions.resume(999)
@@ -147,7 +144,7 @@ class SessionManagementTests(unittest.TestCase):
             self.assertIs(pending.result(timeout=3).outcome, RegistrationOutcome.NO_SESSION)
         self.assertEqual(self.records.count_for_session(first.id), 0)
 
-    def test_competing_open_or_resume_advances_revision_only_once(self):
+    def test_competing_creations_and_resumptions_have_distinct_outcomes(self):
         for exists in (False, True):
             name = 'Existing' if exists else 'New'
             if exists:
@@ -158,15 +155,16 @@ class SessionManagementTests(unittest.TestCase):
                 barrier.wait(timeout=3)
 
                 if exists: return self.sessions.resume(previous.id)
-                try: return self.sessions.open_or_resume(name, NOW)
-                except DuplicateSessionNameError: return self.sessions.resume(self.sessions.get_by_name(name, NOW.astimezone().date()).id)
+                return self.service.create_session(name, NOW.astimezone().date())
             with ThreadPoolExecutor(max_workers=2) as executor:
                 results = list(executor.map(activate, range(2)))
             self.assertEqual({r.outcome for r in results},
-                {SessionOutcome.RESUMED if exists else SessionOutcome.CREATED, SessionOutcome.ALREADY_ACTIVE})
-            self.assertEqual(len({r.session.id for r in results}), 1)
-            self.assertEqual({r.session.activation_revision for r in results}, {2 if exists else 1})
-            self.sessions.close(results[0].session.id, NOW)
+                {SessionOutcome.RESUMED, SessionOutcome.ALREADY_ACTIVE} if exists else
+                {SessionOutcome.CREATED, SessionOutcome.DUPLICATE_NAME})
+            active = self.sessions.current()
+            self.assertEqual({r.session.id for r in results if r.session is not None}, {active.id})
+            self.assertEqual(active.activation_revision, 2 if exists else 1)
+            self.sessions.close(active.id, active.opened_at)
 
     def test_record_filters_session_date_combination_history_and_guard(self):
         first = self.sessions.open('First', NOW)
@@ -267,7 +265,7 @@ class AttendanceMigrationTests(unittest.TestCase):
         with self.assertRaises(AttendancePersistenceError): self.db.initialize()
         self.assertEqual(self.snapshot(), before)
 
-    def test_new_and_migrated_databases_enforce_equivalent_v2_constraints(self):
+    def test_new_and_migrated_databases_enforce_equivalent_v3_constraints(self):
         self.seed()
         self.db.initialize()
         fresh = AttendanceDatabase(Path(self.temp.name) / 'fresh.sqlite3')
@@ -283,21 +281,23 @@ class AttendanceMigrationTests(unittest.TestCase):
                 ('UPDATE attendance_sessions SET name_key=? WHERE id=?', (b'not-text', session.id)),
                 ('UPDATE attendance_sessions SET activation_revision=? WHERE id=?', (0, session.id)),
                 ('UPDATE attendance_sessions SET activation_revision=? WHERE id=?', (1.5, session.id)),
-                ('INSERT INTO attendance_sessions (name,name_key,opened_at) VALUES (?,?,?)', ('Duplicate', session.name_key, timestamp(NOW))),
-                ('INSERT INTO attendance_sessions (name,name_key,opened_at) VALUES (?,?,?)', ('Different', 'different', timestamp(NOW))),
+                ('INSERT INTO attendance_sessions (name,name_key,opened_at,session_date) VALUES (?,?,?,?)',
+                 ('Duplicate', session.name_key, timestamp(NOW), session.session_date.isoformat())),
+                ('INSERT INTO attendance_sessions (name,name_key,opened_at,session_date) VALUES (?,?,?,?)',
+                 ('Different', 'different', timestamp(NOW), session.session_date.isoformat())),
             ):
                 with self.subTest(path=database.path.name, sql=sql), self.assertRaises(ValueError):
                     with database.transaction(write=True) as c: c.execute(sql, params)
             with database.transaction() as c:
                 self.assertEqual(c.execute('PRAGMA foreign_key_check').fetchall(), [])
             sessions.close(session.id, NOW)
-            # Prove name uniqueness independently of the one-open-session index.
-            with self.assertRaises(ValueError):
+            # Prove name/date uniqueness independently of the one-open-session index.
+            with self.assertRaisesRegex(ValueError, 'UNIQUE constraint failed: attendance_sessions.name_key, attendance_sessions.session_date'):
                 with database.transaction(write=True) as c:
-                    c.execute('INSERT INTO attendance_sessions (name,name_key,opened_at,closed_at) VALUES (?,?,?,?)',
-                              ('Duplicate closed', session.name_key, timestamp(NOW), timestamp(NOW)))
+                    c.execute('INSERT INTO attendance_sessions (name,name_key,opened_at,closed_at,session_date) VALUES (?,?,?,?,?)',
+                              ('Duplicate closed', session.name_key, timestamp(NOW), timestamp(NOW), session.session_date.isoformat()))
 
-    def test_incomplete_v2_constraints_and_noncanonical_metadata_are_rejected(self):
+    def test_incomplete_v3_constraints_and_noncanonical_metadata_are_rejected(self):
         self.db.initialize()
         session = SQLiteAttendanceSessionRepository(self.db).open('Synthetic', NOW)
         with self.db.transaction(write=True) as c:

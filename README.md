@@ -726,7 +726,9 @@ Phase 4's 27 persistence checks passed on Raspberry Pi, including POSIX
 permissions. Its complete Pi suite was manually interrupted after about 20
 minutes; it is **not** recorded as a full-suite pass. The initial Phase 5 focused
 suite (114 checks) and 18 functional acceptance checks subsequently passed on Pi.
-The earlier session-management revision was validated on Pi; this dated-session/deletion revision still requires manual Pi validation.
+The dated-session/deletion revision also passed targeted and manual Pi acceptance
+checks, as reported by the operator. The pre-merge cleanup must still be checked
+on Pi using the focused command above; no new hardware measurements are claimed.
 Windows development should also run `python -m unittest discover
 -s tests` with `PYTHONPATH=src` and the Qt offscreen backend.
 
@@ -819,8 +821,8 @@ explicit timezone-aware `datetime` arguments. Dataclasses normalize these to UTC
 storage uses fixed microsecond ISO 8601 `YYYY-MM-DDTHH:MM:SS.ffffffZ`. Database CHECKs
 reject malformed timestamps; canonical UTC text supports chronological ordering.
 `list_between(start, end)` requires `start < end` and uses **[start, end)**. Lists
-use deterministic ID tie-breaks for equal timestamps. Presentation will handle
-local timezone conversion in the GUI.
+use deterministic ID tie-breaks for equal timestamps. The GUI performs local
+timezone conversion for display.
 
 Each operation owns a short-lived connection with foreign keys enabled, the
 default 5-second busy timeout and unchanged `check_same_thread` enforcement. No
@@ -831,8 +833,8 @@ Successful operations commit; failures roll back; connections always close.
 
 Session repositories also provide name/date lookup, distinct names and available
 dates, explicit `resume`, closed-event `edit`, and grouped `list_with_counts`.
-Creation rejects existing name/date pairs. Legacy `open_or_resume` entry points
-are adapted to strict creation only; they never resume automatically. The service exposes these operations as focused outcomes (created, resumed,
+Creation rejects existing name/date pairs; resumption is explicit by session ID.
+The service exposes these operations as focused outcomes (created, resumed,
 already active, conflicting active session, duplicate name, missing session, failure).
 The repository generates the canonical Unicode key; database uniqueness and
 INSERT/UPDATE triggers reject missing/empty/NUL-containing keys. An empty column

@@ -33,7 +33,7 @@ class AttendanceIntegration:
                 service.deletion_authorization.require()
             except (AttributeError, PermissionError):
                 self.deletion_allowed = False
-        self.current = self.last_session = None
+        self.current = None
         self.count = 0
         self._generation = self._session_id = None
         self._session_revision = None
@@ -60,7 +60,7 @@ class AttendanceIntegration:
         for action in window.deletion_buttons:
             action.setEnabled(False)
         window.session_resume.clicked.connect(self.resume_session)
-        window.session_rename.clicked.connect(self.rename_session)
+        window.session_edit.clicked.connect(self.edit_session)
         window.session_title.setText("Sesión de asistencia · SQLite")
         window.session_hint.setText("Persistencia local · PIN de demostración; no es control de acceso real.")
         if window.live_mode:
@@ -72,7 +72,7 @@ class AttendanceIntegration:
             window.session_start.setEnabled(False)
             window.session_close.setEnabled(False)
             window.session_resume.setEnabled(False)
-            window.session_rename.setEnabled(False)
+            window.session_edit.setEnabled(False)
             window.session_details.setText("Persistencia no disponible")
             window.session_hint.setText(initialization_error)
             window.session_indicator.setText("Persistencia no disponible")
@@ -96,7 +96,7 @@ class AttendanceIntegration:
         w = self.window
         activation = (current.id, current.activation_revision) if current else (None, None)
         changed = (w.attendance_session_id, w.attendance_activation_revision) != activation
-        self.current, self.last_session, self.count = current, displayed, count
+        self.current, self.count = current, count
         w.attendance_session_id = current.id if current else None
         w.attendance_activation_revision = current.activation_revision if current else None
         w.session_open = current is not None
@@ -161,7 +161,7 @@ class AttendanceIntegration:
         pair = next(((s, c) for s, c in self.summaries if s.id == selected), None)
         session, count = pair if pair else (None, 0)
         w.session_resume.setEnabled(session is not None and not session.is_open and self.current is None)
-        w.session_rename.setEnabled(session is not None and not session.is_open)
+        w.session_edit.setEnabled(session is not None and not session.is_open)
         text = (f'{session.name} · {session.session_date:%d/%m/%Y} · {count} asistencias · '
                 + ('Abierta' if session.is_open else 'Cerrada')) if session else 'Selecciona una sesión.'
         w.selected_session_details.setText(text)
@@ -233,7 +233,7 @@ class AttendanceIntegration:
         except PERSISTENCE_ERRORS:
             self.window.session_hint.setText('No fue posible reanudar la sesión seleccionada.')
 
-    def rename_session(self):
+    def edit_session(self):
         identifier = self.window.stored_sessions.currentData()
         selected = next((s for s, _ in self.summaries if s.id == identifier), None)
         if self.service is None or selected is None or selected.is_open:

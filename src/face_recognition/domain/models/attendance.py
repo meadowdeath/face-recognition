@@ -16,7 +16,7 @@ class SessionConflictError(ValueError):
 
 
 class DuplicateSessionNameError(ValueError):
-    """Another session already owns the normalized name."""
+    """Another session already owns the normalized name and calendar date."""
 
 
 class StaleSessionActivationError(ValueError):

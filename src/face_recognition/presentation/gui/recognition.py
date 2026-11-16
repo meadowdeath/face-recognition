@@ -235,7 +235,7 @@ class RecognitionIntegration(QObject):
         if w.attendance is not None and w.attendance.service is None:
             w.show_live_status("No fue posible registrar la asistencia", w.attendance.initialization_error, "error")
         elif not w.session_open:
-            w.show_live_status("No hay una sesión de asistencia activa", "Abre una sesión temporal desde Administración.")
+            w.show_live_status("No hay una sesión de asistencia activa", "Abre una sesión desde Administración.")
         elif self.backend_error or self.activation_error:
             w.show_live_status("Reconocimiento no disponible", self.backend_error or self.activation_error, "error")
         elif not self.ready:

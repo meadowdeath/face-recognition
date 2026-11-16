@@ -281,6 +281,8 @@ class SchemaThreeMigrationTests(unittest.TestCase):
                 self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], 3)
                 self.assertEqual(c.execute('PRAGMA foreign_keys').fetchone()[0], 1)
                 self.assertFalse(c.execute('PRAGMA foreign_key_check').fetchall())
+                self.assertEqual(dict(c.execute('SELECT name,seq FROM sqlite_sequence')),
+                                 {'attendance_sessions': 7, 'attendance_records': 23})
             db.initialize()
 
     def test_timezone_inference_around_midnight_is_not_fixed_to_current_offset(self):

@@ -63,10 +63,10 @@ class AttendanceService:
         return self.sessions.dates_for_name(name)
 
     @staticmethod
-    def _session_operation(operation, *args, renamed=False):
+    def _session_operation(operation, *args, outcome=None):
         try:
             result = operation(*args)
-            return SessionResult(SessionOutcome.RENAMED, result) if renamed else result
+            return SessionResult(outcome, result) if outcome is not None else result
         except DuplicateSessionNameError:
             return SessionResult(SessionOutcome.DUPLICATE_NAME)
         except SessionConflictError:
@@ -78,20 +78,18 @@ class AttendanceService:
 
     def create_session(self, name, session_date):
         day = calendar_date(session_date)
-        return self._session_operation(self.sessions.open_or_resume, name, utc_datetime(self.clock()), day)
-
-    def open_or_resume_session(self, name, session_date=None):
-        """Compatibility: strict creation only, never implicit resumption."""
-        return self.create_session(name, session_date if session_date is not None else utc_datetime(self.clock()).astimezone().date())
+        return self._session_operation(self.sessions.open, name, utc_datetime(self.clock()), day,
+                                       outcome=SessionOutcome.CREATED)
 
     def resume_session(self, session_id):
         return self._session_operation(self.sessions.resume, session_id)
 
     def rename_session(self, session_id, name):
-        return self._session_operation(self.sessions.rename, session_id, name, renamed=True)
+        return self._session_operation(self.sessions.rename, session_id, name, outcome=SessionOutcome.RENAMED)
 
     def edit_session(self, session_id, name, session_date):
-        return self._session_operation(self.sessions.edit, session_id, name, calendar_date(session_date), renamed=True)
+        return self._session_operation(self.sessions.edit, session_id, name, calendar_date(session_date),
+                                       outcome=SessionOutcome.RENAMED)
 
     def prepare_deletion(self, operation, session_id):
         self.deletion_authorization.require()

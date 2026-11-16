@@ -145,7 +145,7 @@ class GuiAttendanceTests(unittest.TestCase):
         self.assertIn('Asistencias: 1', restored.session_details.text())
         restored.session_close.click()
         self.assertIsNone(restored.attendance_session_id)
-        self.assertFalse(restored_attendance.last_session.is_open)
+        self.assertFalse(self.sessions.get(session_id).is_open)
         self.assertEqual(self.records.count_for_session(session_id), 1)
         self.assertTrue(restored.session_start.isEnabled())
 
@@ -356,7 +356,7 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
             self.assertEqual(main(['--windowed', '--attendance-db', str(path)]), 0)
         self.assertEqual(path.read_bytes(), b'not sqlite')
 
-    def test_open_resume_name_selection_buttons_counts_and_restart(self):
+    def test_explicit_creation_selection_resumption_counts_and_restart(self):
         w, controller = self.window()
         w.session_name.setText('Optimización - 2026-11-16')
         w.session_start.click()
@@ -369,14 +369,14 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
         self.assertIn('Ya existe una sesión con ese nombre y fecha', w.session_hint.text())
         self.assertEqual(w.attendance_activation_revision, 1)
         self.assertFalse(w.session_resume.isEnabled())
-        self.assertFalse(w.session_rename.isEnabled())
+        self.assertFalse(w.session_edit.isEnabled())
         w.session_name.setText('Different')
         w.session_start.click()
         self.assertIn('Cierra la sesión activa', w.session_hint.text())
         self.assertEqual(w.attendance_session_id, identifier)
         w.session_close.click()
         self.assertTrue(w.session_resume.isEnabled())
-        self.assertTrue(w.session_rename.isEnabled())
+        self.assertTrue(w.session_edit.isEnabled())
         w.session_resume.click()
         self.assertEqual(w.attendance_session_id, identifier)
         self.assertEqual(w.attendance_activation_revision, 2)
@@ -398,7 +398,7 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
         self.assertEqual(restored.attendance_activation_revision, 3)
         self.assertIn('Asistencias: 1', restored.session_details.text())
 
-    def test_session_rename_dialog_confirmation_collision_and_filter_refresh(self):
+    def test_session_edit_dialog_confirmation_collision_and_filter_refresh(self):
         first = self.service.open_session('First')
         self.service.register('p001', first.id)
         self.service.close_session(first.id)
@@ -407,7 +407,7 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
         w, controller = self.window()
         w.stored_sessions.setCurrentIndex(w.stored_sessions.findData(first.id))
         w.records_session.setCurrentIndex(w.records_session.findData(first.id))
-        self.assertTrue(w.session_rename.isEnabled())
+        self.assertTrue(w.session_edit.isEnabled())
         def respond(name, accepted):
             dialog = self.app.activeModalWidget()
             self.assertEqual(dialog.windowTitle(), 'Editar sesión')
@@ -417,7 +417,7 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
             dialog.accept() if accepted else dialog.reject()
         for name, accepted, expected in (('Cancelled', False, 'First'), ('OTHER', True, 'First'), ('Renamed', True, 'Renamed')):
             QTimer.singleShot(0, lambda n=name, a=accepted: respond(n, a))
-            w.session_rename.click()
+            w.session_edit.click()
             self.assertEqual(self.sessions.get(first.id).name, expected)
         self.assertEqual(w.stored_sessions.currentData(), first.id)
         self.assertEqual(w.records_session.currentData(), first.id)
@@ -537,7 +537,7 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
             dialog.findChild(QDateEdit, 'edit_session_date').setDate(self.day.addDays(1))
             dialog.accept()
         QTimer.singleShot(0, edit)
-        w.session_rename.click()
+        w.session_edit.click()
         actual = self.sessions.get(first.id)
         self.assertEqual(actual.session_date, self.day.addDays(1).toPyDate())
         self.assertEqual(actual.opened_at, first.opened_at)

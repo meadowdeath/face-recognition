@@ -120,10 +120,6 @@ class SQLiteAttendanceSessionRepository:
                 raise LookupError('Attendance session does not exist')
             return self._activate(connection, session)
 
-    def open_or_resume(self, name: str, opened_at: datetime, session_date=None) -> SessionResult:
-        """Compatibility entry point: creation only; resumption is always explicit by ID."""
-        return SessionResult(SessionOutcome.CREATED, self.open(name, opened_at, session_date))
-
     def rename(self, session_id: int, name: str) -> AttendanceSession:
         return self.edit(session_id, name, None)
 
@@ -136,7 +132,7 @@ class SQLiteAttendanceSessionRepository:
             if session is None:
                 raise LookupError('Attendance session does not exist')
             if session.is_open:
-                raise SessionConflictError('Only closed sessions may be renamed')
+                raise SessionConflictError('Only closed sessions may be edited')
             day = day if day is not None else session.session_date
             if connection.execute('SELECT 1 FROM attendance_sessions WHERE name_key=? AND session_date=? AND id<>?', (key, day.isoformat(), session_id)).fetchone():
                 raise DuplicateSessionNameError('Another session owns this name and date')
