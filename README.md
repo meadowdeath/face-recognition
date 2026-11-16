@@ -1301,8 +1301,9 @@ mount points are supported. Unsupported/unverifiable filesystems are excluded.
 The operator's prior physical test used a Kingston FAT32 USB with a spaced label:
 local terminal mount/unmount/power-off succeeded noninteractively without sudo or
 policy modifications. SSH mounting required interactive authorization; its
-noninteractive mount and power-off were denied. The new adapter must still pass
-hardware acceptance. SSH denial is reported in Spanish. A future systemd service
+noninteractive mount and power-off were denied. The operator subsequently confirmed real adapter discovery of the Kingston USB,
+system-microSD exclusion, and physical application export/backup testing. This does
+not assert every individual acceptance scenario below passed. SSH denial is reported in Spanish. A future systemd service
 must revalidate its own seat/Polkit context in Phase 9.
 
 Read-only adapter inspection (no mount, unmount or power-off):
@@ -1453,9 +1454,9 @@ QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui
 8. Check both themes, 800×480 access, navigation/cancellation and normal shutdown.
    Repeat from SSH to verify clear authorization-denial feedback, not fake success.
 
-Do not enable real system reboot/shutdown for export validation. Hardware acceptance,
-actual FAT32 durability, QtDBus/system-service compatibility and future systemd
-permissions remain operator/deployment validation, not claims from desktop tests.
+Do not enable real system reboot/shutdown for export validation. Physical application export/backup testing has been confirmed by the operator;
+scenario-specific acceptance and future systemd permissions remain operator/deployment
+validation, not claims from desktop tests.
 
 Read-only comparison of an unchanged **synthetic** source and its backup (close the
 kiosk first, and set `BACKUP` to the exact exported synthetic filename):
@@ -1528,3 +1529,42 @@ privileged process termination, virtual-terminal switching, available shells,
 unrestricted physical/OS access or power removal. Account, keyboard, terminal,
 systemd and other deployment restrictions remain Phase 9 work. No OS policies or
 permissions are changed by this correction.
+
+
+### Phase 7 validation status and reproducible timing
+
+Operator-supplied Raspberry Pi results must be read separately:
+
+- Previous Phase 7 suite: 39 tests, 38 passed, one skipped. Previous focused suite:
+  266 tests, 265 passed, one skipped.
+- Latest exit-security focused run: **276 tests, 274 passed, one failed, one skipped**
+  in **189.997 seconds**. It was not a fully successful focused run. The disabled-
+  preview recognition test timed out at its existing 2500 ms status deadline.
+  Five subsequent independent executions passed, as did the GUI recognition module.
+- The Pi skip's exact runtime reason was not supplied. On Linux the private D-Bus
+  fixture can skip when dbus-daemon or system GIO is unavailable; this is a candidate,
+  not a confirmed explanation. Use verbose unittest output to record the reason.
+
+The synthetic worker test includes worker startup, seven successful
+observations, Python geometry/normalization and Qt queued delivery in that deadline.
+It also checks debug metrics after recognition. No production defect or cross-test leak
+has been established. Isolated passes do not resolve the intermittent full-suite
+failure. Recognition behavior, test timeout and freshness limits remain unchanged.
+To reproduce on Pi, run the focused command above with `-v`, retain its first failure,
+and compare the individual test and full GUI recognition module without automatic
+retries. Record system load and the actual failure stage; do not treat the synthetic
+deadline as a production throughput benchmark.
+
+Operator's standalone **10,000-record Pi generation benchmark** (instrumented,
+excluding USB transfer):
+
+| Format | Seconds | Bytes | Peak traced Python MiB |
+| --- | ---: | ---: | ---: |
+| CSV | 8.329 | 937232 | 0.18 |
+| XLSX | 75.272 | 413633 | 17.24 |
+| SQLite | 0.278 | 1585152 | 0.04 |
+
+Maximum RSS was 61800 KiB; total elapsed 89.30 seconds, CPU utilization 99%, swap
+operations zero, exit status zero. Traced allocations differ from RSS. These are
+not ordinary end-to-end GUI export latencies and do not justify changing XLSX or
+recognition behavior. Reproduce with `python -m tests.benchmark_exports --records 10000`.
