@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 AVAILABLE = importlib.util.find_spec("PyQt5") is not None
@@ -278,3 +279,38 @@ class KioskGuiTests(unittest.TestCase):
         self.app.processEvents()
         self.assertFalse(self.window.isVisible())
         self.assertFalse(self.window.clock.isActive())
+
+    def test_settings_initial_clock_labels_share_the_single_footer_clock(self):
+        from PyQt5.QtCore import QDate, QTime, QDateTime
+        from PyQt5.QtWidgets import QLabel, QDateEdit, QTimeEdit, QSlider
+        moment=QDateTime(QDate(2026,11,16),QTime(11,29,0),Qt.LocalTime)
+        with patch('face_recognition.presentation.gui.window.QDateTime') as clock:
+            clock.currentDateTime.return_value=moment
+            window=KioskWindow()
+        self.addCleanup(window.close)
+        self.assertEqual(window.system_date.text(),'Fecha del sistema: 16/11/2026')
+        self.assertEqual(window.system_time.text(),'Hora del sistema: 11:29:00')
+        self.assertEqual(window.time_label.text(),'11:29:00')
+        self.assertIsInstance(window.system_date,QLabel);self.assertIsInstance(window.system_time,QLabel)
+        page=window.screens['settings']
+        self.assertEqual(page.findChildren(QDateEdit),[]);self.assertEqual(page.findChildren(QTimeEdit),[])
+        self.assertEqual(page.findChildren(QSlider),[])
+        self.assertEqual(window.clock.interval(),1000)
+
+    def test_initial_theme_effective_palette_is_correct_before_first_show(self):
+        from PyQt5.QtGui import QPalette
+        from PyQt5.QtWidgets import QScrollArea
+        from face_recognition.presentation.gui.themes import THEMES
+        for theme in ('light','dark'):
+            with self.subTest(theme=theme):
+                window=KioskWindow(initial_theme=theme)
+                try:
+                    self.assertIs(window.lifecycle_state,LifecycleState.STANDBY)
+                    self.assertFalse(window.isVisible())
+                    for page in window.screens.values():
+                        page.ensurePolished()
+                        self.assertEqual(page.palette().color(QPalette.Window).name(),THEMES[theme]['background'].lower())
+                        for area in page.findChildren(QScrollArea):
+                            area.widget().ensurePolished()
+                            self.assertEqual(area.widget().palette().color(QPalette.Window).name(),THEMES[theme]['background'].lower())
+                finally:window.close()

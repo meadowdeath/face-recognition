@@ -11,7 +11,7 @@ from face_recognition.domain.models.attendance import (
     AttendancePersistenceError, DeviceSettings, normalize_session_name, utc_datetime,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class AttendanceMigrationError(AttendancePersistenceError):
@@ -112,7 +112,26 @@ IDENTITY_GUARDS = tuple(statement for table in ('attendance_sessions', 'attendan
 ))
 V3_EXTRAS = (V1_SCHEMA[2], *V1_SCHEMA[4:6], *V2_EXTRAS[1:],
              'CREATE UNIQUE INDEX unique_session_name_date ON attendance_sessions (name_key, session_date)', *IDENTITY_GUARDS)
-SCHEMA = (V1_SCHEMA[0], SESSION_V3, RECORDS_V3, V1_SCHEMA[6], *V3_EXTRAS)
+V3_SCHEMA = (V1_SCHEMA[0], SESSION_V3, RECORDS_V3, V1_SCHEMA[6], *V3_EXTRAS)
+
+
+ADMIN_SCHEMA = f"""CREATE TABLE admin_credentials (
+    id INTEGER PRIMARY KEY CHECK (id=1),
+    pin_hash BLOB NOT NULL CHECK(typeof(pin_hash)='blob' AND length(pin_hash)=32),
+    pin_salt BLOB NOT NULL CHECK(typeof(pin_salt)='blob' AND length(pin_salt)>=16),
+    algorithm TEXT NOT NULL CHECK(algorithm='pbkdf2_sha256_v1'),
+    iterations INTEGER NOT NULL CHECK(typeof(iterations)='integer' AND iterations>=600000),
+    failed_attempts INTEGER NOT NULL DEFAULT 0 CHECK(typeof(failed_attempts)='integer' AND failed_attempts>=0),
+    locked_until TEXT {_timestamp_check('locked_until')},
+    created_at TEXT NOT NULL {_timestamp_check('created_at')},
+    updated_at TEXT NOT NULL {_timestamp_check('updated_at')},
+    CHECK(updated_at>=created_at))"""
+SCHEMA = (*V3_SCHEMA, ADMIN_SCHEMA)
+
+
+def _migrate_v3(connection):
+    _validate_schema(connection, 3)
+    connection.execute(ADMIN_SCHEMA)
 
 
 def _canonical_sql(sql):
@@ -122,7 +141,7 @@ def _canonical_sql(sql):
 def _validate_schema(connection, version):
     objects = {row['name']: row['sql'] for row in connection.execute(
         "SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'")}
-    expected = V1_SCHEMA if version == 1 else V2_SCHEMA if version == 2 else SCHEMA
+    expected = V1_SCHEMA if version == 1 else V2_SCHEMA if version == 2 else V3_SCHEMA if version == 3 else SCHEMA
     expected_names = {statement.split()[2] if statement.startswith('CREATE TABLE') else
                       statement.split()[3] if statement.startswith('CREATE UNIQUE INDEX') else statement.split()[2]
                       for statement in expected}
@@ -140,7 +159,7 @@ def _validate_schema(connection, version):
         expected_columns = (('id', 'INTEGER', 0, None, 1), ('name', 'TEXT', 1, None, 0),
                        ('opened_at', 'TEXT', 1, None, 0), ('closed_at', 'TEXT', 0, None, 0),
                        ('name_key', 'TEXT', 1, "''", 0), ('activation_revision', 'INTEGER', 1, '1', 0))
-        if version == 3:
+        if version >= 3:
             expected_columns += (('session_date', 'TEXT', 1, None, 0),)
         if columns != expected_columns:
             raise AttendancePersistenceError('Incomplete attendance session columns')
@@ -149,7 +168,7 @@ def _validate_schema(connection, version):
             _timestamp_check('opened_at'), _timestamp_check('closed_at'),
             "CHECK (closed_at IS NULL OR closed_at >= opened_at)",
             "CHECK (typeof(activation_revision) = 'integer' AND activation_revision > 0)")
-        if version == 3:
+        if version >= 3:
             constraints += (_date_check('session_date'), 'AUTOINCREMENT', 'CHECK (id > 0)')
         if any(_canonical_sql(fragment) not in sql for fragment in constraints):
             raise AttendancePersistenceError('Incomplete attendance session constraints')
@@ -293,11 +312,15 @@ class AttendanceDatabase:
             elif version == 1:
                 _migrate_v1(connection)
                 _migrate_v2(connection, self.migration_timezone)
+                _migrate_v3(connection)
             elif version == 2:
                 _migrate_v2(connection, self.migration_timezone)
+                _migrate_v3(connection)
+            elif version == 3:
+                _migrate_v3(connection)
             elif version != SCHEMA_VERSION:
                 raise ValueError(f"Unsupported attendance schema version {version}; expected {SCHEMA_VERSION}")
-            _validate_schema(connection, 3)
+            _validate_schema(connection, 4)
             row = connection.execute("SELECT theme, standby_timeout_seconds FROM device_settings WHERE id=1").fetchone()
             if row is None:
                 raise AttendancePersistenceError("Missing singleton device settings")
@@ -305,5 +328,5 @@ class AttendanceDatabase:
             if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok" or connection.execute("PRAGMA foreign_key_check").fetchone():
                 raise AttendancePersistenceError("Attendance database integrity check failed")
             if version != SCHEMA_VERSION:
-                connection.execute('PRAGMA user_version = 3')
+                connection.execute('PRAGMA user_version = 4')
             connection.commit()

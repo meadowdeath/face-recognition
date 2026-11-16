@@ -177,6 +177,7 @@ class RecognitionIntegration(QObject):
     def __init__(self, window, options, *, worker=None):
         super().__init__(window)
         self.window, self.options = window, options
+        window.recognition = self
         self.worker = worker or RecognitionWorker(options, self)
         self.ready = self.active = self.closing = False
         self.backend_error = self.activation_error = ""

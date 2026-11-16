@@ -130,18 +130,6 @@ class DeletionOperation(Enum):
 
 
 @dataclass(frozen=True)
-class SyntheticDeletionAuthorization:
-    enabled: bool = False
-    persistent: bool = False
-    live: bool = False
-    recording: bool = False
-
-    def require(self):
-        if not self.enabled or not self.persistent or self.live or self.recording:
-            raise PermissionError('Session deletion is restricted to explicitly enabled persistent synthetic testing')
-
-
-@dataclass(frozen=True)
 class DeletionPreview:
     operation: DeletionOperation
     target_session_id: int

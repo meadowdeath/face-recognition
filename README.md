@@ -4,11 +4,12 @@
 
 The optional PyQt5 Widgets interface defaults to a demonstration independent of
 camera, model and dataset assets. It provides nine persistent screens: standby, attendance,
-demonstration PIN access, administrator dashboard, sessions, records, export,
+PIN access, administrator dashboard, sessions, records, export,
 system status and settings. Without a database, records remain fictional. Export
-controls and system-status samples remain demonstrations in every mode; live
-recognition debug metrics describe the running pipeline.
-The demonstration PIN is **123456**; this is navigation scaffolding, not security.
+controls remain visual placeholders; authenticated persistent mode provides real
+system diagnostics. Live recognition debug metrics describe the running pipeline.
+Only modes **without a database** use demonstration PIN **123456** for navigation;
+persistent modes require locally configured credentials, never this fallback.
 
 Windows development (native Qt backend, 800 × 480 window):
 
@@ -30,7 +31,8 @@ QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui
 EGLFS launches fullscreen; the application does not set the platform backend.
 Escape closes the development application. Dark Amethyst is the default theme;
 Settings → Appearance (`Ajustes → Apariencia`) switches all existing widgets to
-Light Lavender immediately. Appearance and standby timeout live only in memory.
+Light Lavender immediately. Preferences remain in memory without a database and
+are persisted for authenticated administrators when a database is configured.
 One recurring timer updates the date/time; one single-shot timer handles
 Attendance inactivity. Demonstration mode starts no worker or recognition load.
 
@@ -55,9 +57,9 @@ announce lifecycle changes. Presence enters through `window.set_face_present(boo
 on the GUI thread; repeated absence is idempotent and cannot postpone standby.
 Without `--attendance-db`, the session page opens/closes an explicitly temporary,
 in-memory session. With an explicit database it restores and manages persistent
-sessions, while startup still enters Standby. Export, PIN-change, brightness,
-clock and power controls remain visual placeholders. The demonstration PIN is
-not production access control. GUI theme/standby preferences remain in memory.
+sessions, while startup still enters Standby. Export remains visual. Settings
+show read-only system date/time; no brightness adjustment is offered. Persistent modes add PIN change, preferences,
+authorized maintenance and disabled-by-default Linux power requests (Phase 6).
 
 Optional offscreen checks (skip automatically if PyQt5 is absent):
 
@@ -97,7 +99,8 @@ QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui
   --orientation rotate180 --debug
 ```
 
-Open Admin with the demonstration PIN, open a session under `Sesiones`,
+Without a database, use demonstration Admin navigation to open a temporary session.
+With a database, authenticate with the locally configured PIN and use `Sesiones`,
 then return to `Asistencia`. Capture is eligible only in Attendance with an open
 session and a ready backend. Without a session the camera remains closed. The
 simulation controls are hidden in live mode. Accepted temporal identities display
@@ -107,7 +110,7 @@ been registered unless the explicit recording capability described below is
 enabled and the database confirms success. Ordinary mode hides technical diagnostics.
 The sidebar identifies whether recording is enabled. Without a database,
 temporary sessions and sample records remain demonstrations. Administrative PIN
-access is explicitly a demonstration in every mode.
+access is explicitly a demonstration only when no database is supplied.
 
 One Qt worker loads and fully validates the trusted bundle once, retaining it
 across activations. It owns camera acquisition, asynchronous MediaPipe, pose
@@ -517,6 +520,8 @@ database, enrolls no participants and generates no attendance.
 Register fictional participants explicitly before synthetic acceptance testing:
 
 ```bash
+PYTHONPATH=src python -m face_recognition.presentation.cli.admin \
+  --attendance-db "$HOME/.local/share/face-recognition/synthetic-attendance.sqlite3" setup
 PYTHONPATH=src python -m face_recognition.presentation.cli.attendance_participants \
   --attendance-db "$HOME/.local/share/face-recognition/synthetic-attendance.sqlite3" add p001
 PYTHONPATH=src python -m face_recognition.presentation.cli.attendance_participants \
@@ -530,6 +535,7 @@ Windows PowerShell equivalent (native Qt, repository root):
 ```powershell
 $env:PYTHONPATH="src"
 $syntheticDb=Join-Path $env:LOCALAPPDATA "face-recognition\synthetic-attendance.sqlite3"
+python -m face_recognition.presentation.cli.admin --attendance-db "$syntheticDb" setup
 python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$syntheticDb" add p001
 python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$syntheticDb" list
 python -m face_recognition.presentation.gui --windowed --attendance-db "$syntheticDb"
@@ -540,7 +546,8 @@ duplicate/invalid identifiers and never inspect models to discover participants.
 There are no names, identity mappings or enrollment operations. Registration of
 an identifier does not establish consent.
 
-Use PIN `123456`, enter `Sesiones → Crear sesión`, supply a name and an explicit
+Configure and authenticate with your local administrator PIN, enter
+`Sesiones → Crear sesión`, supply a name and an explicit
 calendar date, then select `Crear e iniciar sesión`.
 Return to `Asistencia`: select `p001 · Aceptar` and click `Simular decisión`.
 Repeat for duplicate attendance; select `UNKNOWN · Rechazar` for no write, or
@@ -578,8 +585,8 @@ The existing Sesiones screen has three tabs, with active-session information and
   transition. Existing attendance remains a duplicate for that event. `Editar
   sesión` provides name/date inputs and explicit `Guardar cambios`/`Cancelar`;
   editing is restricted to closed sessions and rejects name/date collisions.
-- **Eliminar sesiones:** three targeted operations described below, disabled by
-  default. The scope mirrors the management selection with name, date and count.
+- **Eliminar sesiones:** three targeted operations described below, requiring authenticated
+  administration and fresh PIN verification. The scope mirrors the management selection with name, date and count.
 
 Session dates are Python `datetime.date` values stored as `YYYY-MM-DD`; they are
 not opening timestamps or registration timestamps. Editing the event date never
@@ -587,27 +594,19 @@ rewrites `registered_at`. Renaming/editing changes only the selected event, not
 other dates with the same normalized name. Selectors preserve event IDs on refresh;
 counts use one grouped query. `closed_at` is current closure state, not a full
 activation audit log. All four launch modes, Standby, theme handling, preview FPS
-and camera lifecycle remain unchanged. No global reset, session activation-history
-table or production authentication is added.
+and camera lifecycle remain unchanged. No session activation-history table is added. Local administrator security and
+scoped maintenance are described below.
 
-### Targeted synthetic deletion only
+### Administrator-authorized deletion
 
-Deletion is available only when explicitly launched with an isolated, disposable
-synthetic database and **no model/live recording**:
-
-```bash
-QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
-  --attendance-db "$HOME/.local/share/face-recognition/disposable-synthetic.sqlite3" \
-  --enable-synthetic-session-deletion
-```
-
-On Windows use `--windowed` and the same database/deletion flags with native Qt.
-`--enable-synthetic-session-deletion` requires `--attendance-db` and rejects
-`--model-dir` or `--enable-attendance-recording`. Service and repository checks
-also enforce the synthetic authorization context; hiding buttons is not the only
-boundary. The flag does not establish database provenance, consent or production
-access control. Never select an operational database. There is no unrestricted
-deletion CLI.
+All persistent modes require configured administrator credentials. The former
+`--enable-synthetic-session-deletion` flag is rejected with a migration message;
+there is no alternative flag bypass. Use disposable synthetic databases for
+validation. Every targeted deletion requires an authenticated administrator,
+its exact confirmation preview, and fresh PIN verification. The same flow is
+available in persistent synthetic and live modes; authorization is not based on
+whether the camera is active. Attendance-data deletion remains blocked while
+any attendance session is open.
 
 | Action | Deleted | Preserved |
 | --- | --- | --- |
@@ -644,15 +643,15 @@ Activation revisions, worker generations, temporal decision sequences, freshness
 and face-segment checks remain required. Clearing then resuming still advances
 activation revision, rejecting old decisions. No recognition math changes.
 
-Global reset, production administrator authentication/reauthentication and safe
-system power controls remain Phase 6 work. This prototype's demonstration PIN is
-not production authorization. Administrative attendance deletion is distinct from
+Phase 6 adds local administrator authentication, scoped reauthentication,
+maintenance operations and opt-in power requests as described below. Nonpersistent
+demonstration authentication provides no persistent administrative authorization. Administrative attendance deletion is distinct from
 biometric-data suppression and does not securely erase storage pages, journals,
 backups or flash.
 
 `AttendanceService` coordinates session operations, participant eligibility,
 duplicate results, grouped counts and record filters over the existing repositories.
-SQLite schema version **3** preserves all four business tables. New registrations show `Asistencia
+SQLite schema version **4** preserves the four attendance/settings tables and adds credentials. New registrations show `Asistencia
 registrada`; duplicates show `Asistencia ya registrada` with the **original**
 registration time. Missing participants, closed sessions and storage failures
 produce distinct Spanish outcomes, never false success or temporary fallback.
@@ -692,8 +691,8 @@ using separate short-lived connections and a **150 ms busy timeout** in the GUI
 and participant CLI. It does not run inside camera capture, MediaPipe callbacks
 or the recognition worker. Recoverable failures leave navigation/exit available;
 failed initialization disables persistent session controls instead of falling
-back. No additional worker, timer-based database polling or persistent settings
-integration is introduced. A busy database can briefly delay GUI delivery; camera
+back. No database polling worker is introduced. Credential derivation alone uses
+a short Qt task; settings persist only on explicit preference changes. A busy database can briefly delay GUI delivery; camera
 processing continues and old packets are still rejected.
 
 Live recording capability example only, after privacy/access-control review and
@@ -735,8 +734,8 @@ Windows development should also run `python -m unittest discover
 ## SQLite schema and privacy
 
 Standard-library `sqlite3` provides local storage without an ORM, server or new
-dependency. Repositories are used through the attendance service above. GUI
-settings and administrator PIN remain demonstrations. Only an explicit
+dependency. Repositories are used through the attendance service above. Device preferences and administrator credentials are persistent only with an
+explicit database. Nonpersistent modes retain demonstration authentication. Only an explicit
 `--attendance-db` initializes storage; module imports and ordinary demonstration
 startup never create or open a database.
 
@@ -754,9 +753,10 @@ database.initialize()
 settings = SQLiteDeviceSettingsRepository(database).get()
 ```
 
-Initialization uses `PRAGMA user_version`: version 0 creates schema **3** directly;
+Initialization uses `PRAGMA user_version`: version 0 creates schema **4** directly;
 version 1 follows its supported normalization/collision migration to v2 and then
-v3; version 2 migrates to v3; version 3 validates and reopens. Unsupported versions,
+v3 and v4; version 2 migrates through v3 to v4; version 3 adds credentials
+transactionally; version 4 validates and reopens. Unsupported versions,
 nonempty unversioned databases and incomplete/weakened schemas fail explicitly.
 Defaults are inserted only for a new database. No automatic recovery/reset occurs.
 
@@ -773,7 +773,8 @@ with foreign keys **ON** throughout: copy parent/child rows preserving IDs, drop
 old child before old parent, rename the copied tables and recreate constraints.
 This migration-only rebuild is necessary for non-reusing identities; destructive
 session actions themselves use only targeted DELETE statements, never DROP/reset.
-There remain four business tables; `sqlite_sequence` is SQLite's internal allocator.
+The four attendance/settings tables remain intact; v4 adds `admin_credentials`.
+`sqlite_sequence` is SQLite's internal allocator.
 New and migrated databases enforce the same date/composite-uniqueness/identity
 constraints. Original timestamps, revisions, participants, records, settings and
 file protection are preserved. Integrity/FK checks precede the version update and
@@ -787,6 +788,7 @@ deliberate offline maintenance; they are never automatically merged or discarded
 | `attendance_sessions` | `id INTEGER PRIMARY KEY AUTOINCREMENT`, nonempty `name`/`name_key`, valid NOT NULL `session_date`, unique `(name_key, session_date)`, UTC opening/closure times, positive `activation_revision` |
 | `attendance_records` | `id INTEGER PRIMARY KEY AUTOINCREMENT`, `person_id NOT NULL` FK, `attendance_session_id NOT NULL` FK, `registered_at NOT NULL`; unique `(attendance_session_id, person_id)` |
 | `device_settings` | `id INTEGER PRIMARY KEY CHECK(id=1)`, `theme` limited to `dark/light`, integer timeout limited to `30/60/120`; both preferences NOT NULL |
+| `admin_credentials` | Optional singleton `id=1`; binary PBKDF2 hash/salt, versioned algorithm/work factor, failed-attempt count, optional UTC lock expiry, UTC creation/update times |
 
 ```mermaid
 erDiagram
@@ -895,3 +897,356 @@ or scores in documentation. Attendance integration is an explicitly enabled
 academic capability; no camera payload, rejected identity, score or recognition
 history is persisted. Purpose, authorization, retention, withdrawal, deletion and
 access-control requirements must be verified before real participant collection.
+
+
+## Local administration and security (Phase 6)
+
+Schema **4** retains all v3 attendance constraints, IDs, activation revisions,
+timestamps and AUTOINCREMENT high-water marks. A transactional v3→v4 migration
+adds only `admin_credentials`; v1→v2→v3 and v2→v3 remain supported before this step.
+Failure rolls back the whole migration. Credentials are never created by migration.
+The singleton table stores `id=1`, a 32-byte BLOB `pin_hash`, random BLOB `pin_salt`
+(at least 16 bytes), `algorithm=pbkdf2_sha256_v1`, integer `iterations>=600000`,
+nonnegative `failed_attempts`, optional canonical UTC `locked_until`, and canonical
+UTC `created_at`/`updated_at`. No plaintext PIN or successful login is persisted.
+There are five business tables plus SQLite's internal allocator.
+
+Configure the administrator locally **before** exposing a persistent kiosk.
+`admin setup` initializes/migrates only the selected database and uses hidden
+`getpass` prompts for a six-ASCII-digit PIN and its confirmation. Leading zeroes
+are significant. Trivial sequences and repeated digits are rejected. Repeated
+setup never replaces credentials. There is no master PIN or recovery bypass;
+forgotten-PIN recovery requires a future controlled maintenance procedure.
+An unconfigured persistent GUI denies protected navigation but allows safe exit.
+Live attendance recording fails closed without configured credentials.
+
+PIN storage uses standard-library PBKDF2-HMAC-SHA256, **600,000 iterations**, a fresh
+cryptographic salt for setup/change, and `hmac.compare_digest`. The algorithm/work
+factor is versioned and validated, with no downgrade below this baseline. Raspberry
+Pi 3B+ production-derivation benchmark supplied by the operator (600,000
+iterations, 32-byte key, 16-byte salt): runs **2560.84, 2553.11, 2562.34, 2553.62,
+2562.34 ms**; mean **2558.45 ms**, median **2560.84 ms**, maximum **2562.34 ms**.
+This measures derivation, not the whole GUI operation. `--debug` reports the
+complete authentication task latency without PINs, hashes or salts. A successful
+PIN change performs two derivations. These figures explain why derivation must
+not hold SQLite's write reservation; the production work factor remains unchanged.
+No lower work factor was chosen to improve UI responsiveness. PBKDF2 executes in
+one short-lived Qt authentication task, separate from recognition; the event loop
+remains responsive. Once credential change is submitted, its dialog cannot be
+cancelled mid-transaction. Input fields are cleared after submission/closure.
+
+Five consecutive incorrect attempts impose a 60-second persistent lockout. Further
+five-attempt groups escalate to 120 and then at most 240 seconds. Successful
+verification resets the counter and lock. Login, PIN change and fresh operation
+verification use optimistic authentication: a short read validates eligibility,
+then closes before PBKDF2. A short `BEGIN IMMEDIATE` re-reads the complete credential
+stamp (hash, salt, algorithm, work factor and creation/update timestamps), checks
+the current lockout and updates the latest counter. Replaced credentials yield
+failure with no retry or accounting against the replacement. An in-flight result
+cannot bypass or extend a newly active lockout. The supplied UTC clock is read
+after write-lock acquisition, so hashing/contention cannot shorten a new lockout;
+a rollback of the clock during verification fails closed. PIN changes derive both
+old/new hashes outside transactions and atomically replace only still-current,
+unlocked credentials; no preliminary counter reset occurs. Busy timeouts, schema
+v4 and the 60/120/240-second policy are unchanged. Locked attempts do not derive hashes. The GUI displays a nonblocking countdown. Screen changes or
+process restarts cannot clear the database lock. A wall-clock rollback can extend
+lockout; moving the clock forward can shorten it. A time earlier than credential
+change is rejected conservatively. Reliable device time and privileged OS access
+remain deployment responsibilities.
+
+Protected navigation includes Dashboard, Sesiones, Registros, Exportar registros,
+Estado and Ajustes. `Cerrar sesión administrativa`, public Attendance, Standby and
+application exit invalidate login and outstanding operation grants, without closing
+the attendance event. No administrator inactivity timeout is added. `Cambiar PIN`
+requires current/new/confirmation via masked fields and the touch keypad; success
+uses a new salt and requires a new login. Nonpersistent demonstration and
+identity-only recognition without a database retain clearly labelled demonstration
+navigation and cannot perform persistent maintenance or power operations.
+
+Appearance and 30/60/120-second standby preferences load without startup writes.
+Explicit updates preserve unrelated settings; failures restore the previous GUI
+selection. System date/time are read-only and share the footer clock; no brightness
+control is presented. USB export remains visual.
+
+A normal login is insufficient for a destructive action. Confirmation comes first,
+then fresh PIN verification issues a 60-second, operation/snapshot-bound, single-use
+in-memory grant. Logout, navigation, cancellation, PIN change, expiration, success
+and failure invalidate pending grants. Both application authorization and final
+repository checks apply; authorization for one scope cannot execute another.
+Existing exact-row targeted deletion previews remain intact.
+
+Ajustes → Almacenamiento y datos provides:
+
+| Action | Deletes/resets | Preserves |
+| --- | --- | --- |
+| Eliminar historial de asistencias | All records and sessions | Participants, credentials, preferences, schema, ID sequences, biometric artifacts |
+| Restablecer datos administrativos | All records, sessions and participants | Credentials, preferences, schema, ID sequences, biometric artifacts |
+| Restablecer preferencias | Dark theme and 30-second timeout | All attendance, participants, credentials and biometric artifacts |
+
+Confirmations show actual session/record/participant counts, preservation details,
+operation-specific actions and safe default `Cancelar`. Escape/closure cancels.
+History/admin-data reset reject any open session, hash the exact intended rows,
+revalidate inside the write transaction and detect even equal-count replacements.
+Dependent records are removed first; failures roll back. No DB file/table/sequence
+reset occurs. Removed participants must be explicitly registered again; model
+predictions never restore them. Preference reset applies to the UI only after commit.
+
+Estado samples CPU deltas from `/proc/stat` relative to total system CPU capacity,
+RAM using `MemAvailable`, validated thermal-zone temperature, and filesystem used/
+available space via `disk_usage` at the configured database filesystem. Unsupported
+metrics say `No disponible`, especially Linux-only metrics on Windows. Actual DB
+schema/counts and credential configuration refresh on screen entry, not every
+sample. A two-second timer samples only while Estado is visible. Model readiness,
+camera activity and attendance state come from existing in-memory integration;
+no camera/model initialization occurs for diagnostics. A protected participant
+dialog lists only technical IDs and registration dates. No credential material or
+biometric paths are displayed.
+
+Power actions are disabled by default. `--enable-system-power-actions` requires
+Linux, a persistent DB and configured credentials. Explicit confirmation and fresh
+PIN verification precede the existing graceful shutdown: recognition/camera work
+stops and joins, then `systemctl reboot` or `systemctl poweroff` runs with argument
+lists, no shell/sudo/embedded credentials. Persistent attendance sessions remain
+open for recovery. Failure returns a clear error and nonzero exit after safe app
+closure; relaunch to retry or inspect deployment permissions. There is no success
+claim merely because a request was made. sudoers/Polkit/deployment configuration
+and hardware power testing remain future controlled deployment work. Ordinary
+synthetic validation must **not** enable this option.
+
+Disposable Raspberry Pi workflow (no real participant data):
+
+```bash
+TEST_DIR=$(mktemp -d -t face-id-phase6-XXXXXX)
+DB="$TEST_DIR/attendance.sqlite3"
+PYTHONPATH=src python -m face_recognition.presentation.cli.admin --attendance-db "$DB" setup
+PYTHONPATH=src python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$DB" add p001
+QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui --attendance-db "$DB"
+```
+
+Windows PowerShell (native Qt):
+
+```powershell
+$env:PYTHONPATH="src"
+$testDir=Join-Path $env:TEMP ([guid]::NewGuid().ToString())
+New-Item -ItemType Directory -Path $testDir | Out-Null
+$db=Join-Path $testDir "attendance.sqlite3"
+python -m face_recognition.presentation.cli.admin --attendance-db "$db" setup
+python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$db" add p001
+python -m face_recognition.presentation.gui --windowed --attendance-db "$db"
+```
+
+For migration validation, copy **only a disposable synthetic v3 database** to a new
+scratch directory while its application is closed. Run `admin --attendance-db
+"copied-path" setup` against the copy; inspect session IDs, dates, counts, settings
+and original registration timestamps after login. Keep the original synthetic
+fixture unchanged. Never select an operational or biometric database.
+
+Focused Pi regression (synthetic fixtures, no expensive model-training tests):
+
+```bash
+QT_QPA_PLATFORM=offscreen PYTHONPATH=src \
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m unittest \
+  tests.unit.test_administration tests.unit.test_admin_concurrency tests.unit.test_device tests.unit.test_gui_administration \
+  tests.unit.test_attendance_persistence tests.unit.test_attendance_sessions \
+  tests.unit.test_session_dates_deletion tests.unit.test_attendance_service \
+  tests.unit.test_gui_attendance tests.unit.test_kiosk_gui \
+  tests.unit.test_gui_recognition tests.unit.test_live_open_set_recognition \
+  tests.integration.test_live_open_set_cli
+```
+
+Run the complete development suite with `python -m unittest discover -s tests`.
+Validate on-device setup, lockout/restart persistence, change/logout, theme/timeout
+reopening, scoped/global cancellation and exact previews, diagnostics timer behavior,
+and camera release on protected navigation. Test power confirmation/authorization
+with fakes; do not execute hardware power commands in ordinary validation.
+
+A six-digit PIN has limited entropy. This is local kiosk access control, not
+protection against privileged OS users, arbitrary in-process Python, direct SQLite
+access or unrestricted physical access. SQLite is unencrypted by default. Row
+deletion is not secure erasure of pages, journals, backups or flash, and is separate
+from biometric suppression. Authorization/consent, retention/withdrawal, physical
+security and the existing December 31, 2026 biometric-processing deadline still
+require review before real attendance collection. This prototype is not production
+ready. No recognition policy, model artifact or external biometric data was changed.
+
+
+### Authentication regression test boundaries
+
+`AdministrationTests` explicitly retains real production PBKDF2 in
+`test_hash_salt_constant_time_and_plaintext_not_stored`,
+`test_change_pin_verifies_current_new_salt_logout_old_rejection`, and
+`test_concurrent_failed_attempts_are_atomic`. They cover real setup, leading-zero
+verification, incorrect/old PIN rejection, fresh salts, constant-time comparison,
+600,000 iterations, persistence, changes and five concurrent failures. A guard
+asserts that these cases do not inherit the derivation substitute.
+
+Other authentication-behavior, attendance and GUI tests explicitly scope
+`tests.admin_fakes.use_fast_credentials` to one test. This mocks only the derivation
+boundary with a deterministic **test-only** digest; SQLite transactions, credential
+state, lockout counters and application authorization remain real. It does not
+add a production fast mode, CLI bypass or reduced production work factor.
+`tests.unit.test_admin_concurrency` uses events/barriers and injected clocks for
+credential replacement, committed ordering, new-lockout races, transaction-free
+derivation, unrelated writes and failure rollback. GUI authentication tests verify
+worker ownership, responsiveness, cancellation, shutdown and sanitized debug output.
+
+The session-revision regression uses an explicit logical decision time and unchanged
+freshness limit. It reaches stale-revision registration rejection and its normal
+GUI refresh path, then checks generation/revision rejection and successful fresh
+registration. Expired-decision coverage remains separate; neither the recognition
+policy nor application refresh behavior was changed to conceal expired evidence.
+
+Pi reproduction/regression commands (synthetic fixtures only, no training tests):
+
+```bash
+export QT_QPA_PLATFORM=offscreen PYTHONPATH=src
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+python -m unittest tests.unit.test_administration.AdministrationTests.test_concurrent_failed_attempts_are_atomic
+python -m unittest tests.unit.test_gui_attendance.GuiAttendanceTests.test_same_session_resumption_invalidates_worker_generation_and_revision_binding
+python -m unittest tests.unit.test_admin_concurrency
+python -m unittest tests.unit.test_administration tests.unit.test_gui_attendance tests.unit.test_gui_administration
+```
+
+Use the focused command above for the complete affected regression suite. The
+operator reported **205/205 Raspberry Pi checks in 135.708 seconds** after the
+concurrency fixes, versus the earlier 190-check run in 932.103 seconds. These are
+different workloads, not an identical-workload benchmark. Production derivation
+still costs approximately 2.56 seconds per call on that device.
+
+
+### Final Phase 6 keypad and Settings correction
+
+The shared credential dialog now consumes `clicked(bool)` separately from captured
+digits. PIN change and sensitive-operation verification use the same on-screen
+keypad. Clicking a masked field selects it explicitly; its existing-theme accent
+border marks the active field. Digits/backspace keep targeting that field even
+when keyboard focus leaves it. Leading zeroes and the six-ASCII-digit limit remain.
+No physical keyboard is needed. During asynchronous verification, fields and
+keypad edits/submissions are disabled, progress is shown, and input is cleared.
+Credential hashing, short SQLite transactions, lockouts and scope-bound grants
+are unchanged. Successful PIN change still ends administrative login.
+
+Ajustes retains its compact scrollable layout with:
+
+- **Pantalla y dispositivo:** Apariencia and Tiempo de standby (30/60/120 seconds),
+  persisted in database modes and memory-only without a database.
+- **Fecha y hora del sistema:** read-only device-local date/time labels, updated
+  by the existing one-second footer timer, including midnight rollover. Session
+  and Records calendars remain editable; no OS clock/timezone editing is provided.
+- **Seguridad:** Cambiar PIN administrativo.
+- **Almacenamiento y datos:** existing history/data/preference reset operations.
+  Preference confirmation shows actual current appearance/timeout from the same
+  transactional preview as the authorization scope, plus Amethyst/30-second
+  defaults. Changed data still abort instead of resetting a different scope.
+- **Alimentación:** restart/shutdown stay disabled by default, with an explanation
+  of Linux, persistent credentials, opt-in and OS permission requirements. Real
+  permission configuration and controlled hardware testing belong to Phase 9.
+
+The Steren 5-inch 800×480 HDMI/XPT2046 target currently exposes no confirmed usable
+brightness-control interface: the operator found no backlight device or exposed
+I²C device, and no installed `ddcutil`. The obsolete brightness slider and styling
+are removed. This does **not** prove that the physical display cannot adjust its
+brightness. No software dimming, GPIO/sysfs/DDC commands, packages or permissions
+were added; verified hardware brightness/display-power support may be investigated
+in Phase 9.
+
+Run actual keypad coverage and the affected GUI checks on Pi:
+
+```bash
+export QT_QPA_PLATFORM=offscreen PYTHONPATH=src
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+python -m unittest -k keypad tests.unit.test_gui_administration
+python -m unittest tests.unit.test_gui_administration tests.unit.test_kiosk_gui
+python -m unittest tests.unit.test_administration tests.unit.test_admin_concurrency
+```
+
+The complete focused command above still covers attendance/recognition without
+model-training tests. New regressions click actual digit/confirm/cancel buttons,
+including three-field selection, checked-state signal arguments, PIN changes,
+all three targeted deletion scopes and global maintenance, busy-task input guards,
+preference snapshots and read-only clocks. Non-cryptographic cases retain their
+scoped test derivation substitute; real PBKDF2/concurrency coverage is preserved.
+
+For manual EGLFS acceptance, reuse the valid Phase 6 **synthetic** `$DB`; do not
+rerun setup or reset data merely to launch this revision:
+
+```bash
+QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
+  --attendance-db "$DB" --debug
+```
+
+1. Log in, open Cambiar PIN administrativo, select each field by mouse/stylus and
+   enter current/new/confirmation using only the keypad. Check masking, zeroes,
+   backspace and visible active-field marking. Submit, then verify forced login,
+   old-PIN rejection and replacement-PIN acceptance. Do not disclose the PIN.
+2. Use a clearly identified disposable synthetic event to verify targeted deletion
+   confirmation and keypad reauthentication. Cancel a separate deletion and check
+   counts remain unchanged. Never select operational data.
+3. Use Restablecer preferencias as the non-attendance global-reset check: verify
+   actual current values/defaults, cancellation, and fresh PIN verification. It
+   preserves participants and attendance. Do not execute history/admin-data reset
+   on a synthetic database whose history you want to keep.
+4. Compare displayed date/time with the device clock, observe seconds advancing,
+   and check footer consistency. No clock-editing or brightness slider should exist.
+5. Verify both themes and standby preferences, close/reopen to check persistence,
+   and confirm power buttons remain disabled with an explanation. Do not enable
+   real system power actions for this acceptance run.
+
+The operator confirmed Raspberry Pi/EGLFS functional acceptance of the keypad and
+Settings corrections. Development tests use offscreen Qt and synthetic fixtures;
+real power execution remains unvalidated and outside ordinary acceptance testing.
+
+
+### Startup theme restoration
+
+The persisted theme is loaded before constructing `KioskWindow`. Its
+`initial_theme` is applied once after screen construction and before first show;
+`AdminIntegration` consumes the same loaded settings and does not reapply an
+unchanged theme. Nonpersistent mode still defaults to Amethyst. A failed settings
+read uses a single dark fallback and reports the error, without writing preferences
+or repeating the read. Existing storage initialization/migration failures retain
+their separate error handling.
+
+This fixes a reproduced Qt pre-show styling problem: applying dark and then light
+before first show left hidden scroll contents/tab pages and table-header styling
+with dark state even though the outer pages and theme metadata were light. Runtime
+switching after show was correct. No palette/viewport overrides, delayed toggles,
+periodic repolish, new stylesheet colors or screen rebuilding were needed.
+
+Startup appearance regressions launch a fresh window through the production GUI
+entry point using an existing synthetic database, authenticate and visit all pages.
+They inspect effective Qt palettes and rendered background pixels for nested scroll
+contents, viewports, tables/headers, tabs, popups, calendars, cards, labels, inputs,
+sidebar/footer and new dialogs. Tests also cover repeated switching, preference
+rollback/reset and restart, a single startup settings load, no preference writes,
+and safe read-failure fallback.
+
+```bash
+export QT_QPA_PLATFORM=offscreen PYTHONPATH=src
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+python -m unittest -k startup_theme tests.unit.test_gui_administration
+python -m unittest tests.unit.test_gui_administration tests.unit.test_kiosk_gui tests.unit.test_gui_attendance
+```
+
+Run the complete focused regression command above for attendance/recognition
+coverage without model-training tests. The operator observed an intermittent Pi
+timeout in `test_disabled_preview_skips_image_work_but_recognition_presence_and_metrics_continue`;
+the individual test subsequently passed three times and its complete GUI
+recognition module passed 21 tests. No confirmed recognition regression is known;
+this theme correction changes neither recognition behavior nor its test timeouts.
+Report any recurrence separately.
+
+For EGLFS acceptance, reuse the existing valid synthetic `$DB` and existing PIN:
+
+```bash
+QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
+  --attendance-db "$DB" --debug
+```
+
+Select Lavender in Ajustes, exit normally, restart with the same `$DB`, log in and
+visit Sesiones, Estado, Registros and Ajustes without toggling the theme. Check
+nested contents, table headers, tabs, popups and dialogs. Repeat with Amethyst and
+check runtime switching in both directions. Do not recreate the database or
+configure another PIN. The operator confirmed Raspberry Pi/EGLFS acceptance,
+including persisted-theme restoration. No additional hardware validation is
+claimed by the development-machine regression runs.

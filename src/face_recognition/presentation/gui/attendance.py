@@ -9,7 +9,7 @@ from face_recognition.application.attendance_service import RegistrationOutcome,
 from face_recognition.domain.models.attendance import AttendancePersistenceError, SessionOutcome, DeletionOperation
 from .window import LifecycleState, label, button
 
-PERSISTENCE_ERRORS = (AttendancePersistenceError, ValueError, LookupError, OSError)
+PERSISTENCE_ERRORS = (AttendancePersistenceError, ValueError, LookupError, OSError, PermissionError)
 
 
 def local_day_range(day, zone=None):
@@ -23,16 +23,11 @@ def local_day_range(day, zone=None):
 
 
 class AttendanceIntegration:
-    def __init__(self, window, service, *, recording_enabled, initialization_error="", synthetic_deletion_enabled=False):
+    def __init__(self, window, service, *, recording_enabled, initialization_error=""):
         self.window, self.service = window, service
         self.recording_enabled = recording_enabled
         self.initialization_error = initialization_error
-        self.deletion_allowed = bool(synthetic_deletion_enabled and not window.live_mode and window.persistent_attendance)
-        if self.deletion_allowed:
-            try:
-                service.deletion_authorization.require()
-            except (AttributeError, PermissionError):
-                self.deletion_allowed = False
+        self.deletion_allowed = service is not None and service.administrator is not None
         self.current = None
         self.count = 0
         self._generation = self._session_id = None
@@ -56,13 +51,13 @@ class AttendanceIntegration:
             action.clicked.connect(lambda checked=False, op=operation: self.delete_selected(op))
         window.session_tabs.setTabEnabled(2, self.deletion_allowed)
         if self.deletion_allowed:
-            window.deletion_notice.setText('Solo base sintética desechable. Cada eliminación requiere confirmación.')
+            window.deletion_notice.setText('Confirmación exacta y PIN administrativo requeridos para cada eliminación.')
         for action in window.deletion_buttons:
             action.setEnabled(False)
         window.session_resume.clicked.connect(self.resume_session)
         window.session_edit.clicked.connect(self.edit_session)
         window.session_title.setText("Sesión de asistencia · SQLite")
-        window.session_hint.setText("Persistencia local · PIN de demostración; no es control de acceso real.")
+        window.session_hint.setText("Persistencia local · Acceso administrativo protegido.")
         if window.live_mode:
             window.mode_label.setText("MODO EN VIVO\n" + ("Registro habilitado" if recording_enabled else "Registro desactivado"))
         else:
@@ -266,8 +261,8 @@ class AttendanceIntegration:
             dialog.deleteLater()
 
     def delete_selected(self, operation):
-        if not self.deletion_allowed or self.window.live_mode or self.service is None:
-            self.window.session_hint.setText('Eliminación permitida solo con autorización de prueba sintética.')
+        if not self.deletion_allowed or self.service is None or self.window.administration is None:
+            self.window.session_hint.setText('Se requiere autenticación administrativa y confirmación del alcance.')
             return
         identifier = self.window.stored_sessions.currentData()
         if identifier is None:
@@ -317,7 +312,10 @@ class AttendanceIntegration:
         try:
             if dialog.exec_() == QDialog.Accepted:
                 try:
-                    result = self.service.execute_deletion(preview)
+                    authorization = self.window.administration.reauthenticate(preview.fingerprint)
+                    if authorization is None:
+                        return
+                    result = self.service.execute_deletion(preview, authorization)
                     self.clear_confirmation()
                     self.refresh_session()
                     self.refresh_records()

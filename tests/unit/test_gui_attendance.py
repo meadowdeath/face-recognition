@@ -15,6 +15,7 @@ from time import monotonic
 import unittest
 from unittest.mock import patch
 
+from tests.admin_fakes import use_fast_credentials, TEST_PIN, configured_admin
 from face_recognition.application.attendance_service import AttendanceService
 from face_recognition.domain.models.attendance import AttendancePersistenceError
 from face_recognition.infrastructure.persistence.attendance_database import AttendanceDatabase
@@ -28,8 +29,10 @@ if AVAILABLE:
     from PyQt5.QtCore import QDate, QTimeZone, QTimer, Qt
     from PyQt5.QtTest import QTest
     from PyQt5.QtWidgets import QApplication, QScrollArea, QLineEdit, QDateEdit, QLabel, QPushButton
-    from face_recognition.domain.models.attendance import DeletionOperation, SyntheticDeletionAuthorization
+    from face_recognition.domain.models.attendance import DeletionOperation
     from face_recognition.application.live_recognition import LiveRecognitionView
+    from face_recognition.presentation.gui.admin import AdminIntegration
+    from face_recognition.infrastructure.device import DeviceDiagnostics
     from face_recognition.presentation.gui.attendance import AttendanceIntegration, local_day_range
     from face_recognition.presentation.gui.window import KioskWindow, LifecycleState
     from face_recognition.presentation.gui.recognition import RecognitionIntegration, RecognitionWorker, LivePacket
@@ -48,6 +51,7 @@ class GuiAttendanceTests(unittest.TestCase):
                 QFontDatabase.addApplicationFont(os.path.join(os.environ.get('WINDIR', 'C:/Windows'), 'Fonts', 'segoeui.ttf'))
 
     def setUp(self):
+        use_fast_credentials(self)
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.db = AttendanceDatabase(Path(self.temp.name) / 'synthetic.sqlite3', busy_timeout_ms=10)
@@ -58,17 +62,21 @@ class GuiAttendanceTests(unittest.TestCase):
         self.day = QDate(2026, 1, 2)
         start, end = local_day_range(self.day)
         self.now = start + (end - start) / 2
-        self.service = AttendanceService(self.people, self.sessions, self.records, clock=lambda: self.now)
+        self.administrator = configured_admin(self.db, clock=lambda: self.now)
+        self.service = AttendanceService(self.people, self.sessions, self.records, clock=lambda: self.now, administrator=self.administrator)
         self.people.add('p001', self.now)
         self.people.add('p002', self.now)
 
     def window(self, *, live=False, recording=True, failed=False, deletion=False):
         w = KioskWindow(live_mode=live, persistent_attendance=True)
-        if deletion:
-            self.service.deletion_authorization = SyntheticDeletionAuthorization(True, True, False, False)
         attendance = AttendanceIntegration(w, None if failed else self.service,
-            recording_enabled=recording, initialization_error='Base de datos no disponible.' if failed else '',
-            synthetic_deletion_enabled=deletion)
+            recording_enabled=recording, initialization_error='Base de datos no disponible.' if failed else '')
+        AdminIntegration(w, self.administrator, self.administrator.settings,
+                         DeviceDiagnostics(Path(self.temp.name), platform='win32'))
+        if deletion:
+            # Existing scope/dialog tests isolate reauthentication; the real PIN flow
+            # is exercised separately by administration UI tests.
+            w.administration.reauthenticate = lambda scope: self.administrator.authorize(scope, TEST_PIN)[1]
         w.show()
         def cleanup():
             w.close()
@@ -82,7 +90,7 @@ class GuiAttendanceTests(unittest.TestCase):
         self.assertTrue(predicate())
 
     def live(self, *, recording=True, blocked=True):
-        self.opened = self.service.open_session('Synthetic live')
+        self.administrator.authenticate(TEST_PIN); self.opened = self.service.open_session('Synthetic live')
         self.w, self.attendance = self.window(live=True, recording=recording)
         # Reuse existing inference-only fixtures; these labels are fictional metadata.
         with patch('tests.live_open_set_fakes.CLASSES', ('p001', 'p002', 'p003')):
@@ -117,7 +125,7 @@ class GuiAttendanceTests(unittest.TestCase):
         w.navigate('attendance')
         self.assertEqual(w.attendance_status.text(), 'No hay una sesión de asistencia activa')
         w.session_name.setText('Synthetic class')
-        w.session_start.click()
+        self.administrator.authenticate(TEST_PIN); w.session_start.click()
         session_id = w.attendance_session_id
         self.assertIsNotNone(session_id)
         self.assertTrue(w.session_start.isEnabled())
@@ -143,18 +151,18 @@ class GuiAttendanceTests(unittest.TestCase):
         self.assertEqual(restored.attendance_session_id, session_id)
         self.assertIn('Synthetic class', restored.session_details.text())
         self.assertIn('Asistencias: 1', restored.session_details.text())
-        restored.session_close.click()
+        self.administrator.authenticate(TEST_PIN); restored.session_close.click()
         self.assertIsNone(restored.attendance_session_id)
         self.assertFalse(self.sessions.get(session_id).is_open)
         self.assertEqual(self.records.count_for_session(session_id), 1)
         self.assertTrue(restored.session_start.isEnabled())
 
     def test_records_date_refresh_empty_and_closed_history_without_polling(self):
-        session = self.service.open_session('Historical synthetic')
+        self.administrator.authenticate(TEST_PIN); session = self.service.open_session('Historical synthetic')
         self.service.register('p001', session.id)
-        self.service.close_session(session.id)
+        self.administrator.authenticate(TEST_PIN); self.service.close_session(session.id)
         w, _ = self.window()
-        w.authenticated = True
+        self.administrator.authenticate(TEST_PIN)
         with patch.object(self.service, 'records_between', wraps=self.service.records_between) as query:
             w.records_date.setDate(self.day)
             w.navigate('records')
@@ -178,21 +186,21 @@ class GuiAttendanceTests(unittest.TestCase):
         w.simulate_button.click()
         self.assertEqual(w.attendance_status.text(), 'No fue posible registrar la asistencia')
         w2, controller = self.window()
-        w2.session_start.click()
+        self.administrator.authenticate(TEST_PIN); w2.session_start.click()
         self.assertIsNone(w2.attendance_session_id)
         self.assertIn('nombre', w2.session_hint.text())
         w2.session_name.setText('Synthetic')
         with patch.object(self.service, 'create_session', side_effect=AttendancePersistenceError('PRIVATE')):
-            w2.session_start.click()
+            self.administrator.authenticate(TEST_PIN); w2.session_start.click()
         self.assertFalse(w2.session_open)
         self.assertNotIn('PRIVATE', w2.session_hint.text())
-        w2.session_start.click()
+        self.administrator.authenticate(TEST_PIN); w2.session_start.click()
         w2.navigate('attendance')
         with self.db.transaction(write=True):
             w2.simulate_button.click()
         self.assertEqual(w2.attendance_status.text(), 'No fue posible registrar la asistencia')
         self.assertEqual(self.records.count_for_session(w2.attendance_session_id), 0)
-        self.service.close_session(w2.attendance_session_id)
+        self.administrator.authenticate(TEST_PIN); self.service.close_session(w2.attendance_session_id)
         w2.simulate_button.click()
         self.assertEqual(w2.attendance_status.text(), 'No hay una sesión de asistencia activa')
         self.assertIsNone(w2.attendance_session_id)
@@ -246,9 +254,9 @@ class GuiAttendanceTests(unittest.TestCase):
         old_session = self.opened.id
         old_view = self.decision()
         self.w.open_admin()
-        self.attendance.close_session()
+        self.administrator.authenticate(TEST_PIN); self.attendance.close_session()
         self.w.session_name.setText('New session')
-        self.attendance.open_session()
+        self.administrator.authenticate(TEST_PIN); self.attendance.open_session()
         self.w.navigate('attendance')
         self.assertNotEqual(self.w.attendance_session_id, old_session)
         self.assertNotEqual(self.live_ui.generation, old_generation)
@@ -262,7 +270,7 @@ class GuiAttendanceTests(unittest.TestCase):
 
     def test_external_session_closure_prevents_write_and_deactivates_capture(self):
         self.live()
-        self.service.close_session(self.opened.id)
+        self.administrator.authenticate(TEST_PIN); self.service.close_session(self.opened.id)
         self.deliver(self.decision())
         self.assertEqual(self.records.count_for_session(self.opened.id), 0)
         self.assertFalse(self.w.session_open)
@@ -286,7 +294,7 @@ class GuiAttendanceTests(unittest.TestCase):
         self.wait_for(lambda: self.components.active_cameras == 0)
         self.assertIsNone(self.attendance.confirmation)
 
-    def test_theme_layout_and_in_memory_settings_remain_independent(self):
+    def test_theme_layout_and_persistent_settings_preserve_unrelated_preferences(self):
         w, _ = self.window()
         for theme in ('dark', 'light'):
             w.apply_theme(theme)
@@ -302,7 +310,7 @@ class GuiAttendanceTests(unittest.TestCase):
         self.assertEqual(w.standby_timeout_seconds, 120)
         from face_recognition.infrastructure.persistence.attendance_repositories import SQLiteDeviceSettingsRepository
         self.assertEqual(SQLiteDeviceSettingsRepository(self.db).get().theme, 'dark')
-        self.assertEqual(SQLiteDeviceSettingsRepository(self.db).get().standby_timeout_seconds, 30)
+        self.assertEqual(SQLiteDeviceSettingsRepository(self.db).get().standby_timeout_seconds, 120)
 
     def test_local_calendar_ranges_handle_dst_and_midnight_edges(self):
         zone = QTimeZone(b'America/New_York')
@@ -312,13 +320,13 @@ class GuiAttendanceTests(unittest.TestCase):
             self.assertEqual((end-start).total_seconds(), hours * 3600)
             self.assertIsNotNone(start.utcoffset())
             self.now = start
-            session = self.service.open_session('Synthetic boundary ' + day.toString('yyyy-MM-dd'))
+            self.administrator.authenticate(TEST_PIN); session = self.service.open_session('Synthetic boundary ' + day.toString('yyyy-MM-dd'))
             self.service.register('p001', session.id)
             self.now = end
             self.service.register('p002', session.id)
             rows = self.service.records_between(start, end)
             self.assertEqual([r.person_id for r, _ in rows], ['p001'])
-            self.service.close_session(session.id)
+            self.administrator.authenticate(TEST_PIN); self.service.close_session(session.id)
 
     def test_cli_opt_in_validation_and_persistent_demo_imports_no_recognition(self):
         for flags in (['--enable-attendance-recording'], ['--enable-attendance-recording', '--attendance-db', str(self.db.path)],
@@ -359,22 +367,22 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
     def test_explicit_creation_selection_resumption_counts_and_restart(self):
         w, controller = self.window()
         w.session_name.setText('Optimización - 2026-11-16')
-        w.session_start.click()
+        self.administrator.authenticate(TEST_PIN); w.session_start.click()
         identifier = w.attendance_session_id
         self.service.register('p001', identifier, 1)
         controller.refresh_session()
         self.assertIn('Sesión creada correctamente', w.session_hint.text())
         w.session_name.setText(' OPTIMIZACIÓN - 2026-11-16 ')
-        w.session_start.click()
+        self.administrator.authenticate(TEST_PIN); w.session_start.click()
         self.assertIn('Ya existe una sesión con ese nombre y fecha', w.session_hint.text())
         self.assertEqual(w.attendance_activation_revision, 1)
         self.assertFalse(w.session_resume.isEnabled())
         self.assertFalse(w.session_edit.isEnabled())
         w.session_name.setText('Different')
-        w.session_start.click()
+        self.administrator.authenticate(TEST_PIN); w.session_start.click()
         self.assertIn('Cierra la sesión activa', w.session_hint.text())
         self.assertEqual(w.attendance_session_id, identifier)
-        w.session_close.click()
+        self.administrator.authenticate(TEST_PIN); w.session_close.click()
         self.assertTrue(w.session_resume.isEnabled())
         self.assertTrue(w.session_edit.isEnabled())
         w.session_resume.click()
@@ -383,9 +391,9 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
         self.assertEqual(controller.count, 1)
         self.assertIn('Asistencias: 1', w.session_details.text())
         self.assertEqual(w.session_hint.text(), 'Sesión reanudada correctamente.')
-        w.session_close.click()
+        self.administrator.authenticate(TEST_PIN); w.session_close.click()
         w.session_name.setText('optimización - 2026-11-16')
-        w.session_start.click()
+        self.administrator.authenticate(TEST_PIN); w.session_start.click()
         self.assertIsNone(w.attendance_activation_revision)
         self.assertIn('Ya existe una sesión con ese nombre y fecha', w.session_hint.text())
         w.session_resume.click()
@@ -399,11 +407,11 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
         self.assertIn('Asistencias: 1', restored.session_details.text())
 
     def test_session_edit_dialog_confirmation_collision_and_filter_refresh(self):
-        first = self.service.open_session('First')
+        self.administrator.authenticate(TEST_PIN); first = self.service.open_session('First')
         self.service.register('p001', first.id)
-        self.service.close_session(first.id)
-        other = self.service.open_session('Other')
-        self.service.close_session(other.id)
+        self.administrator.authenticate(TEST_PIN); self.service.close_session(first.id)
+        self.administrator.authenticate(TEST_PIN); other = self.service.open_session('Other')
+        self.administrator.authenticate(TEST_PIN); self.service.close_session(other.id)
         w, controller = self.window()
         w.stored_sessions.setCurrentIndex(w.stored_sessions.findData(first.id))
         w.records_session.setCurrentIndex(w.records_session.findData(first.id))
@@ -423,21 +431,21 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
         self.assertEqual(w.records_session.currentData(), first.id)
         self.assertEqual(w.records_session.currentText(), f'Renamed · {first.session_date:%d/%m/%Y}')
         w.records_date.setDate(self.day)
-        w.authenticated = True
+        self.administrator.authenticate(TEST_PIN)
         w.navigate('records')
         self.assertEqual(w.records_table.item(0, 1).text(), f'Renamed · {first.session_date:%d/%m/%Y}')
         self.assertEqual(self.records.count_for_session(first.id), 1)
 
     def test_session_and_date_filters_full_history_and_unrestricted_guard(self):
-        first = self.service.open_session('First')
+        self.administrator.authenticate(TEST_PIN); first = self.service.open_session('First')
         self.service.register('p001', first.id)
         self.now += timedelta(days=1)
         self.service.register('p002', first.id)
-        self.service.close_session(first.id)
-        second = self.service.open_session('Second')
+        self.administrator.authenticate(TEST_PIN); self.service.close_session(first.id)
+        self.administrator.authenticate(TEST_PIN); second = self.service.open_session('Second')
         self.service.register('p001', second.id)
         w, controller = self.window()
-        w.authenticated = True
+        self.administrator.authenticate(TEST_PIN)
         w.records_date.setDate(self.day)
         w.navigate('records')
         self.assertTrue(w.records_use_date.isChecked())
@@ -467,29 +475,41 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
     def test_same_session_resumption_invalidates_worker_generation_and_revision_binding(self):
         self.live()
         identifier, generation = self.w.attendance_session_id, self.live_ui.generation
-        first_view = self.decision()
-        self.service.close_session(identifier, 1)
+        # Authentication speed is unrelated to this revision regression. Keep the
+        # decision fresh on a logical clock while exercising the real stale-revision
+        # registration -> NO_SESSION -> refresh_session -> generation-change path.
+        logical_now = 100.
+        first_view = self.decision(decision_at=logical_now)
+        self.administrator.authenticate(TEST_PIN); self.service.close_session(identifier, 1)
+        self.administrator.authenticate(TEST_PIN)
         self.assertEqual(self.service.resume_session(identifier).session.activation_revision, 2)
-        # UI still holds activation 1: the service must refuse it even though the ID is open again.
-        self.deliver(first_view)
-        self.assertEqual(self.records.count_for_session(identifier), 0)
-        self.assertEqual(self.w.attendance_activation_revision, 2)
-        self.assertNotEqual(self.live_ui.generation, generation)
-        self.assertIsNone(self.attendance.confirmation)
-        self.deliver(first_view, generation=generation)
-        self.assertEqual(self.records.count_for_session(identifier), 0)
-        self.assertFalse(self.attendance.handle_live(self.decision(), self.live_ui.generation,
-            identifier, True, monotonic(), 2, activation_revision=1))
-        self.deliver(self.decision())
-        self.assertEqual(self.records.count_for_session(identifier), 1)
+        self.assertEqual(self.w.attendance_activation_revision, 1)
+        with patch('face_recognition.presentation.gui.recognition.monotonic', return_value=logical_now), \
+                patch.object(self.service, 'register', wraps=self.service.register) as register, \
+                patch.object(self.attendance, 'refresh_session', wraps=self.attendance.refresh_session) as refresh:
+            self.deliver(first_view)
+            register.assert_called_once_with('p001', identifier, 1)
+            refresh.assert_called_once()
+            self.assertEqual(self.records.count_for_session(identifier), 0)
+            self.assertEqual(self.w.attendance_activation_revision, 2)
+            self.assertNotEqual(self.live_ui.generation, generation)
+            self.assertIsNone(self.attendance.confirmation)
+            self.deliver(first_view, generation=generation)
+            self.assertEqual(register.call_count, 1)
+            self.assertFalse(self.attendance.handle_live(self.decision(decision_at=logical_now), self.live_ui.generation,
+                identifier, True, logical_now, 2, activation_revision=1))
+            self.assertEqual(register.call_count, 1)
+            self.deliver(self.decision(decision_at=logical_now))
+            self.assertEqual(register.call_args.args, ('p001', identifier, 2))
+            self.assertEqual(self.records.count_for_session(identifier), 1)
 
     def test_refresh_detects_same_id_new_revision_and_clears_confirmation(self):
         self.live()
         self.deliver(self.decision())
         self.assertIsNotNone(self.attendance.confirmation)
         previous = self.live_ui.generation
-        self.service.close_session(self.opened.id)
-        self.service.resume_session(self.opened.id)
+        self.administrator.authenticate(TEST_PIN); self.service.close_session(self.opened.id)
+        self.administrator.authenticate(TEST_PIN); self.service.resume_session(self.opened.id)
         self.attendance.refresh_session()
         self.assertGreater(self.live_ui.generation, previous)
         self.assertIsNone(self.attendance.confirmation)
@@ -500,9 +520,9 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
         for name, day, person in (('Optimización', self.day.toPyDate(), 'p001'),
                                   ('optimización', self.day.addDays(7).toPyDate(), 'p002'),
                                   ('Inglés', self.day.toPyDate(), 'p001')):
-            session = self.service.create_session(name, day).session
+            self.administrator.authenticate(TEST_PIN); session = self.service.create_session(name, day).session
             self.service.register(person, session.id)
-            self.service.close_session(session.id)
+            self.administrator.authenticate(TEST_PIN); self.service.close_session(session.id)
             events.append(self.sessions.get(session.id))
         return events
 
@@ -517,17 +537,17 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
         self.assertEqual(w.session_start.text(), 'Crear e iniciar sesión')
         w.session_name.setText('Optimización')
         w.session_create_date.setDate(self.day)
-        w.session_start.click()
+        self.administrator.authenticate(TEST_PIN); w.session_start.click()
         first = self.sessions.current()
         self.service.register('p001', first.id)
-        w.session_close.click()
-        w.session_start.click()
+        self.administrator.authenticate(TEST_PIN); w.session_close.click()
+        self.administrator.authenticate(TEST_PIN); w.session_start.click()
         self.assertIn('Ya existe una sesión con ese nombre y fecha', w.session_hint.text())
         self.assertIsNone(w.attendance_session_id)
         w.session_create_date.setDate(self.day.addDays(7))
-        w.session_start.click()
+        self.administrator.authenticate(TEST_PIN); w.session_start.click()
         second = self.sessions.current()
-        w.session_close.click()
+        self.administrator.authenticate(TEST_PIN); w.session_close.click()
         self.assertEqual(w.stored_names.count(), 1)
         self.assertEqual(w.stored_sessions.count(), 2)
         self.select_event(w, first)
@@ -629,21 +649,22 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
         self.assertEqual(self.records.count_for_session(first.id), 1)
         self.assertIn('datos cambiaron', w.session_hint.text())
 
-    def test_synthetic_deletion_requires_opt_in_and_remains_disabled_in_live_mode(self):
+    def test_deletion_requires_actual_administrator_session_including_live_mode(self):
         first, _, _ = self.dated_events()
-        for live, flag in ((False, False), (True, True)):
-            w, controller = self.window(live=live, deletion=flag)
+        for live in (False, True):
+            w, controller = self.window(live=live, deletion=True)
             self.select_event(w, first)
-            self.assertFalse(w.session_tabs.isTabEnabled(2))
-            self.assertTrue(all(not b.isEnabled() for b in w.deletion_buttons))
-            with patch.object(self.service, 'prepare_deletion', side_effect=AssertionError('No permission')):
-                controller.delete_selected(DeletionOperation.SESSION)
+            self.assertTrue(w.session_tabs.isTabEnabled(2))
+            self.administrator.logout()
+            controller.delete_selected(DeletionOperation.SESSION)
+            self.assertIn('No se puede eliminar', w.session_hint.text())
+            self.administrator.authenticate(TEST_PIN)
         self.assertEqual(len(self.sessions.list()), 3)
 
     def test_deletion_is_disabled_and_revalidated_while_any_session_is_open(self):
         first, _, _ = self.dated_events()
         w, controller = self.window(deletion=True)
-        self.service.create_session('Active unrelated', self.day.toPyDate())
+        self.administrator.authenticate(TEST_PIN); self.service.create_session('Active unrelated', self.day.toPyDate())
         controller.refresh_session()
         self.select_event(w, first)
         self.assertTrue(all(not b.isEnabled() for b in w.deletion_buttons))
