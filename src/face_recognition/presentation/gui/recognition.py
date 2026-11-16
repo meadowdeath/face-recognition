@@ -181,6 +181,8 @@ class RecognitionIntegration(QObject):
         self.ready = self.active = self.closing = False
         self.backend_error = self.activation_error = ""
         self.generation = self.image_sequence = 0
+        self.session_id = None
+        self.session_revision = None
         self._shown = 0
         self._rate_start = monotonic()
         self.preview_fps = 0.
@@ -209,8 +211,12 @@ class RecognitionIntegration(QObject):
         if not attendance or not w.session_open:
             self.activation_error = ""
         want = attendance and w.session_open and self.ready and not self.closing and not self.activation_error
-        if bool(want) != self.active:
+        session_id = w.attendance_session_id
+        session_revision = w.attendance_activation_revision
+        if bool(want) != self.active or (want and (session_id, session_revision) != (self.session_id, self.session_revision)):
             self.active = bool(want)
+            self.session_id = session_id
+            self.session_revision = session_revision
             self.generation = self.worker.set_active(self.active)
             self.refresh.stop()
             self.worker.take_latest()
@@ -222,9 +228,14 @@ class RecognitionIntegration(QObject):
             if self.active and self.options.preview_fps == 0:
                 w.preview_image.setText("Vista previa desactivada")
             w.set_face_present(False)
+            if w.attendance is not None:
+                w.attendance.begin_activation(self.generation, self.session_id if self.active else None,
+                                              self.session_revision if self.active else None)
         if not attendance: return
-        if not w.session_open:
-            w.show_live_status("No hay una sesión de asistencia activa", "Abre una sesión temporal desde Administración.")
+        if w.attendance is not None and w.attendance.service is None:
+            w.show_live_status("No fue posible registrar la asistencia", w.attendance.initialization_error, "error")
+        elif not w.session_open:
+            w.show_live_status("No hay una sesión de asistencia activa", "Abre una sesión desde Administración.")
         elif self.backend_error or self.activation_error:
             w.show_live_status("Reconocimiento no disponible", self.backend_error or self.activation_error, "error")
         elif not self.ready:
@@ -248,15 +259,23 @@ class RecognitionIntegration(QObject):
             return
         w.set_face_present(packet.presence)  # Idempotent: repeated absence cannot extend standby.
         view = packet.view
-        if view.label == "UNKNOWN":
+        now = monotonic()
+        handled = w.attendance is not None and w.attendance.handle_live(
+            view, self.generation, self.session_id, packet.presence, now, self.options.absence_timeout,
+            activation_revision=self.session_revision)
+        if packet.generation != self.generation:
+            return  # A database-authoritative session change invalidated this packet.
+        if handled:
+            pass  # Attendance confirmation is based on a completed repository transaction.
+        elif view.label == "UNKNOWN":
             w.show_live_status("Persona no reconocida", "Intenta colocar tu rostro frente a la cámara.", "warning")
-        elif view.last_score is not None and view.label not in ("NO FACE", "COLLECTING"):
+        elif (view.last_score is not None and view.label not in ("NO FACE", "COLLECTING")
+              and not (w.attendance is not None and w.attendance.recording_enabled)):
             w.show_live_status("Identidad reconocida", view.label, "success")
         elif packet.presence:
             w.show_live_status("Reconocimiento en curso", "Mantén el rostro dentro de la guía.")
         else:
             w.show_live_status("Esperando un rostro", "Coloca tu rostro frente a la cámara.")
-        now = monotonic()
         if (self.options.preview_fps > 0 and now >= self._next_image
                 and packet.image is not None and packet.image_sequence != self.image_sequence):
             self.image_sequence = packet.image_sequence

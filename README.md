@@ -5,8 +5,9 @@
 The optional PyQt5 Widgets interface defaults to a demonstration independent of
 camera, model and dataset assets. It provides nine persistent screens: standby, attendance,
 demonstration PIN access, administrator dashboard, sessions, records, export,
-system status and settings. Records, export controls and system-status samples
-remain fictional; live recognition debug metrics describe the running pipeline.
+system status and settings. Without a database, records remain fictional. Export
+controls and system-status samples remain demonstrations in every mode; live
+recognition debug metrics describe the running pipeline.
 The demonstration PIN is **123456**; this is navigation scaffolding, not security.
 
 Windows development (native Qt backend, 800 × 480 window):
@@ -52,10 +53,11 @@ timers and announces shutdown. Standby never suspends the OS or display.
 `window.lifecycle_changed` (enum) and `window.attendance_active_changed` (boolean)
 announce lifecycle changes. Presence enters through `window.set_face_present(bool)`
 on the GUI thread; repeated absence is idempotent and cannot postpone standby.
-The session page opens/closes an explicitly temporary, in-memory attendance
-session. Startup has no open session; this setting never persists or registers
-attendance. Export, PIN-change, brightness, clock and power controls remain visual
-placeholders. There is no real authentication, attendance persistence or export.
+Without `--attendance-db`, the session page opens/closes an explicitly temporary,
+in-memory session. With an explicit database it restores and manages persistent
+sessions, while startup still enters Standby. Export, PIN-change, brightness,
+clock and power controls remain visual placeholders. The demonstration PIN is
+not production access control. GUI theme/standby preferences remain in memory.
 
 Optional offscreen checks (skip automatically if PyQt5 is absent):
 
@@ -95,16 +97,17 @@ QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui
   --orientation rotate180 --debug
 ```
 
-Open Admin with the demonstration PIN, open a temporary session under `Sesiones`,
+Open Admin with the demonstration PIN, open a session under `Sesiones`,
 then return to `Asistencia`. Capture is eligible only in Attendance with an open
 session and a ready backend. Without a session the camera remains closed. The
 simulation controls are hidden in live mode. Accepted temporal identities display
 `Identidad reconocida` and the technical ID; rejected decisions display `Persona
 no reconocida` without the SVM candidate. Recognition never means attendance has
-been registered. Ordinary mode hides technical diagnostics.
-The sidebar and bottom bar identify live mode without claiming that attendance
-is recorded. Administrative PIN access, temporary sessions and sample records
-remain explicitly identified as demonstration functionality.
+been registered unless the explicit recording capability described below is
+enabled and the database confirms success. Ordinary mode hides technical diagnostics.
+The sidebar identifies whether recording is enabled. Without a database,
+temporary sessions and sample records remain demonstrations. Administrative PIN
+access is explicitly a demonstration in every mode.
 
 One Qt worker loads and fully validates the trusted bundle once, retaining it
 across activations. It owns camera acquisition, asynchronous MediaPipe, pose
@@ -166,7 +169,8 @@ latency. Touchscreen deployment remains separate work.
 
 Operational facial dataset capture, pose-feature processing, selected-model
 construction and single-face open-set recognition on Windows/OpenCV and
-Raspberry Pi/Picamera2. Attendance registration and storage are not implemented.
+Raspberry Pi/Picamera2. Optional attendance management is described below; this
+academic prototype is not a production-ready institutional attendance system.
 
 The completed research is preserved in Git. **`v3-open-set-model` (`755a06f`)**
 preserves the frozen research/model-construction workflows; **`v2-open-set-final`**
@@ -494,13 +498,247 @@ session/context variation and harder-to-reject UNKNOWN identities remain known
 limitations. No explicit lighting labels exist. Do not retune frozen model
 versions from archived final results.
 
-## Attendance persistence foundation
+## Attendance management
+
+Four modes are deliberately separate:
+
+| Launch options | Behavior |
+| --- | --- |
+| Neither database nor model | Existing nonpersistent, hardware-independent demonstration |
+| `--attendance-db` only | Persistent **synthetic demonstration**, no camera or biometric assets |
+| `--model-dir`, without recording opt-in | Live recognition; accepted decisions say `Identidad reconocida`. An optional database provides sessions/records, but recognition does not write attendance |
+| Model + database + `--enable-attendance-recording` | Explicit live persistent attendance capability for pre-registered identifiers |
+
+The recording flag requires both paths. It enables software behavior only; it
+does not establish authorization or valid consent. Never repurpose a synthetic
+testing database for operational collection. The default startup creates no
+database, enrolls no participants and generates no attendance.
+
+Register fictional participants explicitly before synthetic acceptance testing:
+
+```bash
+PYTHONPATH=src python -m face_recognition.presentation.cli.attendance_participants \
+  --attendance-db "$HOME/.local/share/face-recognition/synthetic-attendance.sqlite3" add p001
+PYTHONPATH=src python -m face_recognition.presentation.cli.attendance_participants \
+  --attendance-db "$HOME/.local/share/face-recognition/synthetic-attendance.sqlite3" list
+QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
+  --attendance-db "$HOME/.local/share/face-recognition/synthetic-attendance.sqlite3"
+```
+
+Windows PowerShell equivalent (native Qt, repository root):
+
+```powershell
+$env:PYTHONPATH="src"
+$syntheticDb=Join-Path $env:LOCALAPPDATA "face-recognition\synthetic-attendance.sqlite3"
+python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$syntheticDb" add p001
+python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$syntheticDb" list
+python -m face_recognition.presentation.gui --windowed --attendance-db "$syntheticDb"
+```
+
+Participant commands initialize only the explicitly selected database, reject
+duplicate/invalid identifiers and never inspect models to discover participants.
+There are no names, identity mappings or enrollment operations. Registration of
+an identifier does not establish consent.
+
+Use PIN `123456`, enter `Sesiones → Crear sesión`, supply a name and an explicit
+calendar date, then select `Crear e iniciar sesión`.
+Return to `Asistencia`: select `p001 · Aceptar` and click `Simular decisión`.
+Repeat for duplicate attendance; select `UNKNOWN · Rechazar` for no write, or
+`p003 · Aceptar` to test an unregistered identifier (leave p003 unregistered).
+Simulated decisions use the same service and real SQLite constraints as live
+decisions, but no facial data. The controls stay hidden in live mode.
+
+Persistent sessions have authoritative database-generated IDs, names, opening
+times, open/closed state, activation revisions and counts. Camera activation still requires Attendance
+and an open session; opening in Admin does not start capture. Closing preserves
+history, stops eligibility and clears transient results. Exiting the application
+does **not** close a session. Restart restores any open session, initially in
+Standby. Temporary sessions remain available when no database is supplied.
+
+An attendance session is **one event identified by normalized name and explicit
+calendar date**. `Optimización` on 2026-11-16 and on 2026-11-23 are different
+sessions; a participant can attend each once. Different names can share a date.
+Name normalization remains Unicode NFC, whitespace trim/collapse, case folding
+and NFC again; display case and accents are preserved (`Inglés` differs from
+`Ingles`). Whitespace controls collapse; other controls/format characters are
+rejected. SQLite `NOCASE` is not used.
+
+The existing Sesiones screen has three tabs, with active-session information and
+`Cerrar sesión activa` accessible above them:
+
+- **Crear sesión:** name and `QDateEdit` (today by default), then `Crear e iniciar
+  sesión`. Creation always inserts a new event. An existing name/date reports
+  `Ya existe una sesión con ese nombre y fecha. Selecciónala en Gestionar sesiones.`
+  It never resumes implicitly. Another active event blocks creation.
+- **Gestionar sesiones:** linked name/date selectors. Dates list only events for
+  the selected normalized name; the selected event ID is authoritative. The
+  summary shows name, event date, state and count. `Reanudar sesión` preserves ID,
+  event date, original opening time and all attendance/timestamps, clears
+  `closed_at` and advances the activation revision only on a closed-to-open
+  transition. Existing attendance remains a duplicate for that event. `Editar
+  sesión` provides name/date inputs and explicit `Guardar cambios`/`Cancelar`;
+  editing is restricted to closed sessions and rejects name/date collisions.
+- **Eliminar sesiones:** three targeted operations described below, disabled by
+  default. The scope mirrors the management selection with name, date and count.
+
+Session dates are Python `datetime.date` values stored as `YYYY-MM-DD`; they are
+not opening timestamps or registration timestamps. Editing the event date never
+rewrites `registered_at`. Renaming/editing changes only the selected event, not
+other dates with the same normalized name. Selectors preserve event IDs on refresh;
+counts use one grouped query. `closed_at` is current closure state, not a full
+activation audit log. All four launch modes, Standby, theme handling, preview FPS
+and camera lifecycle remain unchanged. No global reset, session activation-history
+table or production authentication is added.
+
+### Targeted synthetic deletion only
+
+Deletion is available only when explicitly launched with an isolated, disposable
+synthetic database and **no model/live recording**:
+
+```bash
+QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
+  --attendance-db "$HOME/.local/share/face-recognition/disposable-synthetic.sqlite3" \
+  --enable-synthetic-session-deletion
+```
+
+On Windows use `--windowed` and the same database/deletion flags with native Qt.
+`--enable-synthetic-session-deletion` requires `--attendance-db` and rejects
+`--model-dir` or `--enable-attendance-recording`. Service and repository checks
+also enforce the synthetic authorization context; hiding buttons is not the only
+boundary. The flag does not establish database provenance, consent or production
+access control. Never select an operational database. There is no unrestricted
+deletion CLI.
+
+| Action | Deleted | Preserved |
+| --- | --- | --- |
+| `Vaciar asistencias de esta sesión` | Records for the selected name/date event | That event's ID/name/date/opening time; other events; participants/settings |
+| `Eliminar sesión de esta fecha` | Selected event and its records | Other dates and names; participants/settings |
+| `Eliminar sesiones de todas las fechas` | All events and records for the selected normalized name | Other names and their records; participants/settings |
+
+All three operations reject while **any** session is active, in both service and
+transaction checks. Empty target scopes are disabled. Every action prepares a
+read-only preview and opens its own themed confirmation with actual names, dates,
+affected/deleted session counts, record counts, preservation explanation and an
+application-irreversibility warning. All-dates summaries list every date/count
+inside a scroll area. `Cancelar` is the default; Escape or closing the dialog
+writes nothing. A specific destructive button is required to execute.
+
+Confirmed execution takes `BEGIN IMMEDIATE`, rechecks active sessions and compares
+the exact selected scope and full session/record snapshot against the preview,
+including row identities and values, not just totals. Changed records, equal-count
+replacements, edited targets or added dates abort and require a new confirmation.
+Records are deleted first, then sessions where applicable, respecting the existing
+`ON DELETE RESTRICT`. Both changes commit together or roll back. Actual deleted
+counts are reported and selectors/Records filters refresh. No database file is
+replaced or removed, and no participant, setting, credential, model or biometric
+file is deleted. Clearing records preserves the event for later resumption and
+fresh attendance.
+
+The two integer identity tables use SQLite **AUTOINCREMENT** and guards against
+explicit reuse/mutation of IDs. SQLite's internal `sqlite_sequence` high-water
+marks survive targeted deletion, including deletion of the last event/record.
+Never reset them manually. A deleted event recreated with the same name/date has
+a new ID; stale recognition cannot target it. The same rule prevents a newly
+inserted record with identical values from masquerading as a confirmed old record.
+Activation revisions, worker generations, temporal decision sequences, freshness
+and face-segment checks remain required. Clearing then resuming still advances
+activation revision, rejecting old decisions. No recognition math changes.
+
+Global reset, production administrator authentication/reauthentication and safe
+system power controls remain Phase 6 work. This prototype's demonstration PIN is
+not production authorization. Administrative attendance deletion is distinct from
+biometric-data suppression and does not securely erase storage pages, journals,
+backups or flash.
+
+`AttendanceService` coordinates session operations, participant eligibility,
+duplicate results, grouped counts and record filters over the existing repositories.
+SQLite schema version **3** preserves all four business tables. New registrations show `Asistencia
+registrada`; duplicates show `Asistencia ya registrada` with the **original**
+registration time. Missing participants, closed sessions and storage failures
+produce distinct Spanish outcomes, never false success or temporary fallback.
+Confirmation remains visible while the same face segment continues; leaving
+Attendance, losing presence or changing session clears it.
+
+Only completed temporal windows carry a decision sequence and completion time.
+The sequence changes once per window, independently of general view revisions.
+The GUI consumes it at most once per activation, requires a current valid face
+segment, rejects expired evidence and binds it to the active session ID **and
+activation revision**, as well as the recognition worker generation. No-face
+or invalid-pose interruptions invalidate cached attendance evidence while leaving
+the existing recognition grace-period display unchanged. Rejected decisions and
+individual frame candidates never write. Coalesced packets may skip intermediate
+decisions; no unbounded decision/frame queue or per-frame database query is added.
+The existing atomic repository insertion remains the final authority on session
+validity, expected revision and uniqueness in the same `BEGIN IMMEDIATE`
+transaction. A close/resume of the same ID cannot admit a pending request from its
+old activation. Revision changes reset the worker generation, temporal stream and
+transient confirmation state. No recognition mathematics or fitted artifacts change.
+
+`Registros` reads SQLite on entry or filter changes, including closed-session
+history. Its session selector defaults to `Todas las sesiones`; its date filter
+defaults to checked with today's local date. Combine session and date, or disable
+the date filter for a selected session's full history. Without both a session and
+a date restriction, the UI requests a selection and the repository refuses an
+unrestricted query. Results show participant, current session name, local date
+and time, and total/empty state, in chronological order. Filtering uses IDs,
+never mutable display names. Records and session names are queried in batches,
+not per table cell.
+The selected local day's start and the **next local day's start** are resolved
+independently by Qt's system timezone and converted to UTC for `[start,end)`;
+days spanning offset changes need not be 24 hours. Stored datetimes remain aware UTC.
+
+Persistence runs synchronously on explicit GUI actions/eligible decision events,
+using separate short-lived connections and a **150 ms busy timeout** in the GUI
+and participant CLI. It does not run inside camera capture, MediaPipe callbacks
+or the recognition worker. Recoverable failures leave navigation/exit available;
+failed initialization disables persistent session controls instead of falling
+back. No additional worker, timer-based database polling or persistent settings
+integration is introduced. A busy database can briefly delay GUI delivery; camera
+processing continues and old packets are still rejected.
+
+Live recording capability example only, after privacy/access-control review and
+with a separate reviewed database (do not execute against real data for testing):
+
+```bash
+QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
+  --camera-backend picamera2 --orientation rotate180 \
+  --model-dir "../face-recognition-data/v3/models/open_set_model_v3" \
+  --attendance-db "/path/to/reviewed-attendance.sqlite3" \
+  --enable-attendance-recording --preview-fps 15 --debug
+```
+
+On Windows, use the same flags with `--windowed --camera-backend opencv
+--camera-index 0` and native Qt. Omitting the recording flag preserves identity-only
+live behavior. `--preview-fps 0` still disables image work without stopping recognition.
+
+Focused Raspberry Pi validation, synthetic fixtures only (no training tests):
+
+```bash
+QT_QPA_PLATFORM=offscreen PYTHONPATH=src python -m unittest \
+  tests.unit.test_attendance_persistence tests.unit.test_attendance_service \
+  tests.unit.test_attendance_sessions tests.unit.test_session_dates_deletion \
+  tests.unit.test_gui_attendance tests.unit.test_kiosk_gui \
+  tests.unit.test_gui_recognition tests.unit.test_live_open_set_recognition \
+  tests.integration.test_live_open_set_cli
+```
+
+Phase 4's 27 persistence checks passed on Raspberry Pi, including POSIX
+permissions. Its complete Pi suite was manually interrupted after about 20
+minutes; it is **not** recorded as a full-suite pass. The initial Phase 5 focused
+suite (114 checks) and 18 functional acceptance checks subsequently passed on Pi.
+The dated-session/deletion revision also passed targeted and manual Pi acceptance
+checks, as reported by the operator. The pre-merge cleanup must still be checked
+on Pi using the focused command above; no new hardware measurements are claimed.
+Windows development should also run `python -m unittest discover
+-s tests` with `PYTHONPATH=src` and the Qt offscreen backend.
+
+## SQLite schema and privacy
 
 Standard-library `sqlite3` provides local storage without an ORM, server or new
-dependency. This is a repository API only: the GUI still uses temporary sessions,
-demonstration records/settings and the demonstration PIN. Recognition results
-never write attendance automatically. Importing modules or starting the GUI does
-not create or open a database.
+dependency. Repositories are used through the attendance service above. GUI
+settings and administrator PIN remain demonstrations. Only an explicit
+`--attendance-db` initializes storage; module imports and ordinary demonstration
+startup never create or open a database.
 
 Supply an explicit database path outside the source repository, biometric dataset
 and model bundle. A possible future Linux location is
@@ -516,18 +754,38 @@ database.initialize()
 settings = SQLiteDeviceSettingsRepository(database).get()
 ```
 
-Initialization creates schema **1** (`PRAGMA user_version`) transactionally and
-inserts the singleton defaults once (`dark`, 30 seconds). Reinitialization preserves
-existing data/preferences. Future versions, nonempty unversioned databases and
-incomplete schemas fail explicitly; no reset, destructive recovery or migration
-framework exists. Failed creation rolls back all schema statements; an empty
-database file/private directory may remain and can be initialized again.
+Initialization uses `PRAGMA user_version`: version 0 creates schema **3** directly;
+version 1 follows its supported normalization/collision migration to v2 and then
+v3; version 2 migrates to v3; version 3 validates and reopens. Unsupported versions,
+nonempty unversioned databases and incomplete/weakened schemas fail explicitly.
+Defaults are inserted only for a new database. No automatic recovery/reset occurs.
+
+Migration to v3 infers each event date from its original aware UTC `opened_at`
+converted using the device's local timezone rules for that instant. The
+`AttendanceDatabase(..., migration_timezone=tzinfo)` boundary allows deterministic
+synthetic timezone tests; normal GUI initialization uses the OS local timezone.
+These dates are **inferred** and can be corrected by editing closed sessions.
+Stored names, including date-looking text, are not parsed or rewritten.
+
+SQLite cannot ALTER an integer primary key into AUTOINCREMENT. The v2→v3 migration
+therefore rebuilds only sessions and their dependent records inside one transaction,
+with foreign keys **ON** throughout: copy parent/child rows preserving IDs, drop
+old child before old parent, rename the copied tables and recreate constraints.
+This migration-only rebuild is necessary for non-reusing identities; destructive
+session actions themselves use only targeted DELETE statements, never DROP/reset.
+There remain four business tables; `sqlite_sequence` is SQLite's internal allocator.
+New and migrated databases enforce the same date/composite-uniqueness/identity
+constraints. Original timestamps, revisions, participants, records, settings and
+file protection are preserved. Integrity/FK checks precede the version update and
+commit; any failure rolls back the entire migration. Genuine v1 and v2 schema
+fixtures test this path. Existing v1 normalized-name collisions still require
+deliberate offline maintenance; they are never automatically merged or discarded.
 
 | Table | Columns and principal constraints |
 | --- | --- |
 | `participants` | `person_id TEXT PRIMARY KEY NOT NULL`, `created_at TEXT NOT NULL` |
-| `attendance_sessions` | `id INTEGER PRIMARY KEY`, nonempty `name`, `opened_at NOT NULL`, nullable `closed_at >= opened_at` |
-| `attendance_records` | `id INTEGER PRIMARY KEY`, `person_id NOT NULL` FK, `attendance_session_id NOT NULL` FK, `registered_at NOT NULL`; unique `(attendance_session_id, person_id)` |
+| `attendance_sessions` | `id INTEGER PRIMARY KEY AUTOINCREMENT`, nonempty `name`/`name_key`, valid NOT NULL `session_date`, unique `(name_key, session_date)`, UTC opening/closure times, positive `activation_revision` |
+| `attendance_records` | `id INTEGER PRIMARY KEY AUTOINCREMENT`, `person_id NOT NULL` FK, `attendance_session_id NOT NULL` FK, `registered_at NOT NULL`; unique `(attendance_session_id, person_id)` |
 | `device_settings` | `id INTEGER PRIMARY KEY CHECK(id=1)`, `theme` limited to `dark/light`, integer timeout limited to `30/60/120`; both preferences NOT NULL |
 
 ```mermaid
@@ -563,8 +821,8 @@ explicit timezone-aware `datetime` arguments. Dataclasses normalize these to UTC
 storage uses fixed microsecond ISO 8601 `YYYY-MM-DDTHH:MM:SS.ffffffZ`. Database CHECKs
 reject malformed timestamps; canonical UTC text supports chronological ordering.
 `list_between(start, end)` requires `start < end` and uses **[start, end)**. Lists
-use deterministic ID tie-breaks for equal timestamps. Presentation will handle
-local timezone conversion in a later phase.
+use deterministic ID tie-breaks for equal timestamps. The GUI performs local
+timezone conversion for display.
 
 Each operation owns a short-lived connection with foreign keys enabled, the
 default 5-second busy timeout and unchanged `check_same_thread` enforcement. No
@@ -573,9 +831,25 @@ validation and attendance insertion hold one write reservation, so concurrent
 closure/deletion cannot slip between them. Reads use short consistent transactions.
 Successful operations commit; failures roll back; connections always close.
 
-`records.add(...)` returns `(record, created)`. A duplicate in an open session
+Session repositories also provide name/date lookup, distinct names and available
+dates, explicit `resume`, closed-event `edit`, and grouped `list_with_counts`.
+Creation rejects existing name/date pairs; resumption is explicit by session ID.
+The service exposes these operations as focused outcomes (created, resumed,
+already active, conflicting active session, duplicate name, missing session, failure).
+The repository generates the canonical Unicode key; database uniqueness and
+INSERT/UPDATE triggers reject missing/empty/NUL-containing keys. An empty column
+default permits safe ALTER backfill but is rejected on every subsequent write.
+Reopening also validates that stored keys match the domain normalization policy.
+
+`records.add(..., expected_activation_revision=revision)` returns `(record, created)`.
+The revision must come from the activation that produced the decision; it must not
+be refreshed to the latest revision to retry a stale request. For existing initial-
+activation callers, omission means **1**, not "whichever activation is current".
+A duplicate in an open session with the correct revision
 returns the original record and `False`, preserving its timestamp. Closed sessions
-reject registration, including repeated requests. No `INSERT OR REPLACE` is used.
+and mismatched revisions reject registration, including repeated requests. The
+filtered `query` accepts a session, a half-open UTC range, or both; it refuses
+unrestricted all-session history. No `INSERT OR REPLACE` is used.
 The existing unique index serves session lookups/counts; additional indexes serve
 participant/time and timestamp-range queries. There is no duplicate session index.
 
@@ -607,7 +881,8 @@ retention, withdrawal and deletion obligations, including the project's
 **December 31, 2026 biometric-processing deadline**. This foundation does not
 authorize indefinite retention of participant-related records or trained artifacts.
 SQL deletion is not secure erasure of storage pages, journals, backups or flash.
-No real collection, withdrawal workflow, retention job or export is implemented.
+Real participant collection is not authorized by this implementation. Withdrawal
+workflows, production access control, retention jobs and export remain unimplemented.
 
 ## Privacy
 
@@ -616,6 +891,7 @@ references and model bundles are sensitive biometric-derived artifacts. Keep
 all generated data and bundles local and outside Git. Existing `.gitignore`
 protections for datasets, `models/`, `*.joblib`, `*.npz`, MediaPipe assets and
 secrets remain. Do not put participant names, raw payloads, individual predictions
-or scores in documentation. The SQLite foundation above is not connected to the
-GUI or recognition: operational attendance collection, a roster and recognition
-history are not implemented.
+or scores in documentation. Attendance integration is an explicitly enabled
+academic capability; no camera payload, rejected identity, score or recognition
+history is persisted. Purpose, authorization, retention, withdrawal, deletion and
+access-control requirements must be verified before real participant collection.

@@ -32,6 +32,32 @@ class LiveTemporalRecognitionTests(unittest.TestCase):
         self.assertEqual(self.state.view().label, CLASSES[0])
         self.assertEqual(self.state.view().occupancy, 0)
 
+    def test_decision_sequence_changes_only_on_completed_windows_and_gap_invalidates_cached_evidence(self):
+        first = self.feed([observation(0, -10.)] * 7)
+        self.assertEqual(first.decision_sequence, 1)
+        self.assertEqual(first.decision_at, 100.6)
+        self.assertTrue(first.decision_is_current)
+        collecting = self.feed([observation(1)] * 2, start=100.7)
+        self.assertEqual(collecting.decision_sequence, 1)
+        self.assertGreater(collecting.revision, first.revision)
+        self.state.no_face(100.9)
+        cached = self.state.view()
+        self.assertEqual(cached.label, first.label)  # Existing grace-period display remains intact.
+        self.assertFalse(cached.decision_is_current)
+        for i in range(6): self.state.observe(observation(1, -30.), face(), 101 + i * .1)
+        self.assertEqual(self.state.view().decision_sequence, 1)
+        self.assertFalse(self.state.view().decision_is_current)
+        self.state.observe(observation(1, -30.), face(), 101.6)
+        rejected = self.state.view()
+        self.assertEqual(rejected.decision_sequence, 2)
+        self.assertTrue(rejected.decision_is_current)
+        self.assertEqual(rejected.temporal_decision, 'UNKNOWN')
+        self.assertEqual(rejected.last_score, -30.)
+        self.assertEqual(rejected.occupancy, 0)
+        self.state.expire(104.)
+        self.assertFalse(self.state.view().decision_is_current)
+        self.assertEqual(self.state.view().decision_sequence, 2)
+
     def test_nonoverlap_reset_and_last_completed_decision_remains_while_next_fills(self):
         first = self.feed([observation(0, -10.)] * 7)
         second = self.feed([observation(1, -30.)] * 6, start=100.7)

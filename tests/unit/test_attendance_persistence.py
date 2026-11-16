@@ -52,11 +52,11 @@ class AttendancePersistenceTests(unittest.TestCase):
     def test_schema_version_tables_foreign_keys_and_default_journal(self):
         for _ in range(2):
             with self.db.transaction() as connection:
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
                 self.assertEqual(connection.execute("PRAGMA foreign_keys").fetchone()[0], 1)
                 self.assertEqual(connection.execute("PRAGMA busy_timeout").fetchone()[0], 5000)
                 self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "delete")
-                tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
                 self.assertEqual(tables, {"participants", "attendance_sessions", "attendance_records", "device_settings"})
         self.assertEqual(self.settings.get(), DeviceSettings("dark", 30))
 
@@ -75,10 +75,10 @@ class AttendancePersistenceTests(unittest.TestCase):
     def test_future_version_is_rejected_without_erasing_content(self):
         self.participants.add("p001", NOW)
         with closing(sqlite3.connect(self.path)) as connection:
-            connection.execute("PRAGMA user_version=2")
-        with self.assertRaisesRegex(ValueError, "schema version 2"):
+            connection.execute("PRAGMA user_version=4")
+        with self.assertRaisesRegex(ValueError, "schema version 4"):
             self.db.initialize()
-        with self.assertRaisesRegex(ValueError, "schema version 2"):
+        with self.assertRaisesRegex(ValueError, "schema version 4"):
             self.participants.list()
         with closing(sqlite3.connect(self.path)) as connection:
             self.assertEqual(connection.execute("SELECT person_id FROM participants").fetchone()[0], "p001")
@@ -346,7 +346,7 @@ class AttendancePersistenceTests(unittest.TestCase):
         def observed_connection():
             with original() as connection:
                 def trace(sql):
-                    if sql.startswith("SELECT closed_at FROM attendance_sessions"):
+                    if sql.startswith("SELECT closed_at"):
                         checked.set()
                         proceed.wait(3)
                 connection.set_trace_callback(trace)
@@ -369,7 +369,7 @@ class AttendancePersistenceTests(unittest.TestCase):
 
     def test_domain_models_have_only_minimal_nonbiometric_fields(self):
         self.assertEqual([f.name for f in fields(Participant)], ["person_id", "created_at"])
-        self.assertEqual([f.name for f in fields(AttendanceSession)], ["id", "name", "opened_at", "closed_at"])
+        self.assertEqual([f.name for f in fields(AttendanceSession)], ["id", "name", "opened_at", "closed_at", "activation_revision", "session_date"])
         self.assertEqual([f.name for f in fields(AttendanceRecord)], ["id", "person_id", "attendance_session_id", "registered_at"])
         self.assertEqual([f.name for f in fields(DeviceSettings)], ["theme", "standby_timeout_seconds"])
 
