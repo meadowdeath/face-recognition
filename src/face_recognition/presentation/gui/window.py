@@ -112,7 +112,9 @@ class KioskWindow(QMainWindow):
             nav.setObjectName("nav")
             side.addWidget(nav)
         side.addStretch()
-        side.addWidget(label("DEMOSTRACIÓN\nSin cámara ni registros reales", "muted", True))
+        self.mode_label = label("MODO EN VIVO\nSin registro de asistencia" if self.live_mode else
+                                "DEMOSTRACIÓN\nSin cámara ni registros reales", "muted", True)
+        side.addWidget(self.mode_label)
         body.addWidget(sidebar)
         self.stack = QStackedWidget()
         body.addWidget(self.stack, 1)
@@ -120,7 +122,8 @@ class KioskWindow(QMainWindow):
         status.setFixedHeight(36)
         row = QHBoxLayout(status)
         row.setContentsMargins(16, 0, 16, 0)
-        self.system_status = label("● Interfaz lista · Demo", "success")
+        self.system_status = label("● Interfaz lista · En vivo" if self.live_mode else
+                                   "● Interfaz lista · Demo", "success")
         row.addWidget(self.system_status)
         row.addStretch()
         self.date_label, self.time_label = QLabel(), QLabel()
@@ -378,7 +381,7 @@ class KioskWindow(QMainWindow):
             self.inactivity_timer.start(self.standby_timeout_seconds * 1000)
 
     def set_face_present(self, present):
-        """Explicit presence input for simulation and future recognition events."""
+        """Explicit presence input from demonstration controls or live recognition."""
         if self.lifecycle_state is not LifecycleState.ATTENDANCE:
             return
         present = bool(present)

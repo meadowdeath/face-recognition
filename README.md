@@ -5,7 +5,8 @@
 The optional PyQt5 Widgets interface defaults to a demonstration independent of
 camera, model and dataset assets. It provides nine persistent screens: standby, attendance,
 demonstration PIN access, administrator dashboard, sessions, records, export,
-system status and settings. All displayed records and diagnostics are fictional.
+system status and settings. Records, export controls and system-status samples
+remain fictional; live recognition debug metrics describe the running pipeline.
 The demonstration PIN is **123456**; this is navigation scaffolding, not security.
 
 Windows development (native Qt backend, 800 × 480 window):
@@ -101,6 +102,9 @@ simulation controls are hidden in live mode. Accepted temporal identities displa
 `Identidad reconocida` and the technical ID; rejected decisions display `Persona
 no reconocida` without the SVM candidate. Recognition never means attendance has
 been registered. Ordinary mode hides technical diagnostics.
+The sidebar and bottom bar identify live mode without claiming that attendance
+is recorded. Administrative PIN access, temporary sessions and sample records
+remain explicitly identified as demonstration functionality.
 
 One Qt worker loads and fully validates the trusted bundle once, retaining it
 across activations. It owns camera acquisition, asynchronous MediaPipe, pose
@@ -118,9 +122,8 @@ configuration; only lores is consumed here. Existing stride-aware YUV420-to-RGB
 conversion crops padding; OpenCV BGR frames resize/convert to RGB using the same
 preprocessing helper. `--preview-fps` limits image generation and rendering
 (default 15 FPS; actual display rate also depends on the existing coalesced GUI
-refresh cadence). Each
-published QImage copies its pixels into Qt-owned storage; QPixmap creation and
-aspect-preserving scaling occur only on the GUI thread. There is no DRM preview,
+refresh cadence). Each published QImage copies its pixels into Qt-owned storage;
+QPixmap creation and aspect-preserving scaling occur only on the GUI thread. There is no DRM preview,
 OpenCV window, zero-copy assumption or extra preview backend inside EGLFS.
 `--preview-width/height` configure acquisition/main stream; the embedded preview
 still uses the inference resolution. The static positioning guide remains visible.
@@ -153,11 +156,12 @@ Exit stops activation immediately and keeps Qt alive until the worker releases
 resources and joins. Stop flags are directly thread-safe, including during a
 blocking capture loop. Native camera/loader calls cannot be forcibly interrupted;
 cleanup waits for them to return, so a hung driver may delay final exit. No unsafe
-thread termination is used. No Pi camera, EGLFS preview throughput or integrated
-performance has been validated by the automated tests. On-device validation should
-compare debug metrics with the standalone CLI using identical camera settings,
-test session closure/Admin/Standby/reactivation and shutdown, and observe CPU/RAM.
-Compare callback latency with callback latency, rather than with total recognition
+thread termination is used. Manual Raspberry Pi 3B+ validation passed all 17
+functional acceptance checks. The operator confirmed acceptable recognition
+throughput, memory consumption, temperature and effective multicore execution.
+Automated tests use synthetic fixtures and do not measure hardware performance.
+For future on-device comparisons, use identical camera settings and compare
+callback latency with callback latency, rather than with total recognition
 latency. Touchscreen deployment remains separate work.
 
 Operational facial dataset capture, pose-feature processing, selected-model

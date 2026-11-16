@@ -139,6 +139,8 @@ class GuiRecognitionTests(unittest.TestCase):
 
     def test_model_loaded_once_off_gui_thread_and_session_lifecycle_gates_camera(self):
         self.start(orientation="rotate180")
+        self.assertEqual(self.window.mode_label.text(), "MODO EN VIVO\nSin registro de asistencia")
+        self.assertEqual(self.window.system_status.text(), "● Interfaz lista · En vivo")
         self.wait_for(lambda: self.integration.ready)
         self.assertEqual(len(self.components.loads), 1)
         self.assertNotEqual(self.components.loads[0], get_ident())
