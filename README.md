@@ -2,8 +2,8 @@
 
 ## Attendance kiosk interface and lifecycle
 
-The optional PyQt5 Widgets interface runs independently of camera, model and
-dataset assets. It provides nine persistent screens: standby, attendance,
+The optional PyQt5 Widgets interface defaults to a demonstration independent of
+camera, model and dataset assets. It provides nine persistent screens: standby, attendance,
 demonstration PIN access, administrator dashboard, sessions, records, export,
 system status and settings. All displayed records and diagnostics are fictional.
 The demonstration PIN is **123456**; this is navigation scaffolding, not security.
@@ -30,7 +30,7 @@ Escape closes the development application. Dark Amethyst is the default theme;
 Settings → Appearance (`Ajustes → Apariencia`) switches all existing widgets to
 Light Lavender immediately. Appearance and standby timeout live only in memory.
 One recurring timer updates the date/time; one single-shot timer handles
-Attendance inactivity. There is no hardware polling, worker or recognition load.
+Attendance inactivity. Demonstration mode starts no worker or recognition load.
 
 The window distinguishes `LifecycleState.STANDBY`, `ATTENDANCE`, `ADMIN_LOGIN`,
 `ADMIN` and terminal `SHUTDOWN` from its nine visible pages. All administrative
@@ -48,30 +48,107 @@ Returning to Attendance or Standby clears demo authentication/PIN. Exit retains
 the themed confirmation; cancellation keeps Admin active, and closing stops both
 timers and announces shutdown. Standby never suspends the OS or display.
 
-Future integration can read `window.lifecycle_state` for the initial state and
-connect `window.lifecycle_changed` (enum) and `window.attendance_active_changed`
-(boolean). These report Attendance entry/exit, Standby and beginning shutdown.
-Feed presence through `window.set_face_present(bool)` on the GUI thread. Lifecycle
-activity is not permission to start recognition: the next phase must also require
-an open attendance session. This phase creates no hardware controller.
-
-Attendance's visual-state selector and export's USB selector demonstrate the
-required states. Session, export, PIN-change, brightness, clock and power
-controls are visual placeholders with no operational actions. There is no real
-authentication, persistence, export, camera preview or recognition integration.
-Touchscreen/stylus deployment and integrated Raspberry performance remain
-future work; static offscreen rendering does not validate integrated throughput.
+`window.lifecycle_changed` (enum) and `window.attendance_active_changed` (boolean)
+announce lifecycle changes. Presence enters through `window.set_face_present(bool)`
+on the GUI thread; repeated absence is idempotent and cannot postpone standby.
+The session page opens/closes an explicitly temporary, in-memory attendance
+session. Startup has no open session; this setting never persists or registers
+attendance. Export, PIN-change, brightness, clock and power controls remain visual
+placeholders. There is no real authentication, attendance persistence or export.
 
 Optional offscreen checks (skip automatically if PyQt5 is absent):
 
 ```powershell
 $env:QT_QPA_PLATFORM="offscreen"
-python -m unittest tests.unit.test_kiosk_gui
+python -m unittest tests.unit.test_kiosk_gui tests.unit.test_gui_recognition
 ```
 
 GUI code is contained in `presentation/gui`: `window.py` owns screens and
 navigation, `themes.py` owns shared palette/style definitions, and `__main__.py`
-starts the application. It imports no recognition or camera components.
+starts the application. Only explicit live mode imports `recognition.py`, which
+coordinates the existing recognition core with Qt. Demonstration mode imports no
+camera, MediaPipe, NumPy or scikit-learn components.
+
+### Live kiosk recognition
+
+`--model-dir` opts into live recognition. The same camera/model options as the
+standalone live CLI are available, including default **480 × 270** inference,
+optional main-stream dimensions, landmarker asset, orientation and absence timeout.
+There are no threshold, classifier or temporal overrides.
+
+Windows PowerShell (native Qt):
+
+```powershell
+$env:PYTHONPATH="src"
+python -m face_recognition.presentation.gui --windowed `
+  --camera-backend opencv --camera-index 0 `
+  --model-dir "..\face-recognition-data\v3\models\open_set_model_v3" --debug
+```
+
+Raspberry Pi (existing system Qt/EGLFS):
+
+```bash
+QT_QPA_PLATFORM=eglfs PYTHONPATH=src python -m face_recognition.presentation.gui \
+  --camera-backend picamera2 \
+  --model-dir "../face-recognition-data/v3/models/open_set_model_v3" \
+  --orientation rotate180 --debug
+```
+
+Open Admin with the demonstration PIN, open a temporary session under `Sesiones`,
+then return to `Asistencia`. Capture is eligible only in Attendance with an open
+session and a ready backend. Without a session the camera remains closed. The
+simulation controls are hidden in live mode. Accepted temporal identities display
+`Identidad reconocida` and the technical ID; rejected decisions display `Persona
+no reconocida` without the SVM candidate. Recognition never means attendance has
+been registered. Ordinary mode hides technical diagnostics.
+
+One Qt worker loads and fully validates the trusted bundle once, retaining it
+across activations. It owns camera acquisition, asynchronous MediaPipe, pose
+features and the existing `LiveOpenSetRecognition` pipeline. Each activation
+creates a fresh detector and temporal stream. Standby, Admin and session closure
+stop processing and release the camera/detector while retaining the model.
+Generation checks reject late results. Partial initialization and capture errors
+release resources and show a generic Spanish error; there is no rapid retry loop.
+Leaving and reentering Attendance permits a new capture attempt. Model failures
+require restarting after correcting the trusted assets/runtime.
+
+The Qt preview deliberately reuses the **low-resolution inference frame**, not a
+second camera read. Picamera2 keeps its existing RGB888 main/YUV420 lores
+configuration; only lores is consumed here. Existing stride-aware YUV420-to-RGB
+conversion crops padding; OpenCV BGR frames resize/convert to RGB using the same
+preprocessing helper. At most about 15 images/s are converted for preview. Each
+published QImage copies its pixels into Qt-owned storage; QPixmap creation and
+aspect-preserving scaling occur only on the GUI thread. There is no DRM preview,
+OpenCV window, zero-copy assumption or extra preview backend inside EGLFS.
+`--preview-width/height` configure acquisition/main stream; the embedded preview
+still uses the inference resolution. The static positioning guide remains visible.
+
+A single replaceable packet holds the latest preview/result, with coalesced Qt
+notifications and a single-shot refresh timer. Slow rendering drops intermediate
+packets rather than queuing frames. MediaPipe still admits one inference at a
+time, skips busy submissions and consumes each completion timestamp once. No
+recognition mathematics, frozen threshold or seven-observation policy changes.
+Fresh detector faces, including UNKNOWN and invalid-pose faces, signal presence;
+stale snapshots expire under the existing absence timeout. Repeated empty results
+do not restart inactivity. All image/landmark/feature processing is in memory only.
+
+Debug text distinguishes camera reads/s, displayed preview images/s, MediaPipe
+completions/s and valid recognition observations/s. It shows MP submission-to-
+callback latency separately from submission-to-V3 observation latency, plus window
+occupancy, busy skips, candidate, last completed temporal score and threshold.
+These are not probabilities; observation latency excludes subsequent GUI rendering.
+Metrics retain the existing approximately one-second measurement interval.
+
+Exit stops activation immediately and keeps Qt alive until the worker releases
+resources and joins. Stop flags are directly thread-safe, including during a
+blocking capture loop. Native camera/loader calls cannot be forcibly interrupted;
+cleanup waits for them to return, so a hung driver may delay final exit. No unsafe
+thread termination is used. No Pi camera, EGLFS preview throughput or integrated
+performance has been validated by the automated tests. On-device validation should
+compare debug metrics with the standalone CLI using identical camera settings,
+test session closure/Admin/Standby/reactivation and shutdown, and observe CPU/RAM.
+Compare callback latency with callback latency, rather than with total recognition
+latency. Touchscreen deployment remains separate work.
 
 Operational facial dataset capture, pose-feature processing, selected-model
 construction and single-face open-set recognition on Windows/OpenCV and
