@@ -494,6 +494,121 @@ session/context variation and harder-to-reject UNKNOWN identities remain known
 limitations. No explicit lighting labels exist. Do not retune frozen model
 versions from archived final results.
 
+## Attendance persistence foundation
+
+Standard-library `sqlite3` provides local storage without an ORM, server or new
+dependency. This is a repository API only: the GUI still uses temporary sessions,
+demonstration records/settings and the demonstration PIN. Recognition results
+never write attendance automatically. Importing modules or starting the GUI does
+not create or open a database.
+
+Supply an explicit database path outside the source repository, biometric dataset
+and model bundle. A possible future Linux location is
+`~/.local/share/face-recognition/attendance.sqlite3`; no production location is
+created automatically. With `db_path` supplied by the caller:
+
+```python
+from face_recognition.infrastructure.persistence.attendance_database import AttendanceDatabase
+from face_recognition.infrastructure.persistence.attendance_repositories import SQLiteDeviceSettingsRepository
+
+database = AttendanceDatabase(db_path)
+database.initialize()
+settings = SQLiteDeviceSettingsRepository(database).get()
+```
+
+Initialization creates schema **1** (`PRAGMA user_version`) transactionally and
+inserts the singleton defaults once (`dark`, 30 seconds). Reinitialization preserves
+existing data/preferences. Future versions, nonempty unversioned databases and
+incomplete schemas fail explicitly; no reset, destructive recovery or migration
+framework exists. Failed creation rolls back all schema statements; an empty
+database file/private directory may remain and can be initialized again.
+
+| Table | Columns and principal constraints |
+| --- | --- |
+| `participants` | `person_id TEXT PRIMARY KEY NOT NULL`, `created_at TEXT NOT NULL` |
+| `attendance_sessions` | `id INTEGER PRIMARY KEY`, nonempty `name`, `opened_at NOT NULL`, nullable `closed_at >= opened_at` |
+| `attendance_records` | `id INTEGER PRIMARY KEY`, `person_id NOT NULL` FK, `attendance_session_id NOT NULL` FK, `registered_at NOT NULL`; unique `(attendance_session_id, person_id)` |
+| `device_settings` | `id INTEGER PRIMARY KEY CHECK(id=1)`, `theme` limited to `dark/light`, integer timeout limited to `30/60/120`; both preferences NOT NULL |
+
+```mermaid
+erDiagram
+    participants ||--o{ attendance_records : "explicit deletion cascades"
+    attendance_sessions ||--o{ attendance_records : "referenced deletion restricted"
+    device_settings {
+        INTEGER id PK "singleton 1"
+        TEXT theme
+        INTEGER standby_timeout_seconds
+    }
+```
+
+An attendance session is open exactly when `closed_at IS NULL`. A partial unique
+index on the constant `1` for open rows enforces at most one open session, even
+for competing writers. Attendance IDs are independent integer IDs, unrelated to
+biometric capture names such as `session_01`. Technical participant IDs use `p`
+followed by at least three ASCII digits (for example fictional `p001`). They must
+be registered explicitly; no identity or enrollment is inferred from model output.
+
+All four domain dataclasses live in `domain.models.attendance`; they have no SQLite,
+Qt or ML dependency. The focused infrastructure repositories expose:
+
+| Repository | Operations |
+| --- | --- |
+| `SQLiteParticipantRepository` | `add`, `get`, `list`, `exists`, explicit `delete` |
+| `SQLiteAttendanceSessionRepository` | `open`, `get`, `current`, `close`, chronological `list` |
+| `SQLiteAttendanceRecordRepository` | `add`, `get`, `list_for_session`, `list_for_participant`, `list_between`, `count_for_session` |
+| `SQLiteDeviceSettingsRepository` | `get`, `update_theme`, `update_standby_timeout` |
+
+Construct repositories with the initialized `AttendanceDatabase`. Writes require
+explicit timezone-aware `datetime` arguments. Dataclasses normalize these to UTC;
+storage uses fixed microsecond ISO 8601 `YYYY-MM-DDTHH:MM:SS.ffffffZ`. Database CHECKs
+reject malformed timestamps; canonical UTC text supports chronological ordering.
+`list_between(start, end)` requires `start < end` and uses **[start, end)**. Lists
+use deterministic ID tie-breaks for equal timestamps. Presentation will handle
+local timezone conversion in a later phase.
+
+Each operation owns a short-lived connection with foreign keys enabled, the
+default 5-second busy timeout and unchanged `check_same_thread` enforcement. No
+connections are shared between threads. Writes use `BEGIN IMMEDIATE`: session
+validation and attendance insertion hold one write reservation, so concurrent
+closure/deletion cannot slip between them. Reads use short consistent transactions.
+Successful operations commit; failures roll back; connections always close.
+
+`records.add(...)` returns `(record, created)`. A duplicate in an open session
+returns the original record and `False`, preserving its timestamp. Closed sessions
+reject registration, including repeated requests. No `INSERT OR REPLACE` is used.
+The existing unique index serves session lookups/counts; additional indexes serve
+participant/time and timestamp-range queries. There is no duplicate session index.
+
+Deleting a participant explicitly cascades their attendance records in the same
+transaction. Session deletion is restricted while records reference it; closing
+never deletes history. Missing mutation targets raise `LookupError`; invalid input,
+duplicates, closed-session writes and incompatible versions raise `ValueError`.
+`get` methods return `None` when absent. Storage, corruption and locking errors
+raise `AttendancePersistenceError` with the original SQLite exception chained.
+
+The default **DELETE rollback journal** is retained; short, low-frequency writes
+can wait for readers, and competing writers serialize. No WAL, connection pool,
+database thread or automatic backup is added. New files use POSIX mode `0600` and
+new directories `0700`, subject to the caller's umask; existing parent permissions
+are not changed. On Windows, access protection depends on filesystem ACLs. SQLite
+is **not encrypted at rest**. Git ignores database files and their sidecars/backups;
+keep any differently named copies outside Git as well.
+
+Synthetic persistence checks create temporary databases only:
+
+```bash
+PYTHONPATH=src python -m unittest tests.unit.test_attendance_persistence
+```
+
+Pseudonymous attendance data is not anonymous and a participant row does not prove
+consent. The schema stores no names, identity mappings, biometric payloads, scores,
+unknown-face events or credentials. Before real collection, review authorization,
+retention, withdrawal and deletion obligations, including the project's
+**December 31, 2026 biometric-processing deadline**. This foundation does not
+authorize indefinite retention of participant-related records or trained artifacts.
+SQL deletion is not secure erasure of storage pages, journals, backups or flash.
+No real collection, withdrawal workflow, retention job or export is implemented.
+
 ## Privacy
 
 Raw landmarks, processed features, trained selectors/scalers/SVMs, covariance
@@ -501,5 +616,6 @@ references and model bundles are sensitive biometric-derived artifacts. Keep
 all generated data and bundles local and outside Git. Existing `.gitignore`
 protections for datasets, `models/`, `*.joblib`, `*.npz`, MediaPipe assets and
 secrets remain. Do not put participant names, raw payloads, individual predictions
-or scores in documentation. No attendance database, roster or recognition history
-is implemented.
+or scores in documentation. The SQLite foundation above is not connected to the
+GUI or recognition: operational attendance collection, a roster and recognition
+history are not implemented.
