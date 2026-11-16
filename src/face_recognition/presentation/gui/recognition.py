@@ -182,6 +182,7 @@ class RecognitionIntegration(QObject):
         self.backend_error = self.activation_error = ""
         self.generation = self.image_sequence = 0
         self.session_id = None
+        self.session_revision = None
         self._shown = 0
         self._rate_start = monotonic()
         self.preview_fps = 0.
@@ -211,9 +212,11 @@ class RecognitionIntegration(QObject):
             self.activation_error = ""
         want = attendance and w.session_open and self.ready and not self.closing and not self.activation_error
         session_id = w.attendance_session_id
-        if bool(want) != self.active or (want and session_id != self.session_id):
+        session_revision = w.attendance_activation_revision
+        if bool(want) != self.active or (want and (session_id, session_revision) != (self.session_id, self.session_revision)):
             self.active = bool(want)
             self.session_id = session_id
+            self.session_revision = session_revision
             self.generation = self.worker.set_active(self.active)
             self.refresh.stop()
             self.worker.take_latest()
@@ -226,7 +229,8 @@ class RecognitionIntegration(QObject):
                 w.preview_image.setText("Vista previa desactivada")
             w.set_face_present(False)
             if w.attendance is not None:
-                w.attendance.begin_activation(self.generation, self.session_id if self.active else None)
+                w.attendance.begin_activation(self.generation, self.session_id if self.active else None,
+                                              self.session_revision if self.active else None)
         if not attendance: return
         if w.attendance is not None and w.attendance.service is None:
             w.show_live_status("No fue posible registrar la asistencia", w.attendance.initialization_error, "error")
@@ -257,7 +261,8 @@ class RecognitionIntegration(QObject):
         view = packet.view
         now = monotonic()
         handled = w.attendance is not None and w.attendance.handle_live(
-            view, self.generation, self.session_id, packet.presence, now, self.options.absence_timeout)
+            view, self.generation, self.session_id, packet.presence, now, self.options.absence_timeout,
+            activation_revision=self.session_revision)
         if packet.generation != self.generation:
             return  # A database-authoritative session change invalidated this packet.
         if handled:

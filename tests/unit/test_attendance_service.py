@@ -65,15 +65,15 @@ class AttendanceServiceTests(unittest.TestCase):
         self.people.add('p001', self.now)
         opened = self.service.open_session('Synthetic')
         add = self.records.add
-        def close_then_add(*args):
+        def close_then_add(*args, **kwargs):
             self.service.close_session(opened.id)
-            return add(*args)
+            return add(*args, **kwargs)
         with patch.object(self.records, 'add', side_effect=close_then_add):
             self.assertIs(self.service.register('p001', opened.id).outcome, Outcome.NO_SESSION)
         opened = self.service.open_session('Synthetic two')
-        def delete_then_add(*args):
+        def delete_then_add(*args, **kwargs):
             self.people.delete('p001')
-            return add(*args)
+            return add(*args, **kwargs)
         with patch.object(self.records, 'add', side_effect=delete_then_add):
             self.assertIs(self.service.register('p001', opened.id).outcome, Outcome.UNREGISTERED)
         self.assertEqual(self.service.session_count(opened.id), 0)

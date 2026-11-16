@@ -540,7 +540,8 @@ duplicate/invalid identifiers and never inspect models to discover participants.
 There are no names, identity mappings or enrollment operations. Registration of
 an identifier does not establish consent.
 
-Use PIN `123456`, enter `Sesiones`, supply a nonempty name and open a session.
+Use PIN `123456`, enter `Sesiones`, supply a nonempty name and select
+`Abrir o reanudar sesión`.
 Return to `Asistencia`: select `p001 · Aceptar` and click `Simular decisión`.
 Repeat for duplicate attendance; select `UNKNOWN · Rechazar` for no write, or
 `p003 · Aceptar` to test an unregistered identifier (leave p003 unregistered).
@@ -548,15 +549,43 @@ Simulated decisions use the same service and real SQLite constraints as live
 decisions, but no facial data. The controls stay hidden in live mode.
 
 Persistent sessions have authoritative database-generated IDs, names, opening
-times, open/closed state and counts. Camera activation still requires Attendance
+times, open/closed state, activation revisions and counts. Camera activation still requires Attendance
 and an open session; opening in Admin does not start capture. Closing preserves
 history, stops eligibility and clears transient results. Exiting the application
 does **not** close a session. Restart restores any open session, initially in
 Standby. Temporary sessions remain available when no database is supplied.
 
+An attendance session is **one attendance event**, not a recurring course/group.
+Names are unique under a shared domain normalization: Unicode NFC, leading/trailing
+whitespace removal, internal whitespace collapse and Unicode `casefold()` (NFC
+again after folding). Display case is retained separately from the comparison
+`name_key`; accents remain meaningful (`Inglés` differs from `Ingles`). Whitespace
+controls such as tabs/newlines collapse to spaces; other control, format and
+surrogate characters are rejected. SQLite `NOCASE` is not used for this policy.
+
+A new name creates an event. Entering an existing closed name resumes that same
+event, preserving ID, original opening time, name, records and original attendance
+timestamps. Selecting an already active matching event is an idempotent success;
+it never increments the revision. A different active session prevents activation.
+Closing and then resuming changes `closed_at` back to NULL and atomically increments
+`activation_revision`. `closed_at` describes current closure state, not an audit
+history; no activation-history table is added. Use distinct names for recurring
+events, for example `Optimización - 2026-11-16` and `Optimización - 2026-11-23`.
+Reusing a name intentionally resumes the same event and existing attendance
+continues to count as a duplicate.
+
+The compact stored-session selector shows name, state and count; its underlying
+value is the immutable database ID. `Reanudar sesión seleccionada` resumes a
+closed selection only when no other event is active. `Renombrar sesión` opens a
+themed confirmation dialog, is available only for closed selections and rejects
+names owned by another session. Display-case changes with the same key are allowed.
+Renaming preserves IDs/history and refreshes selectors/filter names. The session
+controls scroll vertically on the 800 × 480 display. Counts are loaded with one
+grouped query rather than one query per session; refresh preserves selection IDs.
+
 `AttendanceService` coordinates session operations, participant eligibility,
-duplicate results, counts and range queries over the existing repositories.
-SQLite schema version **1** is unchanged. New registrations show `Asistencia
+duplicate results, grouped counts and record filters over the existing repositories.
+SQLite schema version **2** preserves all four business tables. New registrations show `Asistencia
 registrada`; duplicates show `Asistencia ya registrada` with the **original**
 registration time. Missing participants, closed sessions and storage failures
 produce distinct Spanish outcomes, never false success or temporary fallback.
@@ -566,17 +595,27 @@ Attendance, losing presence or changing session clears it.
 Only completed temporal windows carry a decision sequence and completion time.
 The sequence changes once per window, independently of general view revisions.
 The GUI consumes it at most once per activation, requires a current valid face
-segment, rejects expired evidence and binds it to the active session ID. No-face
+segment, rejects expired evidence and binds it to the active session ID **and
+activation revision**, as well as the recognition worker generation. No-face
 or invalid-pose interruptions invalidate cached attendance evidence while leaving
 the existing recognition grace-period display unchanged. Rejected decisions and
 individual frame candidates never write. Coalesced packets may skip intermediate
 decisions; no unbounded decision/frame queue or per-frame database query is added.
 The existing atomic repository insertion remains the final authority on session
-validity and uniqueness. No recognition mathematics or fitted artifacts change.
+validity, expected revision and uniqueness in the same `BEGIN IMMEDIATE`
+transaction. A close/resume of the same ID cannot admit a pending request from its
+old activation. Revision changes reset the worker generation, temporal stream and
+transient confirmation state. No recognition mathematics or fitted artifacts change.
 
-`Registros` reads SQLite on entry or date changes, including closed-session
-history. It shows participant, session, local registration time and total/empty
-state. Records and session names are queried in batches, not per table cell.
+`Registros` reads SQLite on entry or filter changes, including closed-session
+history. Its session selector defaults to `Todas las sesiones`; its date filter
+defaults to checked with today's local date. Combine session and date, or disable
+the date filter for a selected session's full history. Without both a session and
+a date restriction, the UI requests a selection and the repository refuses an
+unrestricted query. Results show participant, current session name, local date
+and time, and total/empty state, in chronological order. Filtering uses IDs,
+never mutable display names. Records and session names are queried in batches,
+not per table cell.
 The selected local day's start and the **next local day's start** are resolved
 independently by Qt's system timezone and converted to UTC for `[start,end)`;
 days spanning offset changes need not be 24 hours. Stored datetimes remain aware UTC.
@@ -610,6 +649,7 @@ Focused Raspberry Pi validation, synthetic fixtures only (no training tests):
 ```bash
 QT_QPA_PLATFORM=offscreen PYTHONPATH=src python -m unittest \
   tests.unit.test_attendance_persistence tests.unit.test_attendance_service \
+  tests.unit.test_attendance_sessions \
   tests.unit.test_gui_attendance tests.unit.test_kiosk_gui \
   tests.unit.test_gui_recognition tests.unit.test_live_open_set_recognition \
   tests.integration.test_live_open_set_cli
@@ -617,8 +657,10 @@ QT_QPA_PLATFORM=offscreen PYTHONPATH=src python -m unittest \
 
 Phase 4's 27 persistence checks passed on Raspberry Pi, including POSIX
 permissions. Its complete Pi suite was manually interrupted after about 20
-minutes; it is **not** recorded as a full-suite pass. Phase 5 hardware validation
-remains manual. Windows development should also run `python -m unittest discover
+minutes; it is **not** recorded as a full-suite pass. The initial Phase 5 focused
+suite (114 checks) and 18 functional acceptance checks subsequently passed on Pi.
+The session-resumption/migration extensions still require manual Pi validation.
+Windows development should also run `python -m unittest discover
 -s tests` with `PYTHONPATH=src` and the Qt offscreen backend.
 
 ## SQLite schema and privacy
@@ -643,17 +685,29 @@ database.initialize()
 settings = SQLiteDeviceSettingsRepository(database).get()
 ```
 
-Initialization creates schema **1** (`PRAGMA user_version`) transactionally and
-inserts the singleton defaults once (`dark`, 30 seconds). Reinitialization preserves
-existing data/preferences. Future versions, nonempty unversioned databases and
-incomplete schemas fail explicitly; no reset, destructive recovery or migration
-framework exists. Failed creation rolls back all schema statements; an empty
-database file/private directory may remain and can be initialized again.
+Initialization uses `PRAGMA user_version`: version 0 creates the latest schema
+**2** directly; version 1 migrates transactionally; version 2 validates and reopens
+without modifying data. Singleton defaults (`dark`, 30 seconds) are inserted only
+for a new database. Unsupported versions, nonempty unversioned databases and
+incomplete/weakened schemas fail explicitly; no reset or destructive recovery is
+performed. Failed new creation may leave an empty database file/private directory.
+
+The v1→v2 migration validates the genuine v1 schema, computes all normalized keys
+and checks collisions **before** altering columns. It uses `ALTER TABLE` without
+table replacement or disabling foreign keys. It backfills keys and revision 1,
+installs the same uniqueness/validity constraints as new databases, checks integrity
+and foreign keys, then sets version 2 and commits. IDs, stored display names,
+timestamps, participants, records, settings and file permissions are preserved.
+Any failure rolls back schema/data/version changes. Equivalent-name collisions or
+invalid old names require deliberate, controlled administrative maintenance of the
+v1 database before retrying. No sessions are automatically merged, renamed, deleted
+or discarded, and changing the version number is not a repair. No destructive
+maintenance UI is provided under the demonstration PIN.
 
 | Table | Columns and principal constraints |
 | --- | --- |
 | `participants` | `person_id TEXT PRIMARY KEY NOT NULL`, `created_at TEXT NOT NULL` |
-| `attendance_sessions` | `id INTEGER PRIMARY KEY`, nonempty `name`, `opened_at NOT NULL`, nullable `closed_at >= opened_at` |
+| `attendance_sessions` | `id INTEGER PRIMARY KEY`, nonempty `name`, unique nonempty `name_key`, `opened_at NOT NULL`, nullable `closed_at >= opened_at`, positive integer `activation_revision` (default 1) |
 | `attendance_records` | `id INTEGER PRIMARY KEY`, `person_id NOT NULL` FK, `attendance_session_id NOT NULL` FK, `registered_at NOT NULL`; unique `(attendance_session_id, person_id)` |
 | `device_settings` | `id INTEGER PRIMARY KEY CHECK(id=1)`, `theme` limited to `dark/light`, integer timeout limited to `30/60/120`; both preferences NOT NULL |
 
@@ -691,7 +745,7 @@ storage uses fixed microsecond ISO 8601 `YYYY-MM-DDTHH:MM:SS.ffffffZ`. Database 
 reject malformed timestamps; canonical UTC text supports chronological ordering.
 `list_between(start, end)` requires `start < end` and uses **[start, end)**. Lists
 use deterministic ID tie-breaks for equal timestamps. Presentation will handle
-local timezone conversion in a later phase.
+local timezone conversion in the GUI.
 
 Each operation owns a short-lived connection with foreign keys enabled, the
 default 5-second busy timeout and unchanged `check_same_thread` enforcement. No
@@ -700,9 +754,24 @@ validation and attendance insertion hold one write reservation, so concurrent
 closure/deletion cannot slip between them. Reads use short consistent transactions.
 Successful operations commit; failures roll back; connections always close.
 
-`records.add(...)` returns `(record, created)`. A duplicate in an open session
+Session repositories also provide `get_by_name`, atomic `open_or_resume`, `resume`,
+`rename`, and grouped `list_with_counts`. Strict `open` still rejects existing
+names. The service exposes these operations as focused outcomes (created, resumed,
+already active, conflicting active session, duplicate name, missing session, failure).
+The repository generates the canonical Unicode key; database uniqueness and
+INSERT/UPDATE triggers reject missing/empty/NUL-containing keys. An empty column
+default permits safe ALTER backfill but is rejected on every subsequent write.
+Reopening also validates that stored keys match the domain normalization policy.
+
+`records.add(..., expected_activation_revision=revision)` returns `(record, created)`.
+The revision must come from the activation that produced the decision; it must not
+be refreshed to the latest revision to retry a stale request. For existing initial-
+activation callers, omission means **1**, not "whichever activation is current".
+A duplicate in an open session with the correct revision
 returns the original record and `False`, preserving its timestamp. Closed sessions
-reject registration, including repeated requests. No `INSERT OR REPLACE` is used.
+and mismatched revisions reject registration, including repeated requests. The
+filtered `query` accepts a session, a half-open UTC range, or both; it refuses
+unrestricted all-session history. No `INSERT OR REPLACE` is used.
 The existing unique index serves session lookups/counts; additional indexes serve
 participant/time and timestamp-range queries. There is no duplicate session index.
 

@@ -2,11 +2,25 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 import re
+import unicodedata
 
 
 class AttendancePersistenceError(RuntimeError):
     """Unavailable, locked, corrupt or incompatible attendance storage."""
+
+
+class SessionConflictError(ValueError):
+    """An active session prevents the requested operation."""
+
+
+class DuplicateSessionNameError(ValueError):
+    """Another session already owns the normalized name."""
+
+
+class StaleSessionActivationError(ValueError):
+    """The requested session activation has ended."""
 
 
 def validate_person_id(value: str) -> str:
@@ -24,10 +38,22 @@ def utc_datetime(value: datetime) -> datetime:
         raise ValueError("Timestamp cannot be represented in UTC") from exc
 
 
-def session_name(value: str) -> str:
+def normalize_session_name(value: str) -> tuple[str, str]:
+    """Return NFC display name and NFC casefold key; whitespace controls collapse.
+
+    Non-whitespace control/format/surrogate characters are forbidden. Accents
+    remain significant. The same policy applies to repository writes and migration.
+    """
     if not isinstance(value, str) or not value.strip():
         raise ValueError("Attendance session name must not be empty")
-    return value.strip()
+    if any(unicodedata.category(c).startswith('C') and not c.isspace() for c in value):
+        raise ValueError("Attendance session name contains invalid control characters")
+    display = unicodedata.normalize('NFC', ' '.join(value.split()))
+    return display, unicodedata.normalize('NFC', display.casefold())
+
+
+def session_name(value: str) -> str:
+    return normalize_session_name(value)[0]
 
 
 def positive_id(value: int) -> None:
@@ -51,9 +77,11 @@ class AttendanceSession:
     name: str
     opened_at: datetime
     closed_at: datetime | None = None
+    activation_revision: int = 1
 
     def __post_init__(self):
         positive_id(self.id)
+        positive_id(self.activation_revision)
         object.__setattr__(self, "name", session_name(self.name))
         object.__setattr__(self, "opened_at", utc_datetime(self.opened_at))
         if self.closed_at is not None:
@@ -64,6 +92,27 @@ class AttendanceSession:
     @property
     def is_open(self) -> bool:
         return self.closed_at is None
+
+    @property
+    def name_key(self) -> str:
+        return normalize_session_name(self.name)[1]
+
+
+class SessionOutcome(Enum):
+    CREATED = 'created'
+    RESUMED = 'resumed'
+    ALREADY_ACTIVE = 'already_active'
+    RENAMED = 'renamed'
+    CONFLICT = 'conflict'
+    DUPLICATE_NAME = 'duplicate_name'
+    MISSING = 'missing'
+    FAILED = 'failed'
+
+
+@dataclass(frozen=True)
+class SessionResult:
+    outcome: SessionOutcome
+    session: AttendanceSession | None = None
 
 
 @dataclass(frozen=True)

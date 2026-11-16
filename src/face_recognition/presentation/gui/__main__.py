@@ -39,7 +39,7 @@ def main(argv=None):
     if args.attendance_db is not None:
         from face_recognition.application.attendance_service import AttendanceService
         from face_recognition.domain.models.attendance import AttendancePersistenceError
-        from face_recognition.infrastructure.persistence.attendance_database import AttendanceDatabase
+        from face_recognition.infrastructure.persistence.attendance_database import AttendanceDatabase, AttendanceMigrationError
         from face_recognition.infrastructure.persistence.attendance_repositories import (
             SQLiteParticipantRepository, SQLiteAttendanceSessionRepository, SQLiteAttendanceRecordRepository,
         )
@@ -50,6 +50,8 @@ def main(argv=None):
             database.initialize()
             service = AttendanceService(SQLiteParticipantRepository(database),
                 SQLiteAttendanceSessionRepository(database), SQLiteAttendanceRecordRepository(database))
+        except AttendanceMigrationError:
+            error = "La migración requiere resolver nombres de sesión equivalentes o no válidos mediante mantenimiento administrativo."
         except (ValueError, AttendancePersistenceError, OSError):
             error = "No fue posible abrir la base de datos. Revisa su disponibilidad y versión."
         AttendanceIntegration(window, service,

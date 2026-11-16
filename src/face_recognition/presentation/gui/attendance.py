@@ -3,10 +3,10 @@
 from datetime import datetime, timezone
 
 from PyQt5.QtCore import QTimeZone
-from PyQt5.QtWidgets import QTableWidgetItem
+from PyQt5.QtWidgets import QDialog, QInputDialog, QTableWidgetItem
 
 from face_recognition.application.attendance_service import RegistrationOutcome, RegistrationResult
-from face_recognition.domain.models.attendance import AttendancePersistenceError
+from face_recognition.domain.models.attendance import AttendancePersistenceError, SessionOutcome
 from .window import LifecycleState
 
 PERSISTENCE_ERRORS = (AttendancePersistenceError, ValueError, LookupError, OSError)
@@ -30,6 +30,8 @@ class AttendanceIntegration:
         self.current = self.last_session = None
         self.count = 0
         self._generation = self._session_id = None
+        self._session_revision = None
+        self.summaries = ()
         self._last_sequence = 0
         self.confirmation = None
         window.attendance = self
@@ -40,6 +42,11 @@ class AttendanceIntegration:
         window.attendance_active_changed.connect(self.attendance_active_changed)
         window.presence_selector.toggled.connect(lambda present: self.clear_confirmation() if not present else None)
         window.records_date.dateChanged.connect(lambda _: self.refresh_records())
+        window.records_session.currentIndexChanged.connect(lambda _: self.refresh_records())
+        window.records_use_date.toggled.connect(lambda _: self.refresh_records())
+        window.stored_sessions.currentIndexChanged.connect(self.selection_changed)
+        window.session_resume.clicked.connect(self.resume_session)
+        window.session_rename.clicked.connect(self.rename_session)
         window.session_title.setText("Sesión de asistencia · SQLite")
         window.session_hint.setText("Persistencia local · PIN de demostración; no es control de acceso real.")
         if window.live_mode:
@@ -50,6 +57,8 @@ class AttendanceIntegration:
         if service is None:
             window.session_start.setEnabled(False)
             window.session_close.setEnabled(False)
+            window.session_resume.setEnabled(False)
+            window.session_rename.setEnabled(False)
             window.session_details.setText("Persistencia no disponible")
             window.session_hint.setText(initialization_error)
             window.session_indicator.setText("Persistencia no disponible")
@@ -63,20 +72,23 @@ class AttendanceIntegration:
         if not active:
             self.clear_confirmation()
 
-    def begin_activation(self, generation, session_id):
+    def begin_activation(self, generation, session_id, activation_revision=1):
         self._generation, self._session_id = generation, session_id
+        self._session_revision = activation_revision
         self._last_sequence = 0
         self.clear_confirmation()
 
     def apply_session(self, current, displayed, count):
         w = self.window
-        changed = w.attendance_session_id != (current.id if current else None)
+        activation = (current.id, current.activation_revision) if current else (None, None)
+        changed = (w.attendance_session_id, w.attendance_activation_revision) != activation
         self.current, self.last_session, self.count = current, displayed, count
         w.attendance_session_id = current.id if current else None
+        w.attendance_activation_revision = current.activation_revision if current else None
         w.session_open = current is not None
-        w.session_start.setEnabled(current is None)
+        w.session_start.setEnabled(True)
         w.session_close.setEnabled(current is not None)
-        w.session_name.setEnabled(current is None)
+        w.session_name.setEnabled(True)
         if displayed:
             opened = displayed.opened_at.astimezone().strftime("%d/%m/%Y %H:%M")
             state = "Abierta" if displayed.is_open else "Cerrada"
@@ -88,14 +100,42 @@ class AttendanceIntegration:
             self.clear_confirmation()
             w.session_changed.emit(w.session_open)
 
+    def refresh_selectors(self):
+        w = self.window
+        selected, filtered = w.stored_sessions.currentData(), w.records_session.currentData()
+        for combo in (w.stored_sessions, w.records_session):
+            combo.blockSignals(True)
+            combo.clear()
+        w.records_session.addItem('Todas las sesiones', None)
+        for session, count in self.summaries:
+            state = 'Abierta' if session.is_open else 'Cerrada'
+            w.stored_sessions.addItem(f'{session.name} · {state} · {count}', session.id)
+            w.records_session.addItem(session.name, session.id)
+        for combo, identifier in ((w.stored_sessions, selected), (w.records_session, filtered)):
+            index = combo.findData(identifier)
+            combo.setCurrentIndex(index if index >= 0 else (0 if combo.count() else -1))
+            combo.blockSignals(False)
+        self.selection_changed()
+
+    def selection_changed(self, *_):
+        selected = self.window.stored_sessions.currentData()
+        session = next((s for s, _ in self.summaries if s.id == selected), None)
+        self.window.session_resume.setEnabled(session is not None and not session.is_open and self.current is None)
+        self.window.session_rename.setEnabled(session is not None and not session.is_open)
+        if self.current is None and session is not None:
+            count = next(count for s, count in self.summaries if s.id == session.id)
+            self.apply_session(None, session, count)
+
     def refresh_session(self):
         if self.service is None:
             return
         try:
-            current = self.service.active_session()
-            displayed = current or self.service.latest_session()
-            count = self.service.session_count(displayed.id) if displayed else 0
+            self.summaries = self.service.session_summaries()
+            current = next((s for s, _ in self.summaries if s.is_open), None)
+            displayed = current or (self.summaries[-1][0] if self.summaries else None)
+            count = next((c for s, c in self.summaries if displayed and s.id == displayed.id), 0)
             self.apply_session(current, displayed, count)
+            self.refresh_selectors()
         except PERSISTENCE_ERRORS:
             self.window.session_hint.setText("No fue posible consultar las sesiones. Revisa la base de datos.")
 
@@ -103,9 +143,8 @@ class AttendanceIntegration:
         if self.service is None:
             return
         try:
-            current = self.service.open_session(self.window.session_name.text())
-            self.apply_session(current, current, 0)
-            self.window.session_hint.setText("Sesión abierta y guardada.")
+            result = self.service.open_or_resume_session(self.window.session_name.text())
+            self.session_result(result)
         except PERSISTENCE_ERRORS:
             self.window.session_hint.setText("No fue posible abrir la sesión. Escribe un nombre y comprueba si ya hay una abierta.")
 
@@ -113,16 +152,69 @@ class AttendanceIntegration:
         if self.service is None or self.window.attendance_session_id is None:
             return
         try:
-            closed = self.service.close_session(self.window.attendance_session_id)
+            closed = self.service.close_session(self.window.attendance_session_id,
+                                                self.window.attendance_activation_revision)
             self.apply_session(None, closed, self.count)
+            self.refresh_session()
             self.window.session_hint.setText("Sesión cerrada. Su historial se conserva.")
         except PERSISTENCE_ERRORS:
             self.window.session_hint.setText("No fue posible cerrar la sesión. Revisa su estado y la base de datos.")
+
+    def session_result(self, result):
+        messages = {
+            SessionOutcome.CREATED: 'Sesión creada correctamente.',
+            SessionOutcome.RESUMED: 'Sesión reanudada correctamente.',
+            SessionOutcome.ALREADY_ACTIVE: 'La sesión ya está activa.',
+            SessionOutcome.RENAMED: 'Sesión renombrada correctamente.',
+            SessionOutcome.CONFLICT: 'Cierra la sesión activa antes de abrir otra.',
+            SessionOutcome.DUPLICATE_NAME: 'Otra sesión ya utiliza ese nombre.',
+            SessionOutcome.MISSING: 'La sesión seleccionada ya no existe.',
+            SessionOutcome.FAILED: 'No fue posible actualizar la sesión. Revisa la base de datos.',
+        }
+        if result.session is not None:
+            # Apply successful state immediately even if a later summary read fails.
+            if result.session.is_open:
+                count = next((count for session, count in self.summaries if session.id == result.session.id), 0)
+                self.apply_session(result.session, result.session, count)
+            self.refresh_session()
+            if self.window.stack.currentWidget() is self.window.screens['records']:
+                self.refresh_records()
+        self.window.session_hint.setText(messages[result.outcome])
+
+    def resume_session(self):
+        if self.service is None or self.window.stored_sessions.currentData() is None:
+            return
+        try:
+            self.session_result(self.service.resume_session(self.window.stored_sessions.currentData()))
+        except PERSISTENCE_ERRORS:
+            self.window.session_hint.setText('No fue posible reanudar la sesión seleccionada.')
+
+    def rename_session(self):
+        identifier = self.window.stored_sessions.currentData()
+        selected = next((s for s, _ in self.summaries if s.id == identifier), None)
+        if self.service is None or selected is None or selected.is_open:
+            return
+        dialog = QInputDialog(self.window)
+        dialog.setWindowTitle('Renombrar sesión')
+        dialog.setLabelText(f'Nuevo nombre para {selected.name}:')
+        dialog.setTextValue(selected.name)
+        dialog.setOkButtonText('Guardar')
+        dialog.setCancelButtonText('Cancelar')
+        dialog.setStyleSheet(self.window.styleSheet())
+        try:
+            if dialog.exec_() == QDialog.Accepted:
+                try:
+                    self.session_result(self.service.rename_session(identifier, dialog.textValue()))
+                except PERSISTENCE_ERRORS:
+                    self.window.session_hint.setText('Nombre no válido. No se modificó la sesión.')
+        finally:
+            dialog.deleteLater()
 
     def screen_changed(self, name):
         if name in ("sessions", "attendance"):
             self.refresh_session()
         if name == "records":
+            self.refresh_session()
             self.refresh_records()
         if name == "attendance" and not self.window.live_mode:
             if self.service is None:
@@ -134,28 +226,38 @@ class AttendanceIntegration:
 
     def refresh_records(self):
         w = self.window
+        w.records_date.setEnabled(w.records_use_date.isChecked())
         w.records_table.setRowCount(0)
         if self.service is None:
             w.records_summary.setText("No fue posible consultar los registros.")
             return
         try:
-            rows = self.service.records_between(*local_day_range(w.records_date.date()))
+            session_id = w.records_session.currentData()
+            if w.records_use_date.isChecked():
+                start, end = local_day_range(w.records_date.date())
+            else:
+                start = end = None
+                if session_id is None:
+                    w.records_summary.setText('Selecciona una sesión o activa el filtro de fecha.')
+                    return
+            rows = self.service.filtered_records(session_id=session_id, start=start, end=end)
         except PERSISTENCE_ERRORS:
             w.records_summary.setText("No fue posible consultar los registros. Revisa la base de datos.")
             return
         w.records_table.setRowCount(len(rows))
         for index, (record, name) in enumerate(rows):
             w.records_table.setRowHeight(index, 44)
-            for column, value in enumerate((record.person_id, name, record.registered_at.astimezone().strftime("%H:%M:%S"))):
+            for column, value in enumerate((record.person_id, name, record.registered_at.astimezone().strftime("%d/%m/%Y %H:%M:%S"))):
                 w.records_table.setItem(index, column, QTableWidgetItem(value))
-        w.records_summary.setText(f"{len(rows)} asistencias · Fecha local seleccionada" if rows else "Sin registros para esta fecha.")
+        w.records_summary.setText(f"{len(rows)} asistencias · Filtros seleccionados" if rows else "Sin registros para estos filtros.")
 
     def register(self, person_id):
         if self.service is None:
             self.window.show_live_status("No fue posible registrar la asistencia", "Persistencia no disponible.", "error")
             return True
         try:
-            result = self.service.register(person_id, self.window.attendance_session_id)
+            result = self.service.register(person_id, self.window.attendance_session_id,
+                                           self.window.attendance_activation_revision)
         except PERSISTENCE_ERRORS:
             result = RegistrationResult(RegistrationOutcome.FAILED)
         self.confirmation = (result, person_id)
@@ -198,12 +300,14 @@ class AttendanceIntegration:
         else:
             self.register(person)
 
-    def handle_live(self, view, generation, session_id, presence, now, absence_timeout):
+    def handle_live(self, view, generation, session_id, presence, now, absence_timeout, activation_revision=1):
         if not presence or not getattr(view, 'decision_is_current', False):
             self.clear_confirmation()
         if (not self.recording_enabled or self.window.lifecycle_state is not LifecycleState.ATTENDANCE
                 or generation != self._generation or session_id != self._session_id
                 or session_id != self.window.attendance_session_id):
+            return False
+        if activation_revision != self._session_revision or activation_revision != self.window.attendance_activation_revision:
             return False
         sequence = getattr(view, 'decision_sequence', 0)
         if sequence > self._last_sequence:

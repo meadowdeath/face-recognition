@@ -25,9 +25,9 @@ from face_recognition.infrastructure.persistence.attendance_repositories import 
 AVAILABLE = importlib.util.find_spec('PyQt5') is not None
 if AVAILABLE:
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-    from PyQt5.QtCore import QDate, QTimeZone
+    from PyQt5.QtCore import QDate, QTimeZone, QTimer
     from PyQt5.QtTest import QTest
-    from PyQt5.QtWidgets import QApplication
+    from PyQt5.QtWidgets import QApplication, QScrollArea
     from face_recognition.application.live_recognition import LiveRecognitionView
     from face_recognition.presentation.gui.attendance import AttendanceIntegration, local_day_range
     from face_recognition.presentation.gui.window import KioskWindow, LifecycleState
@@ -116,7 +116,7 @@ class GuiAttendanceTests(unittest.TestCase):
         w.session_start.click()
         session_id = w.attendance_session_id
         self.assertIsNotNone(session_id)
-        self.assertFalse(w.session_start.isEnabled())
+        self.assertTrue(w.session_start.isEnabled())
         self.assertTrue(w.session_close.isEnabled())
         w.simulate_button.click()
         self.assertEqual(w.attendance_status.text(), 'Asistencia registrada')
@@ -178,7 +178,7 @@ class GuiAttendanceTests(unittest.TestCase):
         self.assertIsNone(w2.attendance_session_id)
         self.assertIn('nombre', w2.session_hint.text())
         w2.session_name.setText('Synthetic')
-        with patch.object(self.service, 'open_session', side_effect=AttendancePersistenceError('PRIVATE')):
+        with patch.object(self.service, 'open_or_resume_session', side_effect=AttendancePersistenceError('PRIVATE')):
             w2.session_start.click()
         self.assertFalse(w2.session_open)
         self.assertNotIn('PRIVATE', w2.session_hint.text())
@@ -291,6 +291,9 @@ class GuiAttendanceTests(unittest.TestCase):
                 self.app.processEvents()
                 self.assertLessEqual(page.minimumSizeHint().height(), 444, name)
                 self.assertLessEqual(page.minimumSizeHint().width(), 625, name)
+                if name == 'sessions':
+                    scroll = page.findChild(QScrollArea)
+                    self.assertLessEqual(scroll.widget().minimumSizeHint().width(), scroll.viewport().width())
         w.timeout_selector.setCurrentIndex(2)
         self.assertEqual(w.standby_timeout_seconds, 120)
         from face_recognition.infrastructure.persistence.attendance_repositories import SQLiteDeviceSettingsRepository
@@ -305,7 +308,7 @@ class GuiAttendanceTests(unittest.TestCase):
             self.assertEqual((end-start).total_seconds(), hours * 3600)
             self.assertIsNotNone(start.utcoffset())
             self.now = start
-            session = self.service.open_session('Synthetic boundary')
+            session = self.service.open_session('Synthetic boundary ' + day.toString('yyyy-MM-dd'))
             self.service.register('p001', session.id)
             self.now = end
             self.service.register('p002', session.id)
@@ -348,3 +351,139 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
                 patch.object(QApplication, 'exec_', side_effect=inspect):
             self.assertEqual(main(['--windowed', '--attendance-db', str(path)]), 0)
         self.assertEqual(path.read_bytes(), b'not sqlite')
+
+    def test_open_resume_name_selection_buttons_counts_and_restart(self):
+        w, controller = self.window()
+        w.session_name.setText('Optimización - 2026-11-16')
+        w.session_start.click()
+        identifier = w.attendance_session_id
+        self.service.register('p001', identifier, 1)
+        controller.refresh_session()
+        self.assertIn('Sesión creada correctamente', w.session_hint.text())
+        w.session_name.setText(' OPTIMIZACIÓN - 2026-11-16 ')
+        w.session_start.click()
+        self.assertEqual(w.session_hint.text(), 'La sesión ya está activa.')
+        self.assertEqual(w.attendance_activation_revision, 1)
+        self.assertFalse(w.session_resume.isEnabled())
+        self.assertFalse(w.session_rename.isEnabled())
+        w.session_name.setText('Different')
+        w.session_start.click()
+        self.assertIn('Cierra la sesión activa', w.session_hint.text())
+        self.assertEqual(w.attendance_session_id, identifier)
+        w.session_close.click()
+        self.assertTrue(w.session_resume.isEnabled())
+        self.assertTrue(w.session_rename.isEnabled())
+        w.session_resume.click()
+        self.assertEqual(w.attendance_session_id, identifier)
+        self.assertEqual(w.attendance_activation_revision, 2)
+        self.assertEqual(controller.count, 1)
+        self.assertIn('Asistencias: 1', w.session_details.text())
+        self.assertEqual(w.session_hint.text(), 'Sesión reanudada correctamente.')
+        w.session_close.click()
+        w.session_name.setText('optimización - 2026-11-16')
+        w.session_start.click()
+        self.assertEqual(w.attendance_activation_revision, 3)
+        self.assertEqual(len(self.sessions.list()), 1)
+        w.close()
+        restored, _ = self.window()
+        self.assertIs(restored.lifecycle_state, LifecycleState.STANDBY)
+        self.assertEqual(restored.attendance_session_id, identifier)
+        self.assertEqual(restored.attendance_activation_revision, 3)
+        self.assertIn('Asistencias: 1', restored.session_details.text())
+
+    def test_session_rename_dialog_confirmation_collision_and_filter_refresh(self):
+        first = self.service.open_session('First')
+        self.service.register('p001', first.id)
+        self.service.close_session(first.id)
+        other = self.service.open_session('Other')
+        self.service.close_session(other.id)
+        w, controller = self.window()
+        w.stored_sessions.setCurrentIndex(w.stored_sessions.findData(first.id))
+        w.records_session.setCurrentIndex(w.records_session.findData(first.id))
+        self.assertTrue(w.session_rename.isEnabled())
+        def respond(name, accepted):
+            dialog = self.app.activeModalWidget()
+            self.assertEqual(dialog.windowTitle(), 'Renombrar sesión')
+            self.assertEqual(dialog.textValue(), 'First')
+            self.assertEqual(dialog.styleSheet(), w.styleSheet())
+            dialog.setTextValue(name)
+            dialog.accept() if accepted else dialog.reject()
+        for name, accepted, expected in (('Cancelled', False, 'First'), ('OTHER', True, 'First'), ('Renamed', True, 'Renamed')):
+            QTimer.singleShot(0, lambda n=name, a=accepted: respond(n, a))
+            w.session_rename.click()
+            self.assertEqual(self.sessions.get(first.id).name, expected)
+        self.assertEqual(w.stored_sessions.currentData(), first.id)
+        self.assertEqual(w.records_session.currentData(), first.id)
+        self.assertEqual(w.records_session.currentText(), 'Renamed')
+        w.records_date.setDate(self.day)
+        w.authenticated = True
+        w.navigate('records')
+        self.assertEqual(w.records_table.item(0, 1).text(), 'Renamed')
+        self.assertEqual(self.records.count_for_session(first.id), 1)
+
+    def test_session_and_date_filters_full_history_and_unrestricted_guard(self):
+        first = self.service.open_session('First')
+        self.service.register('p001', first.id)
+        self.now += timedelta(days=1)
+        self.service.register('p002', first.id)
+        self.service.close_session(first.id)
+        second = self.service.open_session('Second')
+        self.service.register('p001', second.id)
+        w, controller = self.window()
+        w.authenticated = True
+        w.records_date.setDate(self.day)
+        w.navigate('records')
+        self.assertTrue(w.records_use_date.isChecked())
+        self.assertEqual(w.records_table.rowCount(), 1)
+        w.records_session.setCurrentIndex(w.records_session.findData(first.id))
+        self.assertEqual(w.records_table.rowCount(), 1)
+        w.records_date.setDate(self.day.addDays(1))
+        self.assertEqual(w.records_table.rowCount(), 1)
+        self.assertEqual(w.records_table.item(0, 0).text(), 'p002')
+        w.records_use_date.setChecked(False)
+        self.assertFalse(w.records_date.isEnabled())
+        self.assertEqual(w.records_table.rowCount(), 2)
+        self.assertIn('/', w.records_table.item(0, 2).text())
+        self.assertNotEqual(w.records_table.item(0, 2).text(), w.records_table.item(1, 2).text())
+        with patch.object(self.service, 'filtered_records', wraps=self.service.filtered_records) as query:
+            w.records_session.setCurrentIndex(0)
+            self.assertEqual(w.records_table.rowCount(), 0)
+            self.assertIn('Selecciona una sesión', w.records_summary.text())
+            query.assert_not_called()
+        w.records_session.setCurrentIndex(w.records_session.findData(second.id))
+        self.assertEqual(w.records_table.rowCount(), 1)
+        w.records_use_date.setChecked(True)
+        w.records_date.setDate(self.day.addDays(3))
+        self.assertEqual(w.records_table.rowCount(), 0)
+        self.assertIn('Sin registros', w.records_summary.text())
+
+    def test_same_session_resumption_invalidates_worker_generation_and_revision_binding(self):
+        self.live()
+        identifier, generation = self.w.attendance_session_id, self.live_ui.generation
+        first_view = self.decision()
+        self.service.close_session(identifier, 1)
+        self.assertEqual(self.service.resume_session(identifier).session.activation_revision, 2)
+        # UI still holds activation 1: the service must refuse it even though the ID is open again.
+        self.deliver(first_view)
+        self.assertEqual(self.records.count_for_session(identifier), 0)
+        self.assertEqual(self.w.attendance_activation_revision, 2)
+        self.assertNotEqual(self.live_ui.generation, generation)
+        self.assertIsNone(self.attendance.confirmation)
+        self.deliver(first_view, generation=generation)
+        self.assertEqual(self.records.count_for_session(identifier), 0)
+        self.assertFalse(self.attendance.handle_live(self.decision(), self.live_ui.generation,
+            identifier, True, monotonic(), 2, activation_revision=1))
+        self.deliver(self.decision())
+        self.assertEqual(self.records.count_for_session(identifier), 1)
+
+    def test_refresh_detects_same_id_new_revision_and_clears_confirmation(self):
+        self.live()
+        self.deliver(self.decision())
+        self.assertIsNotNone(self.attendance.confirmation)
+        previous = self.live_ui.generation
+        self.service.close_session(self.opened.id)
+        self.service.resume_session(self.opened.id)
+        self.attendance.refresh_session()
+        self.assertGreater(self.live_ui.generation, previous)
+        self.assertIsNone(self.attendance.confirmation)
+        self.assertEqual(self.live_ui.session_revision, 2)

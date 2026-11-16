@@ -76,6 +76,7 @@ class KioskWindow(QMainWindow):
         self.persistent_attendance = persistent_attendance
         self.attendance = None
         self.attendance_session_id = None
+        self.attendance_activation_revision = None
         self.session_open = False
         self._shutdown_finished = True
         self.lifecycle_state = None
@@ -276,6 +277,14 @@ class KioskWindow(QMainWindow):
         col.addLayout(grid, 1)
 
         col = self.page("sessions", "Sesiones", True)
+        if self.persistent_attendance:
+            session_scroll = QScrollArea()
+            session_scroll.setWidgetResizable(True)
+            session_contents = QWidget()
+            session_scroll.setWidget(session_contents)
+            col.addWidget(session_scroll, 1)
+            col = QVBoxLayout(session_contents)
+            col.setContentsMargins(0, 0, 0, 0)
         self.session_details = label("Consultando sesiones persistentes…" if self.persistent_attendance else
                                      "Sin sesión abierta. No se registran asistencias reales.")
         session_card = QFrame(objectName="card")
@@ -287,24 +296,51 @@ class KioskWindow(QMainWindow):
         self.session_name = QLineEdit()
         self.session_name.setPlaceholderText("Nombre de la sesión")
         col.addWidget(self.session_name)
-        self.session_start = button("Iniciar sesión de asistencia", lambda: self.session_open_requested.emit()
+        self.session_start = button("Abrir o reanudar sesión" if self.persistent_attendance else "Iniciar sesión de asistencia", lambda: self.session_open_requested.emit()
             if self.persistent_attendance else self.set_session_open(True), primary=True)
         self.session_close = button("Cerrar sesión de asistencia", lambda: self.session_close_requested.emit()
             if self.persistent_attendance else self.set_session_open(False))
-        col.addWidget(self.session_start)
-        col.addWidget(self.session_close)
+        if self.persistent_attendance:
+            col.addWidget(self.session_start)
+            col.addWidget(self.session_close)
+            self.stored_sessions = QComboBox()
+            self.stored_sessions.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            self.stored_sessions.setMinimumHeight(36)
+            self.stored_sessions.setAccessibleName('Sesiones existentes')
+            col.addWidget(self.stored_sessions)
+            selection_actions = QHBoxLayout()
+            self.session_resume = button('Reanudar sesión seleccionada')
+            self.session_rename = button('Renombrar sesión')
+            selection_actions.addWidget(self.session_resume)
+            selection_actions.addWidget(self.session_rename)
+            col.addLayout(selection_actions)
+        else:
+            col.addWidget(self.session_start)
+            col.addWidget(self.session_close)
         self.session_hint = label("Solo memoria; no se guardan registros de asistencia.", "muted")
         col.addWidget(self.session_hint)
         col.addStretch()
 
         col = self.page("records", "Registros", True)
         self.records_date = self.date_control()
-        col.addWidget(self.records_date)
+        if self.persistent_attendance:
+            filters = QHBoxLayout()
+            self.records_session = QComboBox()
+            self.records_session.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            self.records_session.addItem('Todas las sesiones', None)
+            self.records_use_date = QCheckBox('Fecha')
+            self.records_use_date.setChecked(True)
+            filters.addWidget(self.records_session, 1)
+            filters.addWidget(self.records_use_date)
+            filters.addWidget(self.records_date)
+            col.addLayout(filters)
+        else:
+            col.addWidget(self.records_date)
         self.records_summary = label("Selecciona una fecha para consultar." if self.persistent_attendance else
                                      "3 asistencias · Identificadores ficticios · Datos de demostración", "muted")
         col.addWidget(self.records_summary)
         table = self.records_table = QTableWidget(0 if self.persistent_attendance else 3, 3)
-        table.setHorizontalHeaderLabels(["Participante", "Sesión", "Hora"] if self.persistent_attendance else ["Participante", "Hora", "Estado"])
+        table.setHorizontalHeaderLabels(["Participante", "Sesión", "Fecha y hora"] if self.persistent_attendance else ["Participante", "Hora", "Estado"])
         table.verticalHeader().hide()
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)

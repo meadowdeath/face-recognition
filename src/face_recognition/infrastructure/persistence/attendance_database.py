@@ -7,9 +7,15 @@ from pathlib import Path
 import sqlite3
 
 from face_recognition.config.settings import PROJECT_ROOT
-from face_recognition.domain.models.attendance import AttendancePersistenceError, DeviceSettings, utc_datetime
+from face_recognition.domain.models.attendance import (
+    AttendancePersistenceError, DeviceSettings, normalize_session_name, utc_datetime,
+)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+
+class AttendanceMigrationError(AttendancePersistenceError):
+    """Migration requires explicit administrative maintenance; no automatic repair."""
 
 
 def timestamp(value: datetime) -> str:
@@ -39,7 +45,7 @@ def _timestamp_check(column):
             f"AND strftime('%Y-%m-%dT%H:%M:%S', substr({column},1,19)) = substr({column},1,19)))")
 
 
-SCHEMA = (
+V1_SCHEMA = (
     f"""CREATE TABLE participants (
         person_id TEXT PRIMARY KEY NOT NULL CHECK (
             length(person_id) >= 4 AND instr(person_id, char(0)) = 0 AND substr(person_id,1,1) = 'p'
@@ -66,6 +72,82 @@ SCHEMA = (
         standby_timeout_seconds INTEGER NOT NULL CHECK (
             typeof(standby_timeout_seconds) = 'integer' AND standby_timeout_seconds IN (30,60,120)))""",
 )
+
+# A nullable/default-less ADD COLUMN cannot acquire NOT NULL on populated SQLite
+# tables. An empty default permits ALTER without rebuilding referenced sessions;
+# the identical INSERT/UPDATE triggers in fresh and migrated v2 databases reject
+# empty keys after backfill. Repositories always supply the canonical Unicode key.
+NAME_KEY_COLUMN = "name_key TEXT NOT NULL DEFAULT ''"
+REVISION_COLUMN = "activation_revision INTEGER NOT NULL DEFAULT 1 CHECK (typeof(activation_revision) = 'integer' AND activation_revision > 0)"
+V2_EXTRAS = (
+    "CREATE UNIQUE INDEX unique_session_name ON attendance_sessions (name_key)",
+    *tuple(f"""CREATE TRIGGER valid_session_name_key_{operation.lower()}
+        BEFORE {operation} ON attendance_sessions
+        WHEN typeof(NEW.name_key) != 'text' OR length(trim(NEW.name_key, char(9,10,11,12,13,32))) = 0
+             OR instr(NEW.name_key, char(0)) != 0
+        BEGIN SELECT RAISE(ABORT, 'Session name key must not be empty or contain NUL'); END"""
+        for operation in ('INSERT', 'UPDATE')),
+)
+SCHEMA = (V1_SCHEMA[0], V1_SCHEMA[1].replace(
+    "        CHECK (closed_at", f"        {NAME_KEY_COLUMN},\n        {REVISION_COLUMN},\n        CHECK (closed_at"),
+    *V1_SCHEMA[2:], *V2_EXTRAS)
+
+
+def _canonical_sql(sql):
+    return ''.join(sql.split()).lower()
+
+
+def _validate_schema(connection, version):
+    objects = {row['name']: row['sql'] for row in connection.execute(
+        "SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'")}
+    expected = V1_SCHEMA if version == 1 else SCHEMA
+    expected_names = {statement.split()[2] if statement.startswith('CREATE TABLE') else
+                      statement.split()[3] if statement.startswith('CREATE UNIQUE INDEX') else statement.split()[2]
+                      for statement in expected}
+    if set(objects) != expected_names:
+        raise AttendancePersistenceError("Incomplete or incompatible attendance schema")
+    for statement in expected:
+        name = statement.split()[2] if statement.startswith(('CREATE TABLE', 'CREATE INDEX', 'CREATE TRIGGER')) else statement.split()[3]
+        if version == 2 and name == 'attendance_sessions':
+            continue  # ALTER preserves constraints but changes their textual order.
+        if _canonical_sql(objects[name]) != _canonical_sql(statement):
+            raise AttendancePersistenceError("Incomplete or incompatible attendance constraints")
+    if version == 2:
+        columns = tuple((r['name'], r['type'], r['notnull'], r['dflt_value'], r['pk'])
+                        for r in connection.execute('PRAGMA table_info(attendance_sessions)'))
+        if columns != (('id', 'INTEGER', 0, None, 1), ('name', 'TEXT', 1, None, 0),
+                       ('opened_at', 'TEXT', 1, None, 0), ('closed_at', 'TEXT', 0, None, 0),
+                       ('name_key', 'TEXT', 1, "''", 0), ('activation_revision', 'INTEGER', 1, '1', 0)):
+            raise AttendancePersistenceError('Incomplete attendance session columns')
+        sql = _canonical_sql(objects['attendance_sessions'])
+        constraints = ("CHECK (length(trim(name, char(9,10,11,12,13,32))) > 0)",
+            _timestamp_check('opened_at'), _timestamp_check('closed_at'),
+            "CHECK (closed_at IS NULL OR closed_at >= opened_at)",
+            "CHECK (typeof(activation_revision) = 'integer' AND activation_revision > 0)")
+        if any(_canonical_sql(fragment) not in sql for fragment in constraints):
+            raise AttendancePersistenceError('Incomplete attendance session constraints')
+        for row in connection.execute('SELECT name, name_key FROM attendance_sessions'):
+            if normalize_session_name(row['name'])[1] != row['name_key']:
+                raise AttendancePersistenceError('Noncanonical session name key; explicit maintenance is required')
+
+
+def _migrate_v1(connection):
+    _validate_schema(connection, 1)
+    keys, rows = set(), []
+    for row in connection.execute('SELECT id, name FROM attendance_sessions ORDER BY id'):
+        try:
+            key = normalize_session_name(row['name'])[1]
+        except ValueError as exc:
+            raise AttendanceMigrationError('Migration blocked by an invalid session name; deliberate maintenance is required') from exc
+        if key in keys:
+            raise AttendanceMigrationError('Migration blocked by equivalent session names; resolve collisions deliberately before retrying')
+        keys.add(key)
+        rows.append((key, row['id']))
+    connection.execute(f'ALTER TABLE attendance_sessions ADD COLUMN {NAME_KEY_COLUMN}')
+    connection.execute(f'ALTER TABLE attendance_sessions ADD COLUMN {REVISION_COLUMN}')
+    connection.executemany('UPDATE attendance_sessions SET name_key=? WHERE id=?', rows)
+    for statement in V2_EXTRAS:
+        connection.execute(statement)
 
 
 class AttendanceDatabase:
@@ -145,15 +227,17 @@ class AttendanceDatabase:
                 for statement in SCHEMA:
                     connection.execute(statement)
                 connection.execute("INSERT INTO device_settings VALUES (1, 'dark', 30)")
-                connection.execute("PRAGMA user_version = 1")
+            elif version == 1:
+                _migrate_v1(connection)
             elif version != SCHEMA_VERSION:
                 raise ValueError(f"Unsupported attendance schema version {version}; expected {SCHEMA_VERSION}")
-            elif tables != {"participants", "attendance_sessions", "attendance_records", "device_settings"}:
-                raise AttendancePersistenceError("Incomplete attendance schema")
+            _validate_schema(connection, 2)
             row = connection.execute("SELECT theme, standby_timeout_seconds FROM device_settings WHERE id=1").fetchone()
             if row is None:
                 raise AttendancePersistenceError("Missing singleton device settings")
             DeviceSettings(*row)
             if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok" or connection.execute("PRAGMA foreign_key_check").fetchone():
                 raise AttendancePersistenceError("Attendance database integrity check failed")
+            if version != SCHEMA_VERSION:
+                connection.execute('PRAGMA user_version = 2')
             connection.commit()
