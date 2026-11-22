@@ -39,8 +39,8 @@ class SessionManagementTests(unittest.TestCase):
         self.records = SQLiteAttendanceRecordRepository(self.db)
         self.service = AttendanceService(self.people, self.sessions, self.records, clock=lambda: NOW + timedelta(days=1),
             administrator=configured_admin(self.db, clock=lambda: NOW))
-        self.people.add('p001', NOW)
-        self.people.add('p002', NOW)
+        self.people.add('p001', NOW, given_names="Lúmina Alba", surnames="de Bruma")
+        self.people.add('p002', NOW, given_names="Lúmina Alba", surnames="de Bruma")
 
     def test_unicode_normalization_lookup_accents_and_invalid_controls(self):
         first = self.sessions.open('  Optimizacio\u0301n   semanal\t ', NOW)
@@ -227,11 +227,11 @@ class AttendanceMigrationTests(unittest.TestCase):
         self.assertEqual(sessions.get(7).name_key, 'optimización')
         self.assertEqual(SQLiteDeviceSettingsRepository(self.db).get().standby_timeout_seconds, 120)
         with self.db.transaction() as c:
-            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], 4)
+            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], 5)
             self.assertEqual(c.execute('PRAGMA foreign_keys').fetchone()[0], 1)
             self.assertEqual(c.execute('PRAGMA foreign_key_check').fetchall(), [])
         after = self.snapshot()
-        self.assertEqual(before[2][0], after[2][0])
+        self.assertEqual([(*row, None, None) for row in before[2][0]], after[2][0])
         self.assertEqual(before[2][1], [row[:4] for row in after[2][1]])
         self.assertEqual(before[2][2:], after[2][2:])
         self.db.initialize()

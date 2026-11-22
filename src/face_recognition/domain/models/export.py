@@ -87,7 +87,7 @@ class ExportPreview:
     sessions: int
     participants: int
     database_size: int
-    schema: int = 4
+    schema: int
 
 
 @dataclass(frozen=True)

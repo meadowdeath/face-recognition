@@ -62,7 +62,7 @@ class ExportFixture(unittest.TestCase):
         self.admin = configured_admin(self.db, clock=lambda: NOW)
         self.sessions = SQLiteAttendanceSessionRepository(self.db)
         self.records = SQLiteAttendanceRecordRepository(self.db)
-        for pid in ('p001', 'p002'): self.admin.participants.add(pid, NOW)
+        for pid in ('p001', 'p002'): self.admin.participants.add(pid, NOW, given_names="Lúmina Alba", surnames="de Bruma")
         self.first = self.sessions.open('Optimización, «A»', NOW, NOW.date()-timedelta(days=15))
         self.records.add('p001', self.first.id, NOW)
         self.records.add('p002', self.first.id, NOW+timedelta(days=1))

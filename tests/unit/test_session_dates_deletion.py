@@ -44,7 +44,7 @@ class DatedDeletionTests(unittest.TestCase):
         self.administrator = configured_admin(self.db, clock=lambda: NOW)
         self.service = AttendanceService(self.people, self.sessions, self.records, clock=lambda: NOW,
                                           administrator=self.administrator)
-        for person in ('p001', 'p002', 'p003'): self.people.add(person, NOW)
+        for person in ('p001', 'p002', 'p003'): self.people.add(person, NOW, given_names="Lúmina Alba", surnames="de Bruma")
         self.settings.update_theme('light')
 
     def event(self, name='Optimización', day=DAY, person='p001'):
@@ -281,7 +281,7 @@ class SchemaThreeMigrationTests(unittest.TestCase):
             self.assertEqual(SQLiteAttendanceRecordRepository(db).get(7, 'p001').id, 23)
             self.assertEqual(SQLiteDeviceSettingsRepository(db).get().standby_timeout_seconds, 120)
             with db.transaction() as c:
-                self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], 4)
+                self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], 5)
                 self.assertEqual(c.execute('PRAGMA foreign_keys').fetchone()[0], 1)
                 self.assertFalse(c.execute('PRAGMA foreign_key_check').fetchall())
                 self.assertEqual(dict(c.execute('SELECT name,seq FROM sqlite_sequence')),

@@ -66,8 +66,8 @@ class GuiAttendanceTests(unittest.TestCase):
         self.now = start + (end - start) / 2
         self.administrator = configured_admin(self.db, clock=lambda: self.now)
         self.service = AttendanceService(self.people, self.sessions, self.records, clock=lambda: self.now, administrator=self.administrator)
-        self.people.add('p001', self.now)
-        self.people.add('p002', self.now)
+        self.people.add('p001', self.now, given_names="Lúmina Alba", surnames="de Bruma")
+        self.people.add('p002', self.now, given_names="Lúmina Alba", surnames="de Bruma")
 
     def window(self, *, live=False, recording=True, failed=False, deletion=False):
         w = KioskWindow(live_mode=live, persistent_attendance=True)
@@ -119,6 +119,21 @@ class GuiAttendanceTests(unittest.TestCase):
         self.worker.publish(LivePacket(generation, view, presence))
         self.live_ui.drain()
 
+    def test_identity_only_live_resolves_name_once_and_never_for_unknown(self):
+        self.live(recording=False)
+        with patch.object(self.people, 'get', wraps=self.people.get) as lookup:
+            self.deliver(self.decision())
+            self.deliver(self.decision())
+            self.assertEqual(self.w.attendance_message.text(), 'Lúmina Alba de Bruma')
+            lookup.assert_called_once_with('p001')
+            self.deliver(self.decision(2, label='UNKNOWN', temporal_decision='UNKNOWN'))
+            self.assertEqual(self.w.attendance_status.text(), 'Persona no reconocida')
+            self.assertNotIn('Lúmina', self.w.attendance_message.text())
+            self.deliver(self.decision(decision_is_current=False), presence=False)
+            self.assertNotIn('Lúmina', self.w.attendance_message.text())
+            lookup.assert_called_once()
+        self.assertEqual(self.records.count_for_session(self.opened.id), 0)
+
     def test_persistent_demo_open_register_duplicate_unknown_unregistered_close_and_restart(self):
         w, attendance = self.window()
         self.assertIs(w.lifecycle_state, LifecycleState.STANDBY)
@@ -135,6 +150,7 @@ class GuiAttendanceTests(unittest.TestCase):
         w.simulate_button.click()
         self.assertEqual(w.attendance_status.text(), 'Asistencia registrada')
         original_message = w.attendance_message.text()
+        self.assertIn('Lúmina Alba de Bruma', original_message)
         self.now += timedelta(minutes=1)
         w.simulate_button.click()
         self.assertEqual(w.attendance_status.text(), 'Asistencia ya registrada')
@@ -170,7 +186,7 @@ class GuiAttendanceTests(unittest.TestCase):
             w.records_date.setDate(self.day)
             w.navigate('records')
             self.assertEqual(w.records_table.rowCount(), 1)
-            self.assertEqual(w.records_table.item(0, 0).text(), 'p001')
+            self.assertEqual(w.records_table.item(0, 0).text(), 'Lúmina Alba de Bruma')
             self.assertEqual(w.records_table.item(0, 1).text(), f'Historical synthetic · {session.session_date:%d/%m/%Y}')
             count = query.call_count
             QTest.qWait(80)
@@ -460,7 +476,7 @@ assert not any(name in sys.modules for name in ('numpy', 'cv2', 'mediapipe', 'sk
         self.assertEqual(w.records_table.rowCount(), 1)
         w.records_date.setDate(self.day.addDays(1))
         self.assertEqual(w.records_table.rowCount(), 1)
-        self.assertEqual(w.records_table.item(0, 0).text(), 'p002')
+        self.assertEqual(w.records_table.item(0, 0).text(), 'Lúmina Alba de Bruma')
         w.records_use_date.setChecked(False)
         self.assertFalse(w.records_date.isEnabled())
         self.assertEqual(w.records_table.rowCount(), 2)

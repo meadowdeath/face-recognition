@@ -9,14 +9,15 @@ from face_recognition.domain.models.attendance import (
     AttendanceRecord, AttendanceSession, DeviceSettings, Participant,
     DuplicateSessionNameError, SessionConflictError, SessionOutcome, SessionResult, StaleSessionActivationError,
     DeletionOperation, DeletionPreview, DeletionResult, calendar_date,
-    normalize_session_name, positive_id, utc_datetime, validate_person_id,
+    normalize_participant_name, normalize_session_name, positive_id, utc_datetime, validate_person_id,
 )
 from face_recognition.domain.models.administration import MaintenanceOperation, MaintenancePreview, OperationAuthorization
 from .attendance_database import AttendanceDatabase, AttendancePersistenceError, read_timestamp, timestamp
 
 
 def _participant(row):
-    return None if row is None else Participant(row["person_id"], read_timestamp(row["created_at"]))
+    return None if row is None else Participant(row["person_id"], read_timestamp(row["created_at"]),
+                                                 row["given_names"], row["surnames"])
 
 
 def _session(row):
@@ -39,13 +40,14 @@ class SQLiteParticipantRepository:
     def __init__(self, database: AttendanceDatabase):
         self.database = database
 
-    def add(self, person_id: str, created_at: datetime) -> Participant:
-        participant = Participant(person_id, created_at)
+    def add(self, person_id: str, created_at: datetime, *, given_names: str, surnames: str) -> Participant:
+        participant = Participant(person_id, created_at, normalize_participant_name(given_names),
+                                  normalize_participant_name(surnames))
         with self.database.transaction(write=True) as connection:
             if connection.execute("SELECT 1 FROM participants WHERE person_id=?", (person_id,)).fetchone():
                 raise ValueError("Participant already exists")
-            connection.execute("INSERT INTO participants (person_id, created_at) VALUES (?,?)",
-                (person_id, timestamp(participant.created_at)))
+            connection.execute("INSERT INTO participants (person_id, created_at, given_names, surnames) VALUES (?,?,?,?)",
+                (person_id, timestamp(participant.created_at), participant.given_names, participant.surnames))
         return participant
 
     def get(self, person_id: str) -> Participant | None:
@@ -59,6 +61,20 @@ class SQLiteParticipantRepository:
 
     def exists(self, person_id: str) -> bool:
         return self.get(person_id) is not None
+
+    def update_names(self, person_id: str, *, given_names=None, surnames=None) -> Participant:
+        validate_person_id(person_id)
+        if given_names is None and surnames is None:
+            raise ValueError("Supply at least one participant name field")
+        given_names = normalize_participant_name(given_names) if given_names is not None else None
+        surnames = normalize_participant_name(surnames) if surnames is not None else None
+        with self.database.transaction(write=True) as connection:
+            cursor = connection.execute(
+                "UPDATE participants SET given_names=COALESCE(?, given_names), "
+                "surnames=COALESCE(?, surnames) WHERE person_id=?", (given_names, surnames, person_id))
+            if cursor.rowcount == 0:
+                raise LookupError("Participant does not exist")
+            return _participant(connection.execute("SELECT * FROM participants WHERE person_id=?", (person_id,)).fetchone())
 
     def delete(self, person_id: str) -> None:
         """Explicit deletion cascades only this participant's records in this transaction."""

@@ -20,6 +20,7 @@ from tests.admin_fakes import TEST_PIN, grant, use_fast_credentials
 from face_recognition.infrastructure.persistence import admin_credentials as credential_module
 
 from tests.attendance_v3_schema import create_v3
+from tests.attendance_v4_schema import create_v4
 from tests.attendance_v2_schema import create_v2
 from tests.attendance_v1_schema import create_v1
 
@@ -61,7 +62,7 @@ class AdministrationTests(unittest.TestCase):
         self.assertIs(self.admin.authenticate('123456').outcome, Outcome.SETUP_REQUIRED)
         self.db.initialize()
         with self.db.transaction() as c:
-            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], 4)
+            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], 5)
             self.assertEqual(c.execute('SELECT count(*) FROM admin_credentials').fetchone()[0], 0)
         self.setup_admin()
         before = self.repo.stamp()
@@ -158,7 +159,7 @@ class AdministrationTests(unittest.TestCase):
 
     def seed(self):
         self.setup_admin()
-        for pid in ('p001','p002'): self.people.add(pid,self.now)
+        for pid in ('p001','p002'): self.people.add(pid,self.now, given_names="Lúmina Alba", surnames="de Bruma")
         session=self.sessions.open('Synthetic',self.now,date(2026,11,16))
         self.records.add('p001',session.id,self.now)
         self.sessions.close(session.id,self.now)
@@ -184,7 +185,7 @@ class AdministrationTests(unittest.TestCase):
         session=self.seed()
         for change in ('participant','record'):
             preview=self.admin.prepare_maintenance(Op.HISTORY)
-            if change=='participant': self.people.add('p003',self.now)
+            if change=='participant': self.people.add('p003',self.now, given_names="Lúmina Alba", surnames="de Bruma")
             else:
                 with self.db.transaction(write=True) as c:
                     c.execute('DELETE FROM attendance_records')
@@ -277,10 +278,10 @@ class AdministrationTests(unittest.TestCase):
         with self.assertRaises(PermissionError):self.admin.require_authenticated()
 
 
-class SchemaFourTests(unittest.TestCase):
+class SchemaMigrationTests(unittest.TestCase):
     def test_genuine_historical_migrations_preserve_all_data_and_sequence_high_water(self):
         with TemporaryDirectory() as temp:
-            for version, create in ((1,create_v1),(2,create_v2),(3,create_v3)):
+            for version, create in ((1,create_v1),(2,create_v2),(3,create_v3),(4,create_v4)):
                 path=Path(temp)/f'v{version}.sqlite3'; create(path)
                 with closing(sqlite3.connect(path)) as c:
                     c.execute('PRAGMA foreign_keys=ON')
@@ -291,19 +292,26 @@ class SchemaFourTests(unittest.TestCase):
                     c.execute('INSERT INTO attendance_sessions ('+columns+') VALUES ('+','.join('?' for _ in values)+')',values)
                     c.execute('INSERT INTO attendance_records VALUES (23,?,?,?)',('p001',7,timestamp(NOW)))
                     c.execute("UPDATE device_settings SET theme='light',standby_timeout_seconds=120")
-                    if version==3:
+                    if version>=3:
                         c.execute("UPDATE sqlite_sequence SET seq=100 WHERE name='attendance_sessions'")
                         c.execute("UPDATE sqlite_sequence SET seq=200 WHERE name='attendance_records'")
+                    if version == 4:
+                        c.execute("INSERT INTO admin_credentials VALUES (1,?,?,?,?,?,?,?,?)",
+                                  (bytes(32), bytes(16), 'pbkdf2_sha256_v1', 600000, 5,
+                                   timestamp(NOW), timestamp(NOW), timestamp(NOW)))
+                    credentials = c.execute('SELECT * FROM admin_credentials').fetchall() if version == 4 else []
                     c.commit()
                 db=AttendanceDatabase(path); mode=path.stat().st_mode; db.initialize(); db.initialize()
                 with db.transaction() as c:
-                    self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],4)
+                    self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],5)
                     self.assertFalse(c.execute('PRAGMA foreign_key_check').fetchall())
-                    self.assertFalse(c.execute('SELECT * FROM admin_credentials').fetchall())
+                    self.assertEqual([tuple(row) for row in c.execute('SELECT * FROM admin_credentials')], credentials)
+                    self.assertEqual(tuple(c.execute('SELECT * FROM participants').fetchone()),
+                                     ('p001', timestamp(NOW), None, None))
                     self.assertEqual(c.execute('SELECT opened_at FROM attendance_sessions').fetchone()[0],timestamp(NOW))
                     self.assertEqual(c.execute('SELECT id FROM attendance_records').fetchone()[0],23)
                     seq=dict(c.execute('SELECT name,seq FROM sqlite_sequence'))
-                    self.assertEqual(seq,{'attendance_sessions':100 if version==3 else 7,'attendance_records':200 if version==3 else 23})
+                    self.assertEqual(seq,{'attendance_sessions':100 if version>=3 else 7,'attendance_records':200 if version>=3 else 23})
                 self.assertEqual(SQLiteDeviceSettingsRepository(db).get().theme,'light')
                 self.assertEqual(path.stat().st_mode,mode)
 
@@ -314,3 +322,21 @@ class SchemaFourTests(unittest.TestCase):
             with patch('face_recognition.infrastructure.persistence.attendance_database.ADMIN_SCHEMA','INVALID SQL'):
                 with self.assertRaises(AttendancePersistenceError): AttendanceDatabase(path).initialize()
             with closing(sqlite3.connect(path)) as c: self.assertEqual('\n'.join(c.iterdump()),before)
+
+    def test_v4_name_migration_rolls_back_after_first_alter(self):
+        from face_recognition.infrastructure.persistence import attendance_database as storage
+
+        with TemporaryDirectory() as temp:
+            path = Path(temp) / 'legacy.sqlite3'
+            create_v4(path)
+            with closing(sqlite3.connect(path)) as c:
+                before = tuple(c.iterdump())
+            def fail(connection):
+                connection.execute('ALTER TABLE participants ADD COLUMN given_names TEXT')
+                raise sqlite3.OperationalError('synthetic migration failure')
+            with patch.object(storage, '_migrate_v4', side_effect=fail):
+                with self.assertRaises(AttendancePersistenceError):
+                    AttendanceDatabase(path).initialize()
+            with closing(sqlite3.connect(path)) as c:
+                self.assertEqual(tuple(c.iterdump()), before)
+            AttendanceDatabase(path).initialize()

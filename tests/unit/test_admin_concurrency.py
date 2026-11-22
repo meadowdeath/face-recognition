@@ -81,7 +81,7 @@ class CredentialConcurrencyTests(unittest.TestCase):
                 SQLiteDeviceSettingsRepository(AttendanceDatabase(self.db.path,busy_timeout_ms=150)).update_standby_timeout(120)
                 sessions=SQLiteAttendanceSessionRepository(AttendanceDatabase(self.db.path,busy_timeout_ms=150))
                 session=sessions.open('Unrelated',self.now,self.now.date())
-                SQLiteParticipantRepository(self.db).add('p001',self.now)
+                SQLiteParticipantRepository(self.db).add('p001',self.now, given_names="Lúmina Alba", surnames="de Bruma")
                 record,created=SQLiteAttendanceRecordRepository(self.db).add('p001',session.id,self.now)
                 self.assertTrue(created);self.assertEqual(record.attendance_session_id,session.id)
                 sessions.close(session.id,self.now)

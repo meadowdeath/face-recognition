@@ -220,7 +220,7 @@ class GuiAdministrationTests(unittest.TestCase):
     def test_dashboard_exit_confirmation_preserves_records_and_session_but_ends_login(self):
         self.login()
         session = self.service.create_session('Synthetic exit', self.now.date()).session
-        self.admin.participants.add('p001', self.now); self.records.add('p001', session.id, self.now)
+        self.admin.participants.add('p001', self.now, given_names="Lúmina Alba", surnames="de Bruma"); self.records.add('p001', session.id, self.now)
         self.attendance.refresh_session()
         self.schedule_dialog(lambda dialog:self.dialog_button(dialog, 'Salir').click())
         self.dialog_button(self.w.screens['dashboard'], 'Salir de la aplicación').click()
@@ -284,7 +284,7 @@ class GuiAdministrationTests(unittest.TestCase):
 
     def test_global_confirmation_cancel_and_exact_counts_then_real_reauthentication(self):
         self.login();self.w.navigate('settings')
-        self.admin.participants.add('p001',self.now)
+        self.admin.participants.add('p001',self.now, given_names="Lúmina Alba", surnames="de Bruma")
         session=self.service.create_session('Synthetic',self.now.date()).session
         self.service.register('p001',session.id);self.service.close_session(session.id)
         with patch.object(self.ui,'confirmation',return_value=False) as confirm, patch.object(self.ui,'reauthenticate',side_effect=AssertionError('No PIN after cancellation')):
@@ -296,16 +296,39 @@ class GuiAdministrationTests(unittest.TestCase):
         self.assertFalse(self.sessions.list());self.assertEqual(len(self.admin.participants.list()),1)
         self.assertTrue(self.admin.configured())
 
+    def test_participant_editor_cancel_and_save(self):
+        self.login()
+        self.w.navigate('system')
+        self.admin.participants.add('p001', self.now, given_names='Lúmina Alba', surnames='de Bruma')
+        for save in (False, True):
+            def respond(dialog):
+                identifier, given, family = dialog.findChildren(QLineEdit)
+                self.assertTrue(identifier.isReadOnly())
+                self.assertEqual(identifier.text(), 'p001')
+                self.assertEqual(given.text(), 'Lúmina Alba')
+                self.assertEqual(family.text(), 'de Bruma')
+                self.dialog_button(dialog, 'Editar').click()
+                self.assertFalse(given.isReadOnly())
+                given.setText('Véspera Luz')
+                if save:
+                    self.dialog_button(dialog, 'Guardar cambios').click()
+                    self.assertTrue(given.isReadOnly())
+                self.dialog_button(dialog, 'Cancelar').click()
+            self.schedule_dialog(respond)
+            self.w.participants_button.click()
+            self.assertEqual(self.admin.participant_details('p001').full_name,
+                             'Véspera Luz de Bruma' if save else 'Lúmina Alba de Bruma')
+
     def test_diagnostics_timer_counts_and_participant_data_protected(self):
         self.login();self.w.navigate('system')
         self.assertTrue(self.ui.diagnostic_timer.isActive())
-        self.assertIn('v4',self.w.diagnostics['Base de datos'].text())
+        self.assertIn('v5',self.w.diagnostics['Base de datos'].text())
         self.assertEqual(self.w.diagnostics['CPU'].text(),'No disponible')
         with patch.object(self.admin,'summary',side_effect=AssertionError('No recurring database counts')):
             self.ui.refresh_metrics()
         self.w.navigate('dashboard');self.assertFalse(self.ui.diagnostic_timer.isActive())
         self.w.navigate('attendance')
-        with patch.object(self.ui,'confirmation',side_effect=AssertionError('No protected data')):self.ui.show_participants()
+        with patch.object(self.admin,'participant_list',side_effect=AssertionError('No protected data')):self.ui.show_participants()
 
     def test_fake_power_confirmation_authorization_cleanup_preserves_open_session(self):
         self.login();self.w.navigate('settings')
@@ -536,7 +559,7 @@ class GuiAdministrationTests(unittest.TestCase):
 
     def seed_keypad_events(self):
         self.login_keypad()
-        for person in ('p001','p002'):self.admin.participants.add(person,self.now)
+        for person in ('p001','p002'):self.admin.participants.add(person,self.now, given_names="Lúmina Alba", surnames="de Bruma")
         events=[]
         for name,day,person in (('Synthetic',self.now.date(),'p001'),
                                ('Synthetic',self.now.date()+timedelta(days=7),'p002'),

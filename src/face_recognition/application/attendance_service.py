@@ -134,6 +134,13 @@ class AttendanceService:
         sessions = {session.id: f'{session.name} · {session.session_date:%d/%m/%Y}' for session in self.sessions.list()}
         return tuple((record, sessions[record.attendance_session_id]) for record in records)
 
+    def participant_display_name(self, person_id):
+        participant = self.participants.get(person_id)
+        return person_id if participant is None else participant.full_name
+
+    def participant_display_names(self):
+        return {participant.person_id: participant.full_name for participant in self.participants.list()}
+
     def register(self, person_id, expected_session_id, expected_activation_revision=1):
         validate_person_id(person_id)
         if expected_session_id is None:

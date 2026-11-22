@@ -190,8 +190,8 @@ class ExportIntegration:
         p.sessions.clear(); p.sessions.addItem('Todas las sesiones', None)
         for identifier, name, day in sessions: p.sessions.addItem(f'{name} · {day}', identifier)
         p.sessions.setCurrentIndex(max(0, p.sessions.findData(selected_session)))
-        records, sessions, participants, size = counts
-        p.backup_info.setText(f'Base disponible · Esquema 4 · {size/2**20:.2f} MiB\n'
+        records, sessions, participants, size, self.schema = counts
+        p.backup_info.setText(f'Base disponible · Esquema {self.schema} · {size/2**20:.2f} MiB\n'
                               f'Participantes: {participants} · Sesiones: {sessions} · Asistencias: {records}')
         self.update_device(); p.message.setText(self.last_result or
             ('Selecciona un USB. Los conteos de vista previa son estimaciones.' if self.destinations else
@@ -252,7 +252,7 @@ class ExportIntegration:
         self.start(lambda cancel, progress: self.service.execute(r, permit, cancel, progress), self.completed)
 
     def completed(self, result):
-        detail = 'Integridad SQLite verificada · Esquema 4' if result.integrity_verified else f'{result.rows} asistencias'
+        detail = f'Integridad SQLite verificada · Esquema {self.schema}' if result.integrity_verified else f'{result.rows} asistencias'
         self.last_result = f'{result.format} · {result.filename}\nUSB: {result.destination} · {result.size} bytes · {detail}'
         self.panel.message.setText(self.last_result)
 

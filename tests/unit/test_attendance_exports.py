@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from face_recognition.domain.models.export import ExportError, ReportFilter
 from face_recognition.infrastructure.persistence.attendance_backup import snapshot, validate_backup
-from face_recognition.infrastructure.persistence.attendance_reports import HEADERS, csv_literal, report
+from face_recognition.infrastructure.persistence.attendance_reports import csv_literal, report
 from tests.export_fakes import ExportFixture, NOW
 
 
@@ -22,10 +22,15 @@ class AttendanceExportTests(ExportFixture):
         path = self.usb/'FaceID/registros'/result.filename
         self.assertTrue(path.read_bytes().startswith(b'\xef\xbb\xbf'))
         with path.open(encoding='utf-8-sig', newline='') as stream: rows = list(csv.reader(stream))
-        self.assertEqual(tuple(rows[0]), HEADERS); self.assertEqual(result.rows, 3)
-        self.assertEqual(rows[1][1], 'p001'); self.assertEqual(rows[1][3], 'Optimización, «A»')
-        self.assertEqual(rows[3][3], "'=1+1")
-        self.assertEqual(rows[1][4], '2026-11-01'); self.assertEqual(rows[1][7], '2026-11-16T00:00:00.000000Z')
+        self.assertEqual(tuple(rows[0]), ('ID de asistencia', 'ID del participante', 'Nombre', 'Apellidos',
+                                        'ID de sesión', 'Nombre de sesión', 'Fecha de sesión',
+                                        'Fecha de registro', 'Hora de registro', 'Registro UTC'))
+        self.assertTrue(all(len(row) == 10 for row in rows))
+        self.assertEqual(rows[1][2:4], ['Lúmina Alba', 'de Bruma'])
+        self.assertEqual(result.rows, 3)
+        self.assertEqual(rows[1][1], 'p001'); self.assertEqual(rows[1][5], 'Optimización, «A»')
+        self.assertEqual(rows[3][5], "'=1+1")
+        self.assertEqual(rows[1][6], '2026-11-01'); self.assertEqual(rows[1][9], '2026-11-16T00:00:00.000000Z')
         self.assertEqual(self.sessions.current(), self.second)
         self.assertNotIn('pin_hash', path.read_text(encoding='utf-8-sig'))
 
@@ -53,13 +58,39 @@ class AttendanceExportTests(ExportFixture):
         with closing(load_workbook(path)) as book:
             sheet = book['Asistencias']
             self.assertEqual(sheet.max_row, 4); self.assertEqual(sheet.freeze_panes, 'A2')
-            self.assertEqual(sheet.auto_filter.ref, 'A1:H4')
-            self.assertEqual(sheet['D4'].value, '=1+1'); self.assertEqual(sheet['D4'].data_type, 's')
+            self.assertEqual(sheet.auto_filter.ref, 'A1:J4')
+            self.assertEqual(sheet['F4'].value, '=1+1'); self.assertEqual(sheet['F4'].data_type, 's')
             self.assertEqual(sheet['B2'].value, 'p001'); self.assertEqual(sheet['B2'].data_type, 's')
+            self.assertEqual(sheet.max_column, 10)
+            self.assertEqual((sheet['C2'].value, sheet['D2'].value), ('Lúmina Alba', 'de Bruma'))
+            self.assertEqual((sheet['C2'].data_type, sheet['D2'].data_type), ('s', 's'))
             self.assertTrue(sheet['A1'].font.bold)
-            self.assertEqual(sheet['H2'].value, '2026-11-16T00:00:00.000000Z')
-            self.assertEqual(sheet['E2'].value.date().isoformat(), '2026-11-01')
+            self.assertEqual(sheet['J2'].value, '2026-11-16T00:00:00.000000Z')
+            self.assertEqual(sheet['G2'].value.date().isoformat(), '2026-11-01')
         self.assertFalse(list(self.usb.rglob('*.xml')))
+
+    def test_legacy_name_cells_are_empty_and_export_defends_imported_text(self):
+        with self.db.transaction(write=True) as c:
+            c.execute("UPDATE participants SET given_names=NULL, surnames=NULL WHERE person_id='p002'")
+            c.execute("UPDATE participants SET given_names=? WHERE person_id='p001'", ('＝1+1',))
+        result = self.execute(self.service.prepare('report', 'CSV', self.provider.current).request)
+        with (self.usb/'FaceID/registros'/result.filename).open(encoding='utf-8-sig', newline='') as stream:
+            rows = list(csv.reader(stream))
+        self.assertEqual(rows[1][2], "'＝1+1")
+        self.assertEqual(rows[2][2:4], ['', ''])
+
+    @unittest.skipUnless(importlib.util.find_spec('openpyxl'), 'Optional XLSX dependency unavailable')
+    def test_xlsx_treats_imported_formula_name_as_literal_and_preserves_missing_names(self):
+        from openpyxl import load_workbook
+        with self.db.transaction(write=True) as c:
+            c.execute("UPDATE participants SET given_names=NULL, surnames=NULL WHERE person_id='p002'")
+            c.execute("UPDATE participants SET given_names=? WHERE person_id='p001'", ('=1+1',))
+        result = self.execute(self.service.prepare('report', 'XLSX', self.provider.current).request)
+        with closing(load_workbook(self.usb/'FaceID/registros'/result.filename)) as book:
+            sheet = book['Asistencias']
+            self.assertEqual((sheet['C2'].value, sheet['C2'].data_type), ('=1+1', 's'))
+            self.assertIsNone(sheet['C3'].value)
+            self.assertIsNone(sheet['D3'].value)
 
     def test_empty_report_fails_without_publishing_and_invalidates_grant(self):
         request = self.service.prepare('report', 'CSV', self.provider.current,
@@ -79,7 +110,7 @@ class AttendanceExportTests(ExportFixture):
         self.assertEqual(report(path, self.root/'out.csv', ReportFilter(), 'CSV', self.cancel,
                                 lambda *args: None, zone=timezone(timedelta(hours=-6))), 3)
         with (self.root/'out.csv').open(encoding='utf-8-sig', newline='') as stream: rows = list(csv.reader(stream))
-        self.assertEqual(rows[1][5:7], ['2026-11-15', '18:00:00'])
+        self.assertEqual(rows[1][7:9], ['2026-11-15', '18:00:00'])
 
     def test_complete_backup_compares_every_table_sequences_lockout_and_open_session(self):
         with self.db.transaction(write=True) as c:
@@ -92,7 +123,7 @@ class AttendanceExportTests(ExportFixture):
             for table in ('participants', 'attendance_sessions', 'attendance_records', 'device_settings', 'admin_credentials', 'sqlite_sequence'):
                 self.assertEqual([tuple(r) for r in source.execute('SELECT * FROM '+table+' ORDER BY 1')],
                                  target.execute('SELECT * FROM '+table+' ORDER BY 1').fetchall())
-            self.assertEqual(target.execute('PRAGMA user_version').fetchone()[0], 4)
+            self.assertEqual(target.execute('PRAGMA user_version').fetchone()[0], 5)
             self.assertEqual(target.execute('PRAGMA foreign_key_check').fetchall(), [])
         self.assertTrue(self.sessions.current().is_open)
 
@@ -109,7 +140,7 @@ class AttendanceExportTests(ExportFixture):
         self.cancel.clear()
         with self.assertRaises(ExportError): snapshot(self.db, self.root/'timeout.sqlite3', self.cancel, lambda *args: None, seconds=0)
         def progress(*args):
-            if not self.admin.participants.exists('p003'): self.admin.participants.add('p003', NOW)
+            if not self.admin.participants.exists('p003'): self.admin.participants.add('p003', NOW, given_names="Lúmina Alba", surnames="de Bruma")
         snapshot(self.db, self.root/'live.sqlite3', self.cancel, progress)
         validate_backup(self.root/'live.sqlite3')
         with closing(sqlite3.connect(self.root/'live.sqlite3')) as c:

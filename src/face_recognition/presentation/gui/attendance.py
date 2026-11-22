@@ -35,6 +35,7 @@ class AttendanceIntegration:
         self.summaries = ()
         self._last_sequence = 0
         self.confirmation = None
+        self._display_identity = None
         window.attendance = self
         window.session_open_requested.connect(self.open_session)
         window.session_close_requested.connect(self.close_session)
@@ -76,6 +77,16 @@ class AttendanceIntegration:
 
     def clear_confirmation(self):
         self.confirmation = None
+        self._display_identity = None
+
+    def display_name(self, person_id):
+        if self._display_identity is None or self._display_identity[0] != person_id:
+            try:
+                name = self.service.participant_display_name(person_id) if self.service else person_id
+            except PERSISTENCE_ERRORS:
+                name = person_id
+            self._display_identity = (person_id, name)
+        return self._display_identity[1]
 
     def attendance_active_changed(self, active):
         if not active:
@@ -359,10 +370,14 @@ class AttendanceIntegration:
         except PERSISTENCE_ERRORS:
             w.records_summary.setText("No fue posible consultar los registros. Revisa la base de datos.")
             return
+        try:
+            names = self.service.participant_display_names() if rows else {}
+        except PERSISTENCE_ERRORS:
+            names = {}
         w.records_table.setRowCount(len(rows))
         for index, (record, name) in enumerate(rows):
             w.records_table.setRowHeight(index, 44)
-            for column, value in enumerate((record.person_id, name, record.registered_at.astimezone().strftime("%d/%m/%Y %H:%M:%S"))):
+            for column, value in enumerate((names.get(record.person_id, record.person_id), name, record.registered_at.astimezone().strftime("%d/%m/%Y %H:%M:%S"))):
                 w.records_table.setItem(index, column, QTableWidgetItem(value))
         w.records_summary.setText(f"{len(rows)} asistencias · Filtros seleccionados" if rows else "Sin registros para estos filtros.")
 
@@ -375,6 +390,7 @@ class AttendanceIntegration:
                                            self.window.attendance_activation_revision)
         except PERSISTENCE_ERRORS:
             result = RegistrationResult(RegistrationOutcome.FAILED)
+        self._display_identity = None
         self.confirmation = (result, person_id)
         if result.outcome is RegistrationOutcome.NO_SESSION:
             self.clear_confirmation()
@@ -399,7 +415,7 @@ class AttendanceIntegration:
         }[result.outcome]
         message = person if result.outcome is RegistrationOutcome.UNREGISTERED else "Comprueba la sesión y la base de datos."
         if result.record is not None:
-            message = f"{result.record.person_id} · {result.record.registered_at.astimezone().strftime('%H:%M:%S')}"
+            message = f"{self.display_name(result.record.person_id)} · {result.record.registered_at.astimezone().strftime('%H:%M:%S')}"
         self.window.show_live_status(title, message, role)
         return True
 

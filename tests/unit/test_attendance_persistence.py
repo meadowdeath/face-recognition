@@ -38,8 +38,8 @@ class AttendancePersistenceTests(unittest.TestCase):
         self.settings = SQLiteDeviceSettingsRepository(self.db)
 
     def population(self):
-        self.participants.add("p001", NOW)
-        self.participants.add("p002", NOW)
+        self.participants.add("p001", NOW, given_names="Lúmina Alba", surnames="de Bruma")
+        self.participants.add("p002", NOW, given_names="Lúmina Alba", surnames="de Bruma")
         return self.sessions.open("Synthetic session", NOW)
 
     def raw_failure(self, sql, parameters=()):
@@ -52,7 +52,7 @@ class AttendancePersistenceTests(unittest.TestCase):
     def test_schema_version_tables_foreign_keys_and_default_journal(self):
         for _ in range(2):
             with self.db.transaction() as connection:
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 5)
                 self.assertEqual(connection.execute("PRAGMA foreign_keys").fetchone()[0], 1)
                 self.assertEqual(connection.execute("PRAGMA busy_timeout").fetchone()[0], 5000)
                 self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "delete")
@@ -73,12 +73,12 @@ class AttendancePersistenceTests(unittest.TestCase):
         self.assertEqual(len(self.participants.list()), 2)
 
     def test_future_version_is_rejected_without_erasing_content(self):
-        self.participants.add("p001", NOW)
+        self.participants.add("p001", NOW, given_names="Lúmina Alba", surnames="de Bruma")
         with closing(sqlite3.connect(self.path)) as connection:
-            connection.execute("PRAGMA user_version=5")
-        with self.assertRaisesRegex(ValueError, "schema version 5"):
+            connection.execute("PRAGMA user_version=6")
+        with self.assertRaisesRegex(ValueError, "schema version 6"):
             self.db.initialize()
-        with self.assertRaisesRegex(ValueError, "schema version 5"):
+        with self.assertRaisesRegex(ValueError, "schema version 6"):
             self.participants.list()
         with closing(sqlite3.connect(self.path)) as connection:
             self.assertEqual(connection.execute("SELECT person_id FROM participants").fetchone()[0], "p001")
@@ -135,15 +135,15 @@ class AttendancePersistenceTests(unittest.TestCase):
             AttendanceDatabase(self.path, busy_timeout_ms=-1)
 
     def test_participant_add_get_list_exists_and_duplicate(self):
-        second = self.participants.add("p002", NOW)
-        first = self.participants.add("p001", NOW)
+        second = self.participants.add("p002", NOW, given_names="Lúmina Alba", surnames="de Bruma")
+        first = self.participants.add("p001", NOW, given_names="Lúmina Alba", surnames="de Bruma")
         self.assertEqual(self.participants.list(), (first, second))
         self.assertEqual(self.participants.get("p001"), first)
         self.assertTrue(self.participants.exists("p002"))
         self.assertFalse(self.participants.exists("p003"))
         self.assertIsNone(self.participants.get("p003"))
         with self.assertRaisesRegex(ValueError, "already exists"):
-            self.participants.add("p001", NOW + timedelta(days=1))
+            self.participants.add("p001", NOW + timedelta(days=1), given_names="Lúmina Alba", surnames="de Bruma")
         self.assertEqual(self.participants.get("p001"), first)
         with self.assertRaises(LookupError):
             self.participants.delete("p003")
@@ -151,10 +151,10 @@ class AttendancePersistenceTests(unittest.TestCase):
     def test_invalid_identifiers_are_rejected_without_insertion(self):
         for identifier in ("", " ", "p01", "P001", "p００１", "UNKNOWN", "p001'; DROP TABLE participants;--", None):
             with self.subTest(identifier=identifier), self.assertRaises(ValueError):
-                self.participants.add(identifier, NOW)
+                self.participants.add(identifier, NOW, given_names="Lúmina Alba", surnames="de Bruma")
         self.assertEqual(self.participants.list(), ())
-        self.raw_failure("INSERT INTO participants VALUES (?,?)", ("UNKNOWN", timestamp(NOW)))
-        self.raw_failure("INSERT INTO participants VALUES (?,?)", ("p001\x00", timestamp(NOW)))
+        self.raw_failure("INSERT INTO participants (person_id, created_at) VALUES (?,?)", ("UNKNOWN", timestamp(NOW)))
+        self.raw_failure("INSERT INTO participants (person_id, created_at) VALUES (?,?)", ("p001\x00", timestamp(NOW)))
 
     def test_participant_deletion_cascades_records_but_preserves_other_people_and_sessions(self):
         session = self.population()
@@ -239,7 +239,7 @@ class AttendancePersistenceTests(unittest.TestCase):
 
     def test_aware_timestamps_convert_to_fixed_precision_utc_and_sort(self):
         local = NOW.astimezone(timezone(timedelta(hours=5, minutes=30)))
-        participant = self.participants.add("p001", local)
+        participant = self.participants.add("p001", local, given_names="Lúmina Alba", surnames="de Bruma")
         self.assertEqual(participant.created_at.tzinfo, timezone.utc)
         self.assertEqual(timestamp(local), "2026-01-02T10:00:00.123456Z")
         self.assertEqual(read_timestamp(timestamp(local)), NOW)
@@ -247,7 +247,7 @@ class AttendancePersistenceTests(unittest.TestCase):
         self.assertEqual(sorted(map(timestamp, reversed(values))), list(map(timestamp, values)))
         for bad in (NOW.replace(tzinfo=None), "2026-01-02", None):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
-                self.participants.add("p002", bad)
+                self.participants.add("p002", bad, given_names="Lúmina Alba", surnames="de Bruma")
         with self.assertRaises(ValueError):
             read_timestamp("2026-01-02T10:00:00+00:00")
 
@@ -255,15 +255,15 @@ class AttendancePersistenceTests(unittest.TestCase):
         for bad in (timestamp(NOW) + "\x00", "not-a-date", "2026-01-02T10:00:00Z", "2026-02-30T10:00:00.000000Z",
                     "2026-01-02T24:00:00.000000Z", "2026-01-02T10:60:00.000000Z", "0000-01-01T00:00:00.000000Z"):
             with self.subTest(bad=bad):
-                self.raw_failure("INSERT INTO participants VALUES (?,?)", ("p001", bad))
+                self.raw_failure("INSERT INTO participants (person_id, created_at) VALUES (?,?)", ("p001", bad))
 
     def test_database_enforces_foreign_keys_unique_not_null_and_closure_constraints(self):
         session = self.population()
         value = timestamp(NOW)
         self.raw_failure("INSERT INTO attendance_records (person_id, attendance_session_id, registered_at) VALUES (?,?,?)", ("p003", session.id, value))
         self.raw_failure("INSERT INTO attendance_records (person_id, attendance_session_id, registered_at) VALUES (?,?,?)", ("p001", 999, value))
-        self.raw_failure("INSERT INTO participants VALUES (NULL,?)", (value,))
-        self.raw_failure("INSERT INTO participants VALUES (?,NULL)", ("p003",))
+        self.raw_failure("INSERT INTO participants (person_id, created_at) VALUES (NULL,?)", (value,))
+        self.raw_failure("INSERT INTO participants (person_id, created_at) VALUES (?,NULL)", ("p003",))
         self.raw_failure("UPDATE attendance_sessions SET closed_at=? WHERE id=?", (timestamp(NOW-timedelta(seconds=1)), session.id))
         self.raw_failure("UPDATE attendance_sessions SET name=' \t' WHERE id=?", (session.id,))
         self.records.add("p001", session.id, NOW)
@@ -306,15 +306,15 @@ class AttendancePersistenceTests(unittest.TestCase):
         name = "Synthetic'); DROP TABLE participants;--"
         session = self.sessions.open(name, NOW)
         self.assertEqual(self.sessions.get(session.id).name, name)
-        self.participants.add("p001", NOW)
+        self.participants.add("p001", NOW, given_names="Lúmina Alba", surnames="de Bruma")
         self.assertTrue(self.participants.exists("p001"))
 
     def test_lock_failure_is_explicit_and_next_operation_can_succeed(self):
         impatient = SQLiteParticipantRepository(AttendanceDatabase(self.path, busy_timeout_ms=1))
         with self.db.transaction(write=True):
             with self.assertRaisesRegex(AttendancePersistenceError, "locked"):
-                impatient.add("p001", NOW)
-        self.assertEqual(impatient.add("p001", NOW), Participant("p001", NOW))
+                impatient.add("p001", NOW, given_names="Lúmina Alba", surnames="de Bruma")
+        self.assertEqual(impatient.add("p001", NOW, given_names="Lúmina Alba", surnames="de Bruma"), Participant("p001", NOW, "Lúmina Alba", "de Bruma"))
 
     def test_competing_open_operations_and_duplicate_records_remain_unique(self):
         barrier = Barrier(2)
@@ -328,7 +328,7 @@ class AttendancePersistenceTests(unittest.TestCase):
             results = list(executor.map(lambda _: open_session(), range(2)))
         self.assertEqual(sum(result is not None for result in results), 1)
         session = self.sessions.current()
-        self.participants.add("p001", NOW)
+        self.participants.add("p001", NOW, given_names="Lúmina Alba", surnames="de Bruma")
         barrier = Barrier(2)
         def register():
             barrier.wait(timeout=3)
@@ -367,8 +367,29 @@ class AttendancePersistenceTests(unittest.TestCase):
             self.assertFalse(closure.result(timeout=3).is_open)
         self.assertEqual(self.records.count_for_session(session.id), 1)
 
+    def test_participant_names_normalize_and_update_without_changing_attendance(self):
+        self.participants.add('p001', NOW, given_names='  Lu\u0301mina   Alba ', surnames='  de Bruma  ')
+        session = self.sessions.open('Synthetic', NOW)
+        record, _ = self.records.add('p001', session.id, NOW)
+        original = self.participants.get('p001')
+        self.assertEqual(original.full_name, 'Lúmina Alba de Bruma')
+        self.assertEqual(self.participants.update_names('p001', given_names='Véspera Luz').surnames, 'de Bruma')
+        self.assertEqual(self.participants.update_names('p001', surnames='del Río').given_names, 'Véspera Luz')
+        updated = self.participants.update_names('p001', given_names='星 明', surnames='de Bruma')
+        self.assertEqual((updated.person_id, updated.created_at), (original.person_id, original.created_at))
+        self.assertEqual(updated.full_name, '星 明 de Bruma')
+        self.assertEqual(self.records.get(session.id, 'p001'), record)
+        with self.assertRaises(LookupError):
+            self.participants.update_names('p099', surnames='de Bruma')
+        for invalid in (None, '', '   ', '\tAlba', 'Alba\u200b', 'a' * 121, '=Alba'):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                self.participants.add('p002', NOW, given_names=invalid, surnames='de Bruma')
+        with self.assertRaises(ValueError):
+            self.participants.update_names('p001', given_names='Another', surnames='')
+        self.assertEqual(self.participants.get('p001'), updated)
+
     def test_domain_models_have_only_minimal_nonbiometric_fields(self):
-        self.assertEqual([f.name for f in fields(Participant)], ["person_id", "created_at"])
+        self.assertEqual([f.name for f in fields(Participant)], ["person_id", "created_at", "given_names", "surnames"])
         self.assertEqual([f.name for f in fields(AttendanceSession)], ["id", "name", "opened_at", "closed_at", "activation_revision", "session_date"])
         self.assertEqual([f.name for f in fields(AttendanceRecord)], ["id", "person_id", "attendance_session_id", "registered_at"])
         self.assertEqual([f.name for f in fields(DeviceSettings)], ["theme", "standby_timeout_seconds"])

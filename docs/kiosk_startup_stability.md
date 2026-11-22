@@ -98,7 +98,7 @@ not a permanent repair or a guarantee of long-term stability.
 Launch from the Raspberry Pi's **physical local console** in the currently
 validated configuration. The trusted model bundle and required MediaPipe asset
 must already exist. The external attendance database must already be initialized
-at schema v4, with administrator credentials configured and authorized participant
+with a supported schema, administrator credentials configured and authorized participant
 IDs explicitly registered. Recording requires an active attendance session and
 Attendance lifecycle state. Startup remains in Standby.
 

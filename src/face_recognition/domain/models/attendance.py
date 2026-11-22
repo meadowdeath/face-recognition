@@ -67,14 +67,38 @@ def positive_id(value: int) -> None:
         raise ValueError("Attendance identifiers must be positive integers")
 
 
+def normalize_participant_name(value: str) -> str:
+    """Normalize one name field without inferring boundaries between names."""
+    if not isinstance(value, str) or any(unicodedata.category(c).startswith('C') for c in value):
+        raise ValueError("Invalid participant name")
+    name = unicodedata.normalize('NFC', ' '.join(value.split()))
+    if not name or len(name) > 120 or not any(c.isalpha() for c in name):
+        raise ValueError("Participant name must contain letters and fit within 120 characters")
+    if any(not (unicodedata.category(c)[0] in 'LM' or c in " -'’‐‑") for c in name):
+        raise ValueError("Invalid participant name characters")
+    return name
+
+
 @dataclass(frozen=True)
 class Participant:
     person_id: str
     created_at: datetime
+    given_names: str | None = None
+    surnames: str | None = None
 
     def __post_init__(self):
         validate_person_id(self.person_id)
         object.__setattr__(self, "created_at", utc_datetime(self.created_at))
+        for field_name in ('given_names', 'surnames'):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(self, field_name, normalize_participant_name(value))
+
+    @property
+    def full_name(self) -> str:
+        if self.given_names and self.surnames:
+            return f"{self.given_names} {self.surnames}"
+        return self.person_id
 
 
 @dataclass(frozen=True)

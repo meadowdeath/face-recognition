@@ -66,7 +66,7 @@ class SQLiteExportStore:
                                 'SELECT count(*) FROM ('+sql+')', () if backup else params).fetchone()[0]
             sessions = c.execute('SELECT count(*) FROM attendance_sessions').fetchone()[0]
             participants = c.execute('SELECT count(*) FROM participants').fetchone()[0]
-        return records, sessions, participants, self.database.path.stat().st_size
+        return records, sessions, participants, self.database.path.stat().st_size, SCHEMA_VERSION
 
     def sessions(self):
         with self.database.transaction() as c:

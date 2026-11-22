@@ -33,7 +33,7 @@ class AttendanceServiceTests(unittest.TestCase):
             administrator=configured_admin(self.db, clock=lambda: self.now))
 
     def test_sessions_registration_duplicate_counts_and_restart(self):
-        self.people.add('p001', self.now)
+        self.people.add('p001', self.now, given_names="Lúmina Alba", surnames="de Bruma")
         opened = self.service.open_session('Synthetic')
         self.assertEqual(self.service.active_session(), opened)
         with self.assertRaises(ValueError): self.service.open_session('Another')
@@ -60,12 +60,12 @@ class AttendanceServiceTests(unittest.TestCase):
         self.assertFalse(self.people.exists('p003'))
         self.service.close_session(opened.id)
         current = self.service.open_session('New')
-        self.people.add('p001', self.now)
+        self.people.add('p001', self.now, given_names="Lúmina Alba", surnames="de Bruma")
         self.assertIs(self.service.register('p001', opened.id).outcome, Outcome.NO_SESSION)
         self.assertEqual(self.service.session_count(current.id), 0)
 
     def test_closed_or_deleted_between_precheck_and_atomic_add(self):
-        self.people.add('p001', self.now)
+        self.people.add('p001', self.now, given_names="Lúmina Alba", surnames="de Bruma")
         opened = self.service.open_session('Synthetic')
         add = self.records.add
         def close_then_add(*args, **kwargs):
@@ -82,7 +82,7 @@ class AttendanceServiceTests(unittest.TestCase):
         self.assertEqual(self.service.session_count(opened.id), 0)
 
     def test_locked_database_returns_failure_without_false_success(self):
-        self.people.add('p001', self.now)
+        self.people.add('p001', self.now, given_names="Lúmina Alba", surnames="de Bruma")
         opened = self.service.open_session('Synthetic')
         with self.db.transaction(write=True):
             self.assertIs(self.service.register('p001', opened.id).outcome, Outcome.FAILED)
@@ -99,7 +99,7 @@ class AttendanceServiceTests(unittest.TestCase):
             self.assertIs(self.service.register('p001', 1).outcome, Outcome.FAILED)
 
     def test_range_queries_are_half_open_and_session_names_are_batched(self):
-        self.people.add('p001', self.now)
+        self.people.add('p001', self.now, given_names="Lúmina Alba", surnames="de Bruma")
         start = self.now
         first = self.service.open_session('First')
         self.service.register('p001', first.id)
@@ -115,15 +115,36 @@ class AttendanceServiceTests(unittest.TestCase):
             self.assertEqual(sessions.call_count, 1)
             self.assertEqual(records.call_count, 1)
 
+    def test_cli_partial_updates_and_legacy_display_fallback(self):
+        with self.db.transaction(write=True) as c:
+            from face_recognition.infrastructure.persistence.attendance_database import timestamp
+            c.execute("INSERT INTO participants (person_id, created_at) VALUES (?, ?)", ('p001', timestamp(self.now)))
+        args = ['--attendance-db', str(self.db.path), 'update', 'p001']
+        self.assertEqual(self.service.participant_display_name('p001'), 'p001')
+        with redirect_stdout(StringIO()):
+            self.assertEqual(main(args + ['--given-names', 'Véspera Luz']), 0)
+            self.assertEqual(self.service.participant_display_name('p001'), 'p001')
+            self.assertEqual(main(args + ['--surnames', 'de Bruma']), 0)
+            self.assertEqual(self.service.participant_display_name('p001'), 'Véspera Luz de Bruma')
+            self.assertEqual(main(args + ['--given-names', 'Lúmina Alba', '--surnames', 'del Alba']), 0)
+        for invalid in (args, args[:-1]+['p099', '--surnames', 'de Bruma']):
+            with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+                main(invalid)
+        for operation in (lambda: self.service.administrator.participant_details('p001'),
+                          lambda: self.service.administrator.update_participant_names('p001', surnames='de Bruma')):
+            self.service.administrator.logout()
+            with self.assertRaises(PermissionError):
+                operation()
+
     def test_participant_cli_add_list_duplicate_invalid_and_corrupt_database(self):
         flags = ['--attendance-db', str(self.db.path)]
         with redirect_stdout(StringIO()) as output:
-            self.assertEqual(main(flags + ['add', 'p001']), 0)
+            self.assertEqual(main(flags + ['add', 'p001', '--given-names', 'Lúmina Alba', '--surnames', 'de Bruma']), 0)
             self.assertEqual(main(flags + ['list']), 0)
         self.assertIn('p001', output.getvalue())
         for command in (['add', 'p001'], ['add', 'UNKNOWN']):
             with self.subTest(command=command), redirect_stderr(StringIO()), self.assertRaises(SystemExit):
-                main(flags + command)
+                main(flags + command + ['--given-names', 'Lúmina Alba', '--surnames', 'de Bruma'])
         path = Path(self.temp.name) / 'corrupt.sqlite3'
         path.write_bytes(b'not sqlite')
         with redirect_stderr(StringIO()) as error, self.assertRaises(SystemExit):

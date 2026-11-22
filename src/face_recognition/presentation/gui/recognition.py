@@ -272,7 +272,10 @@ class RecognitionIntegration(QObject):
             w.show_live_status("Persona no reconocida", "Intenta colocar tu rostro frente a la cámara.", "warning")
         elif (view.last_score is not None and view.label not in ("NO FACE", "COLLECTING")
               and not (w.attendance is not None and w.attendance.recording_enabled)):
-            w.show_live_status("Identidad reconocida", view.label, "success")
+            name = view.label
+            if w.attendance is not None and packet.presence and view.decision_is_current:
+                name = w.attendance.display_name(view.label)
+            w.show_live_status("Identidad reconocida", name, "success")
         elif packet.presence:
             w.show_live_status("Reconocimiento en curso", "Mantén el rostro dentro de la guía.")
         else:

@@ -204,6 +204,7 @@ class KioskWindow(QMainWindow):
         col.addWidget(preview, 1)
         self.attendance_status = label("")
         self.attendance_message = label("", "muted")
+        self.attendance_message.setTextFormat(Qt.PlainText)
         col.addWidget(self.attendance_status)
         col.addWidget(self.attendance_message)
         self.state_selector = QComboBox()

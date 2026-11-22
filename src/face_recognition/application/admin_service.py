@@ -109,6 +109,17 @@ class AdminService:
         self.require_authenticated()
         return self.participants.list()
 
+    def participant_details(self, person_id):
+        self.require_authenticated()
+        participant = self.participants.get(person_id)
+        if participant is None:
+            raise LookupError("Participant does not exist")
+        return participant
+
+    def update_participant_names(self, person_id, *, given_names=None, surnames=None):
+        self.require_authenticated()
+        return self.participants.update_names(person_id, given_names=given_names, surnames=surnames)
+
     def summary(self):
         self.require_authenticated()
         return self.administration.summary()

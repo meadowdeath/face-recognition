@@ -28,7 +28,7 @@ def main():
         now = datetime(2026, 11, 16, tzinfo=timezone.utc); stamp = timestamp(now)
         SQLiteAdminCredentialRepository(db).setup('049283', '049283', now)
         with db.transaction(write=True) as c:
-            c.executemany('INSERT INTO participants VALUES (?,?)', ((f'p{i:03}', stamp) for i in range(1, 101)))
+            c.executemany('INSERT INTO participants (person_id, created_at) VALUES (?,?)', ((f'p{i:03}', stamp) for i in range(1, 101)))
             for i in range((args.records+99)//100):
                 cursor = c.execute('INSERT INTO attendance_sessions(name,opened_at,closed_at,name_key,session_date) VALUES (?,?,?,?,?)',
                     (f'Evento sintético {i}', stamp, stamp, f'evento sintético {i}', '2026-11-16'))

@@ -12,13 +12,14 @@ from face_recognition.domain.models.export import ExportError
 from .attendance_backup import check_cancel
 from .attendance_database import read_timestamp
 
-HEADERS = ('ID de asistencia', 'ID del participante', 'ID de sesión', 'Nombre de sesión',
+HEADERS = ('ID de asistencia', 'ID del participante', 'Nombre', 'Apellidos', 'ID de sesión', 'Nombre de sesión',
            'Fecha de sesión', 'Fecha de registro', 'Hora de registro', 'Registro UTC')
 
 
 def query(filters):
-    sql = ('SELECT r.id,r.person_id,s.id,s.name,s.session_date,r.registered_at '
-           'FROM attendance_records r JOIN attendance_sessions s ON s.id=r.attendance_session_id')
+    sql = ('SELECT r.id,r.person_id,p.given_names,p.surnames,s.id,s.name,s.session_date,r.registered_at '
+           'FROM attendance_records r JOIN attendance_sessions s ON s.id=r.attendance_session_id '
+           'JOIN participants p ON p.person_id=r.person_id')
     clauses, values = [], []
     if filters.session_id is not None:
         clauses.append('s.id=?'); values.append(filters.session_id)
@@ -54,11 +55,11 @@ def report(snapshot_path, output, filters, format, cancel, progress, *, zone=Non
         def rows():
             for index, row in enumerate(c.execute(sql, params), 1):
                 check_cancel(cancel, deadline)
-                local = read_timestamp(row[5]).astimezone(zone)
+                local = read_timestamp(row[7]).astimezone(zone)
                 if index == 1 or index % 256 == 0 or index == count:
                     progress('Generando registros', int(index*100/count))
-                yield (*row[:4], date.fromisoformat(row[4]), local.date(),
-                       local.time().replace(tzinfo=None), row[5])
+                yield (*row[:6], date.fromisoformat(row[6]), local.date(),
+                       local.time().replace(tzinfo=None), row[7])
         if format == 'CSV':
             with open(output, 'w', encoding='utf-8-sig', newline='') as stream:
                 writer = csv.writer(stream, delimiter=',', quoting=csv.QUOTE_MINIMAL)
@@ -86,8 +87,8 @@ def report(snapshot_path, output, filters, format, cancel, progress, *, zone=Non
                     Path(self.out).unlink(missing_ok=True)
             sheet._writer = PrivateWorksheetWriter(sheet, out=spool)
             sheet.freeze_panes = 'A2'
-            sheet.auto_filter.ref = f'A1:H{count+1}'
-            for i, width in enumerate((18, 21, 16, 35, 18, 20, 20, 30), 1):
+            sheet.auto_filter.ref = f'A1:J{count+1}'
+            for i, width in enumerate((18, 21, 25, 25, 16, 35, 18, 20, 20, 30), 1):
                 sheet.column_dimensions[get_column_letter(i)].width = width
             header = []
             for title in HEADERS:

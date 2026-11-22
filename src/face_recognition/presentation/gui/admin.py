@@ -2,10 +2,10 @@
 from time import monotonic
 from PyQt5.QtCore import QThread, QTimer, Qt, QRegExp, QEvent
 from PyQt5.QtGui import QRegExpValidator
-from PyQt5.QtWidgets import QDialog, QGridLayout, QHBoxLayout, QLineEdit, QScrollArea, QVBoxLayout
+from PyQt5.QtWidgets import QComboBox, QDialog, QFormLayout, QGridLayout, QHBoxLayout, QLineEdit, QScrollArea, QVBoxLayout
 
 from face_recognition.domain.models.administration import AuthOutcome, MaintenanceOperation
-from face_recognition.domain.models.attendance import AttendancePersistenceError, DeviceSettings
+from face_recognition.domain.models.attendance import AttendancePersistenceError, DeviceSettings, normalize_participant_name
 from .window import LifecycleState, button, label
 
 _UNLOADED_SETTINGS = object()
@@ -452,12 +452,105 @@ class AdminIntegration:
         fields['Sesión activa'].setText(attendance.current.name if attendance and attendance.current else 'Ninguna')
 
     def show_participants(self):
+        if not self.allowed():
+            return
+        dialog = QDialog(self.window)
+        dialog.setWindowTitle('Participantes')
+        dialog.setStyleSheet(self.window.styleSheet())
+        dialog.resize(570, 380)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(label('Participantes', 'title'))
+        selection = QComboBox()
+        selection.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        selection.setMinimumContentsLength(16)
+        layout.addWidget(selection)
+        fields = QFormLayout()
+        identifier, given_names, surnames = (QLineEdit() for _ in range(3))
+        identifier.setReadOnly(True)
+        for title, field in (('ID del participante', identifier), ('Nombre(s)', given_names), ('Apellidos', surnames)):
+            fields.addRow(title, field)
+        layout.addLayout(fields)
+        message = label('Para editar, usa un teclado conectado.', 'muted')
+        layout.addWidget(message)
+        actions = QHBoxLayout()
+        edit = button('Editar')
+        save = button('Guardar cambios', primary=True)
+        cancel = button('Cancelar', dialog.reject)
+        for action in (edit, save, cancel):
+            action.setAutoDefault(False)
+            actions.addWidget(action)
+        layout.addLayout(actions)
+
+        def editing(enabled):
+            selection.setEnabled(not enabled)
+            given_names.setReadOnly(not enabled)
+            surnames.setReadOnly(not enabled)
+            edit.setEnabled(not enabled and selection.currentData() is not None)
+            save.setEnabled(enabled)
+            if enabled:
+                given_names.setFocus()
+
+        def load_selection():
+            editing(False)
+            identifier.clear()
+            given_names.clear()
+            surnames.clear()
+            person_id = selection.currentData()
+            if person_id is None:
+                return
+            try:
+                participant = self.service.participant_details(person_id)
+                identifier.setText(participant.person_id)
+                given_names.setText(participant.given_names or '')
+                surnames.setText(participant.surnames or '')
+            except ERRORS:
+                edit.setEnabled(False)
+                message.setText('No fue posible consultar el participante.')
+
+        def refresh(person_id=None):
+            previous = selection.blockSignals(True)
+            try:
+                selection.clear()
+                for participant in self.service.participant_list():
+                    selection.addItem(f'{participant.person_id} · {participant.full_name}'
+                                      if participant.full_name != participant.person_id else participant.person_id,
+                                      participant.person_id)
+                if person_id is not None:
+                    selection.setCurrentIndex(selection.findData(person_id))
+            finally:
+                selection.blockSignals(previous)
+            load_selection()
+
+        def save_changes():
+            try:
+                given = normalize_participant_name(given_names.text())
+                family = normalize_participant_name(surnames.text())
+            except ValueError:
+                message.setText('Revisa ambos campos. Usa nombres válidos de hasta 120 caracteres.')
+                return
+            try:
+                updated = self.service.update_participant_names(selection.currentData(), given_names=given, surnames=family)
+            except ERRORS:
+                message.setText('No fue posible guardar los cambios.')
+                return
+            try:
+                refresh(updated.person_id)
+            except ERRORS:
+                editing(False)
+                message.setText('Cambios guardados. Vuelve a abrir la lista para actualizarla.')
+            else:
+                message.setText('Cambios guardados.')
+
+        selection.currentIndexChanged.connect(load_selection)
+        edit.clicked.connect(lambda: editing(True))
+        save.clicked.connect(save_changes)
         try:
-            people = self.service.participant_list()
-            self.confirmation('Participantes registrados', f'Total: {len(people)}\n'+ '\n'.join(
-                f'{p.person_id} · {p.created_at.astimezone():%d/%m/%Y}' for p in people), 'Cerrar')
+            refresh()
+            dialog.exec_()
         except ERRORS:
             self.window.settings_message.setText('No fue posible consultar participantes.')
+        finally:
+            dialog.deleteLater()
 
     def shutdown(self):
         self.closing = True

@@ -11,7 +11,7 @@ from face_recognition.domain.models.attendance import (
     AttendancePersistenceError, DeviceSettings, normalize_session_name, utc_datetime,
 )
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class AttendanceMigrationError(AttendancePersistenceError):
@@ -126,7 +126,14 @@ ADMIN_SCHEMA = f"""CREATE TABLE admin_credentials (
     created_at TEXT NOT NULL {_timestamp_check('created_at')},
     updated_at TEXT NOT NULL {_timestamp_check('updated_at')},
     CHECK(updated_at>=created_at))"""
-SCHEMA = (*V3_SCHEMA, ADMIN_SCHEMA)
+V4_SCHEMA = (*V3_SCHEMA, ADMIN_SCHEMA)
+SCHEMA = (V4_SCHEMA[0][:-1] + ', given_names TEXT, surnames TEXT)', *V4_SCHEMA[1:])
+
+
+def _migrate_v4(connection):
+    _validate_schema(connection, 4)
+    connection.execute('ALTER TABLE participants ADD COLUMN given_names TEXT')
+    connection.execute('ALTER TABLE participants ADD COLUMN surnames TEXT')
 
 
 def _migrate_v3(connection):
@@ -141,7 +148,7 @@ def _canonical_sql(sql):
 def _validate_schema(connection, version):
     objects = {row['name']: row['sql'] for row in connection.execute(
         "SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'")}
-    expected = V1_SCHEMA if version == 1 else V2_SCHEMA if version == 2 else V3_SCHEMA if version == 3 else SCHEMA
+    expected = {1: V1_SCHEMA, 2: V2_SCHEMA, 3: V3_SCHEMA, 4: V4_SCHEMA, 5: SCHEMA}[version]
     expected_names = {statement.split()[2] if statement.startswith('CREATE TABLE') else
                       statement.split()[3] if statement.startswith('CREATE UNIQUE INDEX') else statement.split()[2]
                       for statement in expected}
@@ -309,18 +316,17 @@ class AttendanceDatabase:
                 for statement in SCHEMA:
                     connection.execute(statement)
                 connection.execute("INSERT INTO device_settings VALUES (1, 'dark', 30)")
-            elif version == 1:
-                _migrate_v1(connection)
-                _migrate_v2(connection, self.migration_timezone)
-                _migrate_v3(connection)
-            elif version == 2:
-                _migrate_v2(connection, self.migration_timezone)
-                _migrate_v3(connection)
-            elif version == 3:
-                _migrate_v3(connection)
+            elif 1 <= version < SCHEMA_VERSION:
+                if version <= 1:
+                    _migrate_v1(connection)
+                if version <= 2:
+                    _migrate_v2(connection, self.migration_timezone)
+                if version <= 3:
+                    _migrate_v3(connection)
+                _migrate_v4(connection)
             elif version != SCHEMA_VERSION:
                 raise ValueError(f"Unsupported attendance schema version {version}; expected {SCHEMA_VERSION}")
-            _validate_schema(connection, 4)
+            _validate_schema(connection, SCHEMA_VERSION)
             row = connection.execute("SELECT theme, standby_timeout_seconds FROM device_settings WHERE id=1").fetchone()
             if row is None:
                 raise AttendancePersistenceError("Missing singleton device settings")
@@ -328,5 +334,5 @@ class AttendanceDatabase:
             if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok" or connection.execute("PRAGMA foreign_key_check").fetchone():
                 raise AttendancePersistenceError("Attendance database integrity check failed")
             if version != SCHEMA_VERSION:
-                connection.execute('PRAGMA user_version = 4')
+                connection.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
             connection.commit()

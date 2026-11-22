@@ -113,7 +113,8 @@ With a database, authenticate with the locally configured PIN and use `Sesiones`
 then return to `Asistencia`. Capture is eligible only in Attendance with an open
 session and a ready backend. Without a session the camera remains closed. The
 simulation controls are hidden in live mode. Accepted temporal identities display
-`Identidad reconocida` and the technical ID; rejected decisions display `Persona
+`Identidad reconocida` and the participant's full name when available, with the
+technical ID as fallback. Rejected decisions display `Persona
 no reconocida` without the SVM candidate. Recognition never means attendance has
 been registered unless the explicit recording capability described below is
 enabled and the database confirms success. Ordinary mode hides technical diagnostics.
@@ -546,15 +547,40 @@ Windows PowerShell equivalent (native Qt, repository root):
 $env:PYTHONPATH="src"
 $syntheticDb=Join-Path $env:LOCALAPPDATA "face-recognition\synthetic-attendance.sqlite3"
 python -m face_recognition.presentation.cli.admin --attendance-db "$syntheticDb" setup
-python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$syntheticDb" add p001
+python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$syntheticDb" add p001 --given-names "Lúmina Alba" --surnames "de Bruma"
 python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$syntheticDb" list
 python -m face_recognition.presentation.gui --windowed --attendance-db "$syntheticDb"
 ```
 
 Participant commands initialize only the explicitly selected database, reject
 duplicate/invalid identifiers and never inspect models to discover participants.
-There are no names, identity mappings or enrollment operations. Registration of
-an identifier does not establish consent.
+The local attendance database stores optional legacy `given_names` and `surnames`
+alongside immutable `person_id` and `created_at`. Register both name fields for
+new participants. Names are normalized to NFC, trimmed, and have internal
+whitespace collapsed. Each field allows up to 120 characters and supports
+Unicode letters, combining marks, spaces, apostrophes and common hyphens.
+Duplicate names are allowed. Registration does not enroll a face into the model
+or establish consent.
+
+Use a synthetic database such as `$DB` for these local CLI examples:
+
+```powershell
+python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$DB" add p019 --given-names "Lúmina Alba" --surnames "de Bruma"
+python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$DB" update p019 --given-names "Véspera Luz" --surnames "del Alba"
+python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$DB" update p019 --given-names "Lúmina Alba"
+python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$DB" update p019 --surnames "de Bruma"
+python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$DB" list
+```
+
+The CLI runs locally under the operator's filesystem permissions. After GUI
+administrator login, open **Estado → Ver participantes**, select the technical
+ID, and choose **Editar**. Use a connected keyboard to edit **Nombre(s)** and
+**Apellidos**, then choose **Guardar cambios** or **Cancelar**. The ID remains
+read-only. Names appear in successful and duplicate attendance confirmations,
+history, and accepted live recognition with a database configured. An incomplete
+legacy identity or failed name lookup displays the technical ID. Rejected faces
+remain unnamed. Name edits appear on the next history refresh or attendance
+activation with no model retraining.
 
 Configure and authenticate with your local administrator PIN, enter
 `Sesiones → Crear sesión`, supply a name and an explicit
@@ -661,7 +687,7 @@ backups or flash.
 
 `AttendanceService` coordinates session operations, participant eligibility,
 duplicate results, grouped counts and record filters over the existing repositories.
-SQLite schema version **4** preserves the four attendance/settings tables and adds credentials. New registrations show `Asistencia
+SQLite schema version **5** adds participant name fields to the existing attendance database. New registrations show `Asistencia
 registrada`; duplicates show `Asistencia ya registrada` with the **original**
 registration time. Missing participants, closed sessions and storage failures
 produce distinct Spanish outcomes, never false success or temporary fallback.
@@ -764,10 +790,12 @@ database.initialize()
 settings = SQLiteDeviceSettingsRepository(database).get()
 ```
 
-Initialization uses `PRAGMA user_version`: version 0 creates schema **4** directly;
-version 1 follows its supported normalization/collision migration to v2 and then
-v3 and v4; version 2 migrates through v3 to v4; version 3 adds credentials
-transactionally; version 4 validates and reopens. Unsupported versions,
+Initialization uses `PRAGMA user_version`: version 0 creates schema **5** directly.
+Versions 1–3 follow the existing historical steps to v4. The v4→v5 migration
+adds two nullable text columns to participants in the same transaction. Existing
+rows retain their IDs and timestamps and initially have NULL names. Existing
+records, sessions, credentials, preferences, and SQLite sequences are preserved.
+Version 5 validates and reopens. Unsupported versions,
 nonempty unversioned databases and incomplete/weakened schemas fail explicitly.
 Defaults are inserted only for a new database. No automatic recovery/reset occurs.
 
@@ -888,8 +916,7 @@ PYTHONPATH=src python -m unittest tests.unit.test_attendance_persistence
 ```
 
 Pseudonymous attendance data is not anonymous and a participant row does not prove
-consent. The schema stores no names, identity mappings, biometric payloads, scores,
-unknown-face events or plaintext credentials; schema v4 stores administrator hashes and lockout metadata separately. Before real collection, review authorization,
+consent. The attendance database stores local name mappings and administrator hashes and lockout metadata. It stores no biometric payloads, scores, unknown-face events or plaintext credentials. Before real collection, review authorization,
 retention, withdrawal and deletion obligations, including the project's
 **December 31, 2026 biometric-processing deadline**. This foundation does not
 authorize indefinite retention of participant-related records or trained artifacts.
@@ -912,7 +939,7 @@ access-control requirements must be verified before real participant collection.
 
 ## Local administration and security (Phase 6)
 
-Schema **4** retains all v3 attendance constraints, IDs, activation revisions,
+The attendance database retains all v3 constraints, IDs, activation revisions,
 timestamps and AUTOINCREMENT high-water marks. A transactional v3→v4 migration
 adds only `admin_credentials`; v1→v2→v3 and v2→v3 remain supported before this step.
 Failure rolls back the whole migration. Credentials are never created by migration.
@@ -959,8 +986,7 @@ cannot bypass or extend a newly active lockout. The supplied UTC clock is read
 after write-lock acquisition, so hashing/contention cannot shorten a new lockout;
 a rollback of the clock during verification fails closed. PIN changes derive both
 old/new hashes outside transactions and atomically replace only still-current,
-unlocked credentials; no preliminary counter reset occurs. Busy timeouts, schema
-v4 and the 60/120/240-second policy are unchanged. Locked attempts do not derive hashes. The GUI displays a nonblocking countdown. Screen changes or
+unlocked credentials; no preliminary counter reset occurs. Busy timeouts and the 60/120/240-second policy are unchanged. Locked attempts do not derive hashes. The GUI displays a nonblocking countdown. Screen changes or
 process restarts cannot clear the database lock. A wall-clock rollback can extend
 lockout; moving the clock forward can shorten it. A time earlier than credential
 change is rejected conservatively. Reliable device time and privileged OS access
@@ -1011,7 +1037,7 @@ schema/counts and credential configuration refresh on screen entry, not every
 sample. A two-second timer samples only while Estado is visible. Model readiness,
 camera activity and attendance state come from existing in-memory integration;
 no camera/model initialization occurs for diagnostics. A protected participant
-dialog lists only technical IDs and registration dates. No credential material or
+dialog lists technical IDs and participant names and allows authorized name edits. No credential material or
 biometric paths are displayed.
 
 Power actions are disabled by default. `--enable-system-power-actions` requires
@@ -1031,7 +1057,7 @@ Disposable Raspberry Pi workflow (no real participant data):
 TEST_DIR=$(mktemp -d -t face-id-phase6-XXXXXX)
 DB="$TEST_DIR/attendance.sqlite3"
 PYTHONPATH=src python -m face_recognition.presentation.cli.admin --attendance-db "$DB" setup
-PYTHONPATH=src python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$DB" add p001
+PYTHONPATH=src python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$DB" add p001 --given-names "Lúmina Alba" --surnames "de Bruma"
 QT_QPA_PLATFORM=linuxfb:fb=/dev/fb0 QT_QPA_FB_DRM=0 PYTHONPATH=src \
 python -m face_recognition.presentation.gui --attendance-db "$DB"
 ```
@@ -1044,7 +1070,7 @@ $testDir=Join-Path $env:TEMP ([guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Path $testDir | Out-Null
 $db=Join-Path $testDir "attendance.sqlite3"
 python -m face_recognition.presentation.cli.admin --attendance-db "$db" setup
-python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$db" add p001
+python -m face_recognition.presentation.cli.attendance_participants --attendance-db "$db" add p001 --given-names "Lúmina Alba" --surnames "de Bruma"
 python -m face_recognition.presentation.gui --windowed --attendance-db "$db"
 ```
 
@@ -1275,7 +1301,7 @@ claimed by the development-machine regression runs.
 or substituted automatically. Nonpersistent demonstration and identity-only modes
 without a database cannot export. Windows retains portable report/backup tests;
 native Windows USB discovery is outside scope. No unrestricted output-path CLI is
-provided. Existing recognition, schema v4, migrations and attendance modes are unchanged.
+provided. Existing recognition and attendance modes are unchanged. The attendance database uses schema v5.
 
 ### Installation and USB adapter
 
@@ -1340,10 +1366,14 @@ estimates; actual output comes from a consistent local SQLite online snapshot.
 The source connection closes before report generation and slow USB writing.
 Open attendance sessions remain open. Rows stream in registration-time/ID order.
 
-Both formats have eight columns:
-`ID de asistencia`, `ID del participante`, `ID de sesión`, `Nombre de sesión`,
+Both formats have ten columns:
+`ID de asistencia`, `ID del participante`, `Nombre`, `Apellidos`, `ID de sesión`, `Nombre de sesión`,
 `Fecha de sesión`, `Fecha de registro`, `Hora de registro`, `Registro UTC`.
-IDs remain pseudonymous; local date/time and canonical UTC are preserved. No
+Name fields are exported separately as stored in the snapshot, with empty cells
+for missing legacy fields. Local date/time and canonical UTC are preserved. Full-name
+exports contain personal data if real identities are ever entered. Handle exports
+and backups under applicable privacy, consent and access requirements. Use synthetic
+identities for development, tests and academic demonstrations. No
 inferred absences, biometric data, credentials or settings enter reports.
 
 CSV uses comma delimiters, standard quoting and UTF-8 BOM. Operator strings whose
@@ -1362,7 +1392,7 @@ not modify process-global tempfile settings. Generated XLSX ZIP integrity is che
 Backup ignores report filters and uses `Connection.backup`, never a raw file copy
 or SQL dump. It preserves all five business tables, credentials/hashes/salts,
 attempt counters/lockouts, preferences, original IDs/timestamps, activation revisions,
-foreign keys, schema version and SQLite sequences. The source is read-only and
+foreign keys, separate participant name fields, schema version 5 and SQLite sequences. The source is read-only and
 thread-owned; progress callbacks enforce cancellation and a 120-second deadline.
 The standalone result is reopened and checked with `integrity_check`,
 `foreign_key_check`, `user_version` and the expected schema before publication.
@@ -1486,7 +1516,7 @@ with ExitStack() as stack:
         Path(p).resolve(strict=True).as_uri() + '?mode=ro', uri=True))) for p in sys.argv[1:]]
     assert backup.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
     assert backup.execute('PRAGMA foreign_key_check').fetchall() == []
-    assert backup.execute('PRAGMA user_version').fetchone()[0] == 4
+    assert backup.execute('PRAGMA user_version').fetchone()[0] == 5
     for table in ('participants', 'attendance_sessions', 'attendance_records',
                   'device_settings', 'admin_credentials', 'sqlite_sequence'):
         assert source.execute('SELECT * FROM '+table+' ORDER BY 1').fetchall() == backup.execute(
