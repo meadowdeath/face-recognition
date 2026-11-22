@@ -44,7 +44,8 @@ class FilesystemProcessedDatasetRepository:
     Source files and directory timestamps are never intentionally changed.
     """
 
-    def __init__(self, output_root: Path, source_root: Path) -> None:
+    def __init__(self, output_root: Path, source_root: Path, *, capture_provenance=None) -> None:
+        self._capture_provenance = capture_provenance
         self.feature_representation = POSE_REPRESENTATION
         self.representations = (POSE_REPRESENTATION,)
         self.normalization_name = "PoseLandmarkNormalizer"
@@ -162,7 +163,8 @@ class FilesystemProcessedDatasetRepository:
             os.fsync(stream.fileno())
         os.replace(temporary, path)
 
-    def _write_manifests(self, state: str, summary: ProcessingSummary, issue: ProcessingIssue | None = None) -> None:
+    def _write_manifests(self, state: str, summary: ProcessingSummary, issue: ProcessingIssue | None = None,
+                         capture=None) -> None:
         if self.staging_root is None:
             raise ProcessedDatasetPersistenceError("No staging directory")
         common = {"schema_version": PROCESSED_SCHEMA_VERSION, "completion_state": state,
@@ -176,7 +178,8 @@ class FilesystemProcessedDatasetRepository:
         self._write_json(self.staging_root / "processing_manifest.json",
                          {**common, "representations": list(self.representations),
                           "condition_files_per_representation": summary.conditions,
-                          "total_condition_files": summary.conditions * len(self.representations)})
+                          "total_condition_files": summary.conditions * len(self.representations),
+                          **({"dynamic_capture": capture} if capture is not None else {})})
         for representation in self.representations:
             self._write_json(self.staging_root / representation / "processing_manifest.json",
                              {**common, "representation": representation, "condition_files": summary.conditions})
@@ -188,12 +191,19 @@ class FilesystemProcessedDatasetRepository:
             raise ProcessedDatasetPersistenceError("Completion counts do not match written sample pairs")
         self._close_streams()
         self._write_manifests("completed", summary)
+        if self._capture_provenance is not None:
+            capture = self._capture_provenance(stage)
+            self._write_manifests("completed", summary, capture=capture)
         # Flush staged directory entries too, before publication on Linux.
         for directory in (path for path in stage.rglob("*") if path.is_dir()):
             self._sync_directory(directory)
         self._sync_directory(stage)
         self._validate_paths()
-        os.rename(stage, self.output_root)
+        if self._capture_provenance is None:
+            os.rename(stage, self.output_root)
+        else:
+            from face_recognition.infrastructure.persistence.artifact_integrity import publish_new_directory
+            publish_new_directory(stage, self.output_root)
         self._published = True
         self.staging_root = None
         self._sync_directory(self.output_root.parent)

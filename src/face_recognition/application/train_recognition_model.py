@@ -5,16 +5,23 @@ from math import isfinite
 
 import numpy as np
 
-from face_recognition.application.recognition_config import validate_frozen_configuration
+from face_recognition.application.recognition_config import metadata_sha256, validate_dynamic_configuration, validate_frozen_configuration
 from face_recognition.application.rejection_metrics import calibrate_threshold
 from face_recognition.application.rejection_score_analysis import score_separation
 from face_recognition.application.training_data import calibration_windows
 from face_recognition.domain.models.dataset import CONDITIONS
+from face_recognition.domain.models.dynamic_population import DynamicTrainingProvenance, MODEL_ID
 from face_recognition.domain.models.rejection import RejectionError
 from dataclasses import fields
 from face_recognition.domain.models.v3_deployable_model import (
     BinaryCalibrationMetrics,
     DeployableV3Model, V3CalibrationSummary, V3DeployableAllocation, V3TrainingResult,
+)
+
+
+DYNAMIC_CALIBRATION_STATUS = dict(
+    methodology="Dynamic chronological construction using the selected V3 algorithm",
+    limitation="Population ratio is a project policy, not a guarantee of FAR or accuracy.",
 )
 
 
@@ -43,6 +50,20 @@ def deployment_allocation(data, config):
         spec.unknown_ids, spec.unknown_sessions, n)
 
 
+def dynamic_allocation(data, config):
+    validate_dynamic_configuration(config)
+    data.validate()
+    spec = config.population
+    groups = Counter((s.person_id, s.session_id, s.condition) for s in data.samples)
+    n = spec.capture_protocol.samples_per_condition
+    if (data.protocol.specification != spec or data.protocol.catalog_sha256 != config.dataset.catalog_sha256
+            or data.payload_sha256 != config.dataset.payload_sha256 or set(groups) != set(spec.condition_keys)
+            or any(count != n for count in groups.values())):
+        raise RejectionError("Dynamic data do not match the selected population and twenty-sample capture groups")
+    return V3DeployableAllocation(spec.known_ids, spec.known_sessions[:3], spec.known_sessions[3],
+                                  spec.unknown_ids, spec.unknown_sessions, n)
+
+
 class TrainRecognitionModel:
     def __init__(self, runner, progress=lambda message: None):
         self.runner, self.progress = runner, progress
@@ -54,6 +75,14 @@ class TrainRecognitionModel:
                 or provenance.protocol_file_sha256 != refs["protocol"].sha256
                 or provenance.pose_report_file_sha256 != refs["pose_report"].sha256):
             raise RejectionError("Payload fingerprint mismatch")
+        return self._fit_and_calibrate(data, config, provenance, allocation, "open_set_model_v3")
+
+    def train_dynamic(self, data, config):
+        allocation = dynamic_allocation(data, config)
+        provenance = DynamicTrainingProvenance(config.configuration_sha256, metadata_sha256(config.dataset))
+        return self._fit_and_calibrate(data, config, provenance, allocation, MODEL_ID)
+
+    def _fit_and_calibrate(self, data, config, provenance, allocation, model_id):
         known_fit = data.known(allocation.known_fit_sessions)
         known_cal = data.known((allocation.known_calibration_session,))
         unknown_cal = data.unknown(allocation.unknown_calibration_identities)
@@ -94,9 +123,10 @@ class TrainRecognitionModel:
             raise RejectionError("Operational threshold must be finite")
         diagnostics = score_separation(kw.scores, uw.scores)
         verify()
-        model = DeployableV3Model(fitted, config, allocation.known_identities, float(calibration.threshold))
+        model = DeployableV3Model(fitted, config, allocation.known_identities, float(calibration.threshold), model_id=model_id)
         summary = V3CalibrationSummary(allocation, provenance, expected_fit, class_counts, kw.counts, uw.counts,
             model.threshold, BinaryCalibrationMetrics(*(getattr(calibration.metrics, f.name) for f in fields(BinaryCalibrationMetrics))), diagnostics, before, self.runner.fingerprints(fitted),
-            generation, self.runner.fit_count, self.runner.support_vector_count(fitted), self.runner.versions)
+            generation, self.runner.fit_count, self.runner.support_vector_count(fitted), self.runner.versions,
+            **(DYNAMIC_CALIBRATION_STATUS if model_id == MODEL_ID else {}))
         verify()
         return V3TrainingResult(model, summary)

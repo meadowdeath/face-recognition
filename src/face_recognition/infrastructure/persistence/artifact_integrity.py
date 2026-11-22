@@ -70,3 +70,20 @@ def _object(value, model):
     if not isinstance(value, dict) or set(value) != {f.name for f in fields(model)}:
         raise RejectionError("Incomplete or unexpected metadata fields")
     return dict(value)
+
+
+def publish_new_directory(stage: Path, target: Path) -> None:
+    """Atomic adjacent-directory rename with no replacement, including empty targets."""
+    import os
+    from face_recognition.infrastructure.persistence.export_files import rename_exclusive
+
+    if stage.parent != target.parent:
+        raise ArtifactPublicationError("Publication requires sibling paths")
+    if os.name == "nt":
+        os.rename(stage, target)
+    else:
+        descriptor = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            rename_exclusive(descriptor, stage.name, target.name, target.parent)
+        finally:
+            os.close(descriptor)

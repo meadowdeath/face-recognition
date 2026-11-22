@@ -10,6 +10,7 @@ from face_recognition.application.recognition_config import metadata_sha256
 from face_recognition.domain.models.processed_sample import SampleProvenance
 from face_recognition.domain.models.processed_sample import POSE_REPRESENTATION
 from face_recognition.domain.models.dataset import CONDITIONS
+from face_recognition.domain.models.dynamic_population import DynamicTrainingProtocol
 from face_recognition.domain.models.rejection import RejectionError
 from face_recognition.domain.models.temporal import WindowCounts
 from face_recognition.domain.models.training_dataset import TrainingProtocol
@@ -23,7 +24,7 @@ class Population:
 
 @dataclass(frozen=True, eq=False)
 class TrainingData:
-    protocol: TrainingProtocol = field(repr=False)
+    protocol: TrainingProtocol | DynamicTrainingProtocol = field(repr=False)
     X: np.ndarray = field(repr=False)
     y: np.ndarray = field(repr=False)
     samples: tuple[SampleProvenance, ...] = field(repr=False)

@@ -14,6 +14,7 @@ from face_recognition.application.recognition_config import metadata_sha256
 from face_recognition.application.face_recognizer import FaceRecognizer
 from face_recognition.domain.models.classification import EvaluationVersions
 from face_recognition.domain.models.dataset import CONDITIONS, validate_identifier
+from face_recognition.domain.models.dynamic_population import DynamicConfiguration, DynamicTrainingProvenance, MODEL_ID
 from face_recognition.domain.models.rejection import RejectionError
 from face_recognition.domain.models.v3_deployable_model import (
     DeployableV3Model, FittedV3Fingerprints, V3CalibrationSummary, V3DeployableAllocation, V3TrainingProvenance,
@@ -24,15 +25,19 @@ from face_recognition.domain.models.temporal import WindowCounts
 from face_recognition.infrastructure.classifiers.sklearn_recognition import (
     RecognitionModelRunner, fitted_model_fingerprints, validate_fitted_model_state,
 )
-from face_recognition.infrastructure.persistence.artifact_integrity import validate_output_target
+from face_recognition.infrastructure.persistence.artifact_integrity import publish_new_directory, validate_output_target
 from face_recognition.infrastructure.persistence.artifact_integrity import artifact_fingerprints, file_sha256
 from face_recognition.infrastructure.persistence.artifact_integrity import _object, _read_json
 from face_recognition.infrastructure.persistence.recognition_config import current_implementation_fingerprints, read_frozen_configuration
+
+from face_recognition.infrastructure.persistence.dynamic_configuration import configuration_bytes, read_dynamic_configuration
 
 MODEL_FILE = "model.joblib"
 CONFIG_FILE = "frozen_config.json"
 MANIFEST_FILE = "manifest.json"
 FILES = (MODEL_FILE, CONFIG_FILE, MANIFEST_FILE)
+DYNAMIC_CONFIG_FILE = "config.json"
+DYNAMIC_FILES = (MODEL_FILE, DYNAMIC_CONFIG_FILE, MANIFEST_FILE)
 
 
 class RuntimeCompatibilityError(RejectionError):
@@ -66,13 +71,13 @@ def _digest(value):
         raise RejectionError("Invalid model/provenance fingerprint")
 
 
-def _summary_from_json(raw):
+def _summary_from_json(raw, provenance_type=V3TrainingProvenance):
     row = _object(raw, V3CalibrationSummary)
     allocation = _object(row["allocation"], V3DeployableAllocation)
     for name in ("known_identities", "known_fit_sessions", "unknown_calibration_identities", "unknown_calibration_sessions"):
         allocation[name] = tuple(allocation[name])
     row["allocation"] = V3DeployableAllocation(**allocation)
-    row["provenance"] = V3TrainingProvenance(**_object(row["provenance"], V3TrainingProvenance))
+    row["provenance"] = provenance_type(**_object(row["provenance"], provenance_type))
     row["class_fit_sample_counts"] = tuple(row["class_fit_sample_counts"])
     row["known_calibration"], row["unknown_calibration"] = _counts(row["known_calibration"]), _counts(row["unknown_calibration"])
     metrics = _object(row["calibration_metrics"], BinaryCalibrationMetrics)
@@ -87,7 +92,9 @@ def _summary_from_json(raw):
 
 
 def _validate_model_and_summary(model, summary, config):
-    if (type(model) is not DeployableV3Model or type(model.schema_version) is not int or model.schema_version != 1 or model.model_id != "open_set_model_v3"
+    dynamic = type(config) is DynamicConfiguration
+    expected_id = MODEL_ID if dynamic else "open_set_model_v3"
+    if (type(model) is not DeployableV3Model or type(model.schema_version) is not int or model.schema_version != 1 or model.model_id != expected_id
             or metadata_sha256(model.frozen_configuration) != metadata_sha256(config) or model.class_order != summary.allocation.known_identities
             or type(model.threshold) not in (int, float) or not isfinite(model.threshold) or model.threshold != summary.threshold
             or summary.threshold_transport != "none_same_model_calibration"
@@ -101,7 +108,7 @@ def _validate_model_and_summary(model, summary, config):
             raise RejectionError("Invalid ordered population mapping")
         for label in labels: validate_identifier(label)
     validate_identifier(a.known_calibration_session)
-    if (len(a.known_identities) < 2 or len(a.unknown_calibration_identities) != 8
+    if (len(a.known_identities) < 2 or (not dynamic and len(a.unknown_calibration_identities) != 8)
             or set(a.known_identities) & set(a.unknown_calibration_identities)
             or len(a.known_fit_sessions) != 3 or a.known_calibration_session <= a.known_fit_sessions[-1]
             or len(a.unknown_calibration_sessions) != 2 or type(a.samples_per_condition) is not int or a.samples_per_condition < 7
@@ -126,16 +133,28 @@ def _validate_model_and_summary(model, summary, config):
     for f in fields(summary.provenance):
         value = getattr(summary.provenance, f.name)
         if f.name.endswith("sha256"): _digest(value)
-    filename = summary.provenance.frozen_config_filename
-    if not isinstance(filename, str) or Path(filename).name != filename or "/" in filename or "\\" in filename or ":" in filename:
-        raise RejectionError("Frozen configuration provenance must contain a filename only")
+    if dynamic:
+        p = config.population
+        expected = V3DeployableAllocation(p.known_ids, p.known_sessions[:3], p.known_sessions[3],
+                                          p.unknown_ids, p.unknown_sessions, p.capture_protocol.samples_per_condition)
+        if (a != expected or summary.provenance != DynamicTrainingProvenance(
+                config.configuration_sha256, metadata_sha256(config.dataset))):
+            raise RejectionError("Dynamic population, allocation or provenance mismatch")
+    else:
+        filename = summary.provenance.frozen_config_filename
+        if not isinstance(filename, str) or Path(filename).name != filename or "/" in filename or "\\" in filename or ":" in filename:
+            raise RejectionError("Frozen configuration provenance must contain a filename only")
+        refs = {r.kind: r for r in config.evidence}
+        if (summary.provenance.protocol_file_sha256 != refs["protocol"].sha256
+                or summary.provenance.pose_report_file_sha256 != refs["pose_report"].sha256):
+            raise RejectionError("Frozen evidence provenance mismatch")
     for name in ("metrics_scope", "methodology", "limitation", "threshold_transport"):
-        if getattr(summary, name) != V3CalibrationSummary.__dataclass_fields__[name].default:
+        expected = V3CalibrationSummary.__dataclass_fields__[name].default
+        if dynamic:
+            from face_recognition.application.train_recognition_model import DYNAMIC_CALIBRATION_STATUS
+            expected = DYNAMIC_CALIBRATION_STATUS.get(name, expected)
+        if getattr(summary, name) != expected:
             raise RejectionError("Model construction must retain calibration-only methodological status")
-    refs = {r.kind: r for r in config.evidence}
-    if (summary.provenance.protocol_file_sha256 != refs["protocol"].sha256
-            or summary.provenance.pose_report_file_sha256 != refs["pose_report"].sha256):
-        raise RejectionError("Frozen evidence provenance mismatch")
     validate_fitted_model_state(model.fitted, config, summary.known_fit_samples)
     if (fitted_model_fingerprints(model.fitted) != summary.fingerprints_after_calibration
             or summary.support_vectors != int(model.fitted.pipeline[-1].n_support_.sum())):
@@ -151,9 +170,19 @@ def _manifest(model, summary, hashes):
         threshold=model.threshold, threshold_objective=config.threshold_policy.objective,
         threshold_tie_breakers=config.threshold_policy.tie_breakers, threshold_transport=config.threshold_policy.threshold_transport,
         class_order=model.class_order, calibration=asdict(summary),
-        frozen_configuration=dict(configuration_id=config.configuration_id, configuration_sha256=config.configuration_sha256,
-            source_filename=summary.provenance.frozen_config_filename, source_file_sha256=summary.provenance.frozen_config_file_sha256),
         artifacts=tuple(dict(filename=name, sha256=sha) for name, sha in hashes), limitations=config.limitations, manifest_sha256="")
+    if type(config) is DynamicConfiguration:
+        p = config.population
+        value["creation"] = dict(builder="train_dynamic_model", version=1, versions=asdict(summary.versions))
+        value["dynamic_configuration"] = dict(configuration_id=config.configuration_id,
+            configuration_sha256=config.configuration_sha256, dataset=asdict(config.dataset),
+            population_sha256=metadata_sha256(p), population_policy=p.population_policy,
+            known_count=len(p.known_ids), unknown_count=len(p.unknown_ids), minimum_unknown=p.minimum_unknown)
+    else:
+        value["frozen_configuration"] = dict(configuration_id=config.configuration_id,
+            configuration_sha256=config.configuration_sha256,
+            source_filename=summary.provenance.frozen_config_filename,
+            source_file_sha256=summary.provenance.frozen_config_file_sha256)
     value["manifest_sha256"] = metadata_sha256(value)
     return value
 
@@ -170,16 +199,30 @@ def publish_recognition_bundle(result, frozen_config_path, output_dir, inputs=()
     config = read_frozen_configuration(frozen_config_path)
     if file_sha256(Path(frozen_config_path)) != result.summary.provenance.frozen_config_file_sha256:
         raise RejectionError("Frozen config source bytes changed")
+    return _publish_bundle(result, config, config_bytes, CONFIG_FILE, target, inputs, verify_inputs)
+
+
+def publish_dynamic_bundle(result, output_dir, inputs, verify_inputs):
+    target = validate_output_target(Path(output_dir), inputs)
+    config = result.model.frozen_configuration
+    if type(config) is not DynamicConfiguration:
+        raise RejectionError("Expected a dynamic model configuration")
+    return _publish_bundle(result, config, configuration_bytes(config), DYNAMIC_CONFIG_FILE,
+                           target, inputs, verify_inputs)
+
+
+def _publish_bundle(result, config, config_bytes, config_file, target, inputs, verify_inputs):
     _validate_model_and_summary(result.model, result.summary, config)
+    dynamic = config_file == DYNAMIC_CONFIG_FILE
     stage = None
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         stage = Path(tempfile.mkdtemp(prefix=target.name + ".", suffix=".tmp", dir=target.parent))
-        _write_bytes(stage / CONFIG_FILE, config_bytes)
+        _write_bytes(stage / config_file, config_bytes)
         joblib.dump(result.model, stage / MODEL_FILE, compress=3, protocol=5)
         with (stage / MODEL_FILE).open("r+b") as stream: os.fsync(stream.fileno())
-        hashes = artifact_fingerprints(stage, (MODEL_FILE, CONFIG_FILE))
-        if dict(hashes)[CONFIG_FILE] != result.summary.provenance.frozen_config_file_sha256:
+        hashes = artifact_fingerprints(stage, (MODEL_FILE, config_file))
+        if not dynamic and dict(hashes)[config_file] != result.summary.provenance.frozen_config_file_sha256:
             raise RejectionError("Frozen config copy integrity failure")
         restored = joblib.load(stage / MODEL_FILE)
         _validate_model_and_summary(restored, result.summary, config)
@@ -188,10 +231,15 @@ def publish_recognition_bundle(result, frozen_config_path, output_dir, inputs=()
         # Completion manifest is written only after all artifacts round-trip.
         _write_bytes(stage / MANIFEST_FILE, (json.dumps(manifest, sort_keys=True, allow_nan=False, indent=2) + "\n").encode("utf-8"))
         load_recognition_bundle(stage)
-        verify_inputs()
+        if not dynamic:
+            verify_inputs()
         _validate_model_and_summary(result.model, result.summary, config)
         validate_output_target(target, inputs)
-        os.rename(stage, target)
+        if dynamic:
+            verify_inputs()
+            publish_new_directory(stage, target)
+        else:
+            os.rename(stage, target)
         stage = None
         return manifest
     except Exception:
@@ -208,39 +256,49 @@ def load_recognition_bundle(model_dir):
     """Load trusted local artifacts only; hashes provide integrity, not authenticity."""
     try:
         root = Path(model_dir)
-        if root.is_symlink() or not root.is_dir() or {p.name for p in root.iterdir()} != set(FILES):
+        if root.is_symlink() or not root.is_dir():
             raise ValueError
-        before = artifact_fingerprints(root, FILES)
+        names = {p.name for p in root.iterdir()}
+        dynamic = names == set(DYNAMIC_FILES)
+        files = DYNAMIC_FILES if dynamic else FILES
+        if names != set(files):
+            raise ValueError
+        config_file = DYNAMIC_CONFIG_FILE if dynamic else CONFIG_FILE
+        before = artifact_fingerprints(root, files)
         manifest = _read_json(root / MANIFEST_FILE)
         if (manifest["schema_version"] != 1 or manifest["status"] != "fitted_and_calibrated"
-                or manifest["completion_state"] != "completed" or manifest["model_id"] != "open_set_model_v3"):
+                or manifest["completion_state"] != "completed" or manifest["model_id"] != (MODEL_ID if dynamic else "open_set_model_v3")):
             raise ValueError
         checksum = dict(manifest); checksum["manifest_sha256"] = ""
         if manifest["manifest_sha256"] != metadata_sha256(checksum):
             raise ValueError
-        hashes = artifact_fingerprints(root, (MODEL_FILE, CONFIG_FILE))
+        hashes = artifact_fingerprints(root, (MODEL_FILE, config_file))
         if manifest["artifacts"] != [dict(filename=n, sha256=s) for n, s in hashes]:
             raise ValueError
-        config_metadata = _read_json(root / CONFIG_FILE)
+        config_metadata = _read_json(root / config_file)
         if config_metadata["implementations"] != [asdict(v) for v in current_implementation_fingerprints()]:
             raise RuntimeCompatibilityError("V3 frozen implementation fingerprints differ. Use identical pose-normalizer and Mahalanobis sources, including line endings.")
-        config = read_frozen_configuration(root / CONFIG_FILE)
-        if dict(hashes)[CONFIG_FILE] != manifest["frozen_configuration"]["source_file_sha256"]:
-            raise ValueError
-        summary = _summary_from_json(manifest["calibration"])
+        if dynamic:
+            config = read_dynamic_configuration(root / config_file)
+            summary = _summary_from_json(manifest["calibration"], DynamicTrainingProvenance)
+        else:
+            config = read_frozen_configuration(root / config_file)
+            if dict(hashes)[config_file] != manifest["frozen_configuration"]["source_file_sha256"]:
+                raise ValueError
+            summary = _summary_from_json(manifest["calibration"])
         runner = RecognitionModelRunner(config)
         _check_runtime_versions(summary.versions, runner.versions)
         model = joblib.load(root / MODEL_FILE)
         _validate_model_and_summary(model, summary, config)
         if metadata_sha256(manifest) != metadata_sha256(_manifest(model, summary, hashes)):
             raise ValueError
-        if artifact_fingerprints(root, FILES) != before:
+        if artifact_fingerprints(root, files) != before:
             raise ValueError
         return FaceRecognizer(model, runner, summary.fingerprints_after_calibration)
     except RuntimeCompatibilityError:
         raise
     except Exception:
-        raise RejectionError("Invalid/incomplete/tampered or incompatible deployable V3 bundle") from None
+        raise RejectionError("Invalid/incomplete/tampered or incompatible deployable recognition bundle") from None
 
 
 def _number(value, *, rate=False):

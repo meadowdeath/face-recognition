@@ -7,6 +7,7 @@ from math import isfinite
 from pathlib import PurePosixPath, PureWindowsPath
 import re
 
+from face_recognition.domain.models.dynamic_population import DynamicConfiguration, DynamicPopulation, DynamicDatasetProvenance
 from face_recognition.domain.models.rejection import RejectionError
 from face_recognition.domain.models.v3_open_set_config import (EVIDENCE_KINDS, EVIDENCE_SOURCE_TYPES, IMPLEMENTATION_MODULES, FrozenV3OpenSetConfiguration)
 
@@ -58,3 +59,25 @@ def validate_frozen_configuration(config):
         if row.source != "pose_report" or not re.fullmatch(r"[a-z0-9_.]+", row.metric):
             raise RejectionError("Unsupported evidence metric")
         _rate(row.value)
+
+
+def validate_dynamic_configuration(config):
+    if (type(config) is not DynamicConfiguration or type(config.population) is not DynamicPopulation
+            or type(config.dataset) is not DynamicDatasetProvenance):
+        raise RejectionError("Invalid dynamic configuration type")
+    expected = DynamicConfiguration(config.population, config.dataset, config.normalization, config.implementations)
+    if (metadata_sha256(replace(config, configuration_sha256="")) != metadata_sha256(expected)
+            or config.configuration_sha256 != metadata_sha256(expected)
+            or tuple(row.module for row in config.implementations) != IMPLEMENTATION_MODULES):
+        raise RejectionError("Invalid dynamic configuration or algorithm parameters")
+    for row in config.implementations:
+        _digest(row.sha256)
+    for value in asdict(config.dataset).values():
+        _digest(value)
+
+
+def validate_recognition_configuration(config):
+    if type(config) is DynamicConfiguration:
+        validate_dynamic_configuration(config)
+    else:
+        validate_frozen_configuration(config)

@@ -12,7 +12,7 @@ import sklearn
 
 from face_recognition.application.training_data import FrameScores
 
-from face_recognition.application.recognition_config import validate_frozen_configuration
+from face_recognition.application.recognition_config import validate_recognition_configuration
 from face_recognition.domain.models.classification import EvaluationVersions
 from face_recognition.domain.models.rejection import RejectionError
 from face_recognition.domain.models.v3_deployable_model import FittedV3Fingerprints
@@ -30,7 +30,7 @@ def fitted_model_fingerprints(model):
 
 def validate_fitted_model_state(model, config, known_fit_samples=None):
     """Inspect fitted shapes/parameters, never perform inference or fitting."""
-    validate_frozen_configuration(config)
+    validate_recognition_configuration(config)
     p = config.pipeline
     if not isinstance(model, FittedV3Identity) or model.methods != (p.novelty_method,) or model.centroid is not None:
         raise RejectionError("Invalid V3 fitted components")
@@ -69,7 +69,7 @@ class RecognitionModelRunner:
     def __init__(self, frozen_config):
         self.fit_count = 0
         self.versions = EvaluationVersions(python_version(), np.__version__, scipy.__version__, sklearn.__version__)
-        validate_frozen_configuration(frozen_config)
+        validate_recognition_configuration(frozen_config)
         self.config = frozen_config
 
     def fit(self, population, identity_count, methods=("mahalanobis_distance",)):

@@ -347,6 +347,16 @@ fingerprints before and after calibration must match.
 Calibration metrics are not independent test/generalization performance. No new
 untouched V3 holdout exists; V2 remains the last independent external holdout.
 
+### Dynamic population construction
+
+For new populations, use the [dynamic population training workflow](docs/dynamic_population_training.md).
+It requires at least two KNOWN identities and at least one UNKNOWN identity per
+two KNOWN identities, rounded up. There is no fixed UNKNOWN maximum. The guide
+covers capture, provenance-bound processing, preflight, full retraining,
+bundle verification and Pi deployment. The example expands to 11 KNOWN and
+8 UNKNOWN identities, above the required minimum of 6 UNKNOWN identities.
+The frozen V3 construction command above remains the historical workflow.
+
 ## Model bundle and loading
 
 ```text

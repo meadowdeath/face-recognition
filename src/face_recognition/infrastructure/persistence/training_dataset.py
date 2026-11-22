@@ -112,7 +112,8 @@ def pose_processing_fingerprints(root):
     return before
 
 
-def load_training_payloads(processed_root: Path, protocol, *, representation=POSE_REPRESENTATION) -> TrainingData:
+def load_training_payloads(processed_root: Path, protocol, *, representation=POSE_REPRESENTATION,
+                           expected_file_hashes=None) -> TrainingData:
     """Read only authorized pose records into one finite, read-only float32 matrix."""
     try:
         catalog = read_training_catalog(processed_root, representation=representation)
@@ -132,6 +133,7 @@ def load_training_payloads(processed_root: Path, protocol, *, representation=POS
         for reference in catalog.condition_files:
             path = root / reference.source_relative_path
             digest.update(reference.source_relative_path.encode("utf-8") + b"\0")
+            file_digest = sha256() if expected_file_hashes is not None else None
             count, last_timestamp = 0, None
             with path.open("r", encoding="utf-8", newline="") as stream:
                 for index, line in enumerate(stream):
@@ -152,10 +154,15 @@ def load_training_payloads(processed_root: Path, protocol, *, representation=POS
                     size = p.inference_width, p.inference_height
                     if dimensions.setdefault((p.person_id, p.session_id), size) != size:
                         raise ValueError
-                    digest.update(line.encode("utf-8"))
+                    encoded = line.encode("utf-8")
+                    digest.update(encoded)
+                    if file_digest is not None:
+                        file_digest.update(encoded)
                     y[offset] = labels.get(p.person_id, -1)
                     samples.append(p)
                     last_timestamp, offset, count = p.detector_timestamp_ms, offset + 1, count + 1
+            if file_digest is not None and file_digest.hexdigest() != expected_file_hashes[reference.source_relative_path]:
+                raise ValueError
             if not count or path.stat().st_mtime_ns != stamps[reference.source_relative_path]:
                 raise ValueError
         after = read_training_catalog(processed_root, representation=representation)

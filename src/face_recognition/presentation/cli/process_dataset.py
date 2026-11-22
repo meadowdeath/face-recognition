@@ -16,10 +16,17 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Generate all_xyz_pose_v2 in a new external output root; no overwrite")
     parser.add_argument("--raw-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--population-config", type=Path, help="Validate dynamic captures and record their provenance")
     args = parser.parse_args(argv)
     try:
         reader = RawDatasetReader(args.raw_root)
-        repository = FilesystemProcessedDatasetRepository(args.output_root, reader.root)
+        capture_provenance = None
+        if args.population_config is not None:
+            from face_recognition.infrastructure.persistence.artifact_integrity import validate_output_target
+            from face_recognition.infrastructure.persistence.dynamic_training_dataset import DynamicCaptureProvenance
+            validate_output_target(args.output_root, (reader.root, args.population_config))
+            capture_provenance = DynamicCaptureProvenance(reader, args.population_config)
+        repository = FilesystemProcessedDatasetRepository(args.output_root, reader.root, capture_provenance=capture_provenance)
         result = DatasetProcessor(PoseLandmarkNormalizer, LandmarkFeatureExtractor()).process(reader, repository)
     except DatasetProcessingError as exc:
         print(f"Pose processing failed: {exc}", file=sys.stderr)

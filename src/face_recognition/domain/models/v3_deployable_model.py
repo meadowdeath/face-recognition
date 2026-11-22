@@ -6,6 +6,7 @@ from enum import Enum
 from face_recognition.domain.models.classification import EvaluationVersions
 from face_recognition.domain.models.score_analysis import ScoreSeparation
 from face_recognition.domain.models.temporal import WindowCounts
+from face_recognition.domain.models.dynamic_population import DynamicConfiguration, DynamicTrainingProvenance
 from face_recognition.domain.models.v3_open_set_config import FrozenV3OpenSetConfiguration
 
 
@@ -83,7 +84,7 @@ class V3TrainingProvenance:
 @dataclass(frozen=True, eq=False)
 class DeployableV3Model:
     fitted: object = field(repr=False)
-    frozen_configuration: FrozenV3OpenSetConfiguration = field(repr=False)
+    frozen_configuration: FrozenV3OpenSetConfiguration | DynamicConfiguration = field(repr=False)
     class_order: tuple[str, ...]
     threshold: float
     model_id: str = "open_set_model_v3"
@@ -93,7 +94,7 @@ class DeployableV3Model:
 @dataclass(frozen=True)
 class V3CalibrationSummary:
     allocation: V3DeployableAllocation
-    provenance: V3TrainingProvenance
+    provenance: V3TrainingProvenance | DynamicTrainingProvenance
     known_fit_samples: int
     class_fit_sample_counts: tuple[int, ...]
     known_calibration: WindowCounts
